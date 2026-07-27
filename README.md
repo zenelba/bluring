@@ -32,3 +32,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 npm run build
 npm run preview
 ```
+
+## Deploy
+
+Pushes to `main` automatically deploy to [Vercel](https://bluring-xi.vercel.app).
