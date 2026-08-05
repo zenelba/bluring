@@ -6,5 +6,4 @@ dist
 tsconfig.tsbuildinfo
 .vercel
 vite.config.js
-server/**/*.js
 api/**/*.js

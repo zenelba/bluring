@@ -5,7 +5,7 @@ import {
   createAccessToken,
   hasValidAccessCookie,
   isAcceptedAccessCode,
-} from "./server/accessAuth";
+} from "./api/access";
 
 function readBody(req: import("http").IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
