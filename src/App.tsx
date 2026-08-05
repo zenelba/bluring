@@ -656,10 +656,10 @@ export default function App() {
             <div className="panel">
               <span className="panel__label">Attention saliency</span>
               <p className="hint">
-                Uses Hugging Face Inference API to predict visual attention,
-                then blurs low-attention regions. Set{" "}
-                <code>HF_TOKEN</code> on Vercel, or paste a token below for
-                direct API calls.
+                Uses the MSI-Net Gradio Space (
+                <code>alexanderkroner/saliency</code>) to predict visual
+                attention, then blurs low-attention regions. A Hugging Face
+                token is optional (helps with rate limits).
               </p>
 
               <label className="field">

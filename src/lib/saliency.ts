@@ -11,9 +11,9 @@ export interface SaliencyParams {
   desaturation: number;
 }
 
-/** Placeholder — replace with your saliency model on Hugging Face. */
-export const HF_SALIENCY_MODEL_URL =
-  "https://api-inference.huggingface.co/models/alexanderkroner/MSI-Net";
+/** MSI-Net Gradio Space used by /api/saliency. */
+export const HF_SALIENCY_SPACE_URL =
+  "https://alexanderkroner-saliency.hf.space";
 
 export function normalizeSaliencyMask(
   saliencyCanvas: HTMLCanvasElement,
@@ -150,7 +150,7 @@ async function loadSaliencyImage(blob: Blob): Promise<HTMLCanvasElement> {
 export async function fetchSaliencyMap(
   imageBlob: Blob,
   mimeType: string,
-  hfToken?: string,
+  _hfToken?: string,
 ): Promise<HTMLCanvasElement> {
   const imageBase64 = await blobToBase64(imageBlob);
 
@@ -160,47 +160,20 @@ export async function fetchSaliencyMap(
     body: JSON.stringify({ imageBase64, mimeType }),
   });
 
-  if (apiRes.ok) {
-    const data = (await apiRes.json()) as {
-      imageBase64: string;
-      mimeType: string;
-    };
-    const blob = base64ToBlob(data.imageBase64, data.mimeType);
-    return loadSaliencyImage(blob);
+  if (!apiRes.ok) {
+    const errBody = await apiRes.json().catch(() => null);
+    const message =
+      (errBody as { error?: string } | null)?.error ??
+      `Saliency API failed (${apiRes.status}).`;
+    throw new Error(message);
   }
 
-  const errBody = await apiRes.json().catch(() => null);
-  const message =
-    (errBody as { error?: string } | null)?.error ??
-    `Saliency API failed (${apiRes.status}).`;
-
-  // Only allow direct Hugging Face calls when developing locally,
-  // because production browsers may block/DRY-run cross-domain fetches.
-  const isLocalhost =
-    typeof window !== "undefined" &&
-    (window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1");
-
-  if (isLocalhost && hfToken?.trim()) {
-    const hfRes = await fetch(HF_SALIENCY_MODEL_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${hfToken.trim()}`,
-        "Content-Type": mimeType,
-      },
-      body: imageBlob,
-    });
-
-    if (!hfRes.ok) {
-      const text = await hfRes.text();
-      throw new Error(`Hugging Face API error (${hfRes.status}): ${text}`);
-    }
-
-    const blob = await hfRes.blob();
-    return loadSaliencyImage(blob);
-  }
-
-  throw new Error(message);
+  const data = (await apiRes.json()) as {
+    imageBase64: string;
+    mimeType: string;
+  };
+  const blob = base64ToBlob(data.imageBase64, data.mimeType);
+  return loadSaliencyImage(blob);
 }
 
 export async function processAttentionBlur(
