@@ -61,6 +61,9 @@ export default function App() {
   const [saliencyResult, setSaliencyResult] = useState<HTMLCanvasElement | null>(
     null,
   );
+  const [saliencyOverlay, setSaliencyOverlay] =
+    useState<HTMLCanvasElement | null>(null);
+  const [saliencyView, setSaliencyView] = useState<"map" | "blur">("map");
   const [saliencyLoading, setSaliencyLoading] = useState(false);
   const [saliencyError, setSaliencyError] = useState<string | null>(null);
   const [hfToken, setHfToken] = useState("");
@@ -100,7 +103,9 @@ export default function App() {
       setFovealParams(defaultFovealParamsForImage(img.naturalWidth, img.naturalHeight));
       setSaliencyMask(null);
       setSaliencyResult(null);
+      setSaliencyOverlay(null);
       setSaliencyError(null);
+      setSaliencyView("map");
     };
     img.src = url;
   }, []);
@@ -119,14 +124,25 @@ export default function App() {
 
   const renderOutput = useCallback(() => {
     if (!image) return null;
-    if (mode === "saliency" && saliencyResult) {
-      return saliencyResult;
+    if (mode === "saliency") {
+      if (saliencyView === "map" && saliencyOverlay) return saliencyOverlay;
+      if (saliencyResult) return saliencyResult;
+      return null;
     }
     if (mode === "foveal" && fovealParams) {
       return renderFovealVision(image, fovealParams);
     }
     return renderImageWithBlurs(image, regions, blurAmount);
-  }, [image, mode, saliencyResult, fovealParams, regions, blurAmount]);
+  }, [
+    image,
+    mode,
+    saliencyView,
+    saliencyOverlay,
+    saliencyResult,
+    fovealParams,
+    regions,
+    blurAmount,
+  ]);
 
   const drawFovealOverlay = useCallback(
     (octx: CanvasRenderingContext2D, params: FovealParams) => {
@@ -227,7 +243,7 @@ export default function App() {
 
   useEffect(() => {
     redraw();
-  }, [redraw, blurLevelIndex, mode, fovealParams, saliencyResult]);
+  }, [redraw, blurLevelIndex, mode, fovealParams, saliencyResult, saliencyOverlay, saliencyView]);
 
   useEffect(() => {
     if (mode !== "saliency" || !image || !saliencyMask) return;
@@ -333,7 +349,7 @@ export default function App() {
     setSaliencyLoading(true);
     setSaliencyError(null);
     try {
-      const { result, mask } = await processAttentionBlur(
+      const { result, overlay, mask } = await processAttentionBlur(
         image,
         uploadedFileBlob,
         uploadedMimeType,
@@ -341,7 +357,9 @@ export default function App() {
         hfToken.trim() || undefined,
       );
       setSaliencyMask(mask);
+      setSaliencyOverlay(overlay);
       setSaliencyResult(result);
+      setSaliencyView("map");
     } catch (error) {
       setSaliencyError(
         error instanceof Error ? error.message : "Saliency analysis failed",
@@ -357,10 +375,15 @@ export default function App() {
     if (!canvas) return;
 
     if (mode === "saliency") {
+      const canvas =
+        saliencyView === "map" ? saliencyOverlay : saliencyResult;
+      if (!canvas) return;
       canvas.toBlob((blob) => {
         if (!blob) return;
         const link = document.createElement("a");
-        link.download = `${uploadedFileName}-attention.jpg`;
+        const suffix =
+          saliencyView === "map" ? "saliency-map" : "attention";
+        link.download = `${uploadedFileName}-${suffix}.jpg`;
         link.href = URL.createObjectURL(blob);
         link.click();
         URL.revokeObjectURL(link.href);
@@ -382,7 +405,9 @@ export default function App() {
     setFovealParams(null);
     setSaliencyMask(null);
     setSaliencyResult(null);
+    setSaliencyOverlay(null);
     setSaliencyError(null);
+    setSaliencyView("map");
     setUploadedFileBlob(null);
     setUploadedFileName("image");
     if (imageUrl) {
@@ -688,8 +713,34 @@ export default function App() {
               )}
 
               {saliencyMask && (
-                <p className="hint hint--success">
-                  Saliency map loaded. Adjust peripheral blur below.
+                <>
+                  <p className="hint hint--success">
+                    Saliency map loaded (same inferno overlay as the HF Space).
+                    Switch views below.
+                  </p>
+                  <div className="mode-tabs">
+                    <button
+                      type="button"
+                      className={`mode-tab ${saliencyView === "map" ? "mode-tab--active mode-tab--saliency" : ""}`}
+                      onClick={() => setSaliencyView("map")}
+                    >
+                      Saliency map
+                    </button>
+                    <button
+                      type="button"
+                      className={`mode-tab ${saliencyView === "blur" ? "mode-tab--active mode-tab--saliency" : ""}`}
+                      onClick={() => setSaliencyView("blur")}
+                    >
+                      Attention blur
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {!saliencyMask && (
+                <p className="hint">
+                  After analysis, you can view the Space-style saliency map or
+                  the attention blur result.
                 </p>
               )}
 
@@ -748,7 +799,7 @@ export default function App() {
               onClick={downloadImage}
               disabled={
                 !image ||
-                (mode === "saliency" && !saliencyResult)
+                (mode === "saliency" && !saliencyOverlay && !saliencyResult)
               }
             >
               Download result

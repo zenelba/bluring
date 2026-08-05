@@ -36,10 +36,13 @@ PERIPHERAL_BLUR_RADIUS = 28  # Gaussian blur for peripheral vision
 DESATURATION = 0.45  # 0 = full color, 1 = grayscale periphery
 
 
-def fetch_saliency_map(image_path: str, token: str = "", space_host: str = SPACE_HOST) -> np.ndarray:
+def fetch_saliency_overlay(
+    image_path: str, token: str = "", space_host: str = SPACE_HOST
+) -> np.ndarray:
     """
-    Send image to the MSI-Net Gradio Space and return grayscale saliency (float32).
+    Send image to the MSI-Net Gradio Space and return the RGB overlay (uint8).
 
+    The Space returns: alpha * inferno(s) + (1 - alpha) * image/255
     Prefer gradio_client when available; fall back to raw Gradio HTTP API.
     """
     path = Path(image_path)
@@ -51,10 +54,8 @@ def fetch_saliency_map(image_path: str, token: str = "", space_host: str = SPACE
 
         client = Client(space_host, hf_token=token or None)
         result_path = client.predict(handle_file(str(path)), api_name="/predict")
-        saliency_u8 = np.array(Image.open(result_path).convert("L"), dtype=np.uint8)
-        return saliency_u8.astype(np.float32)
+        return np.array(Image.open(result_path).convert("RGB"), dtype=np.uint8)
     except Exception:
-        # Raw Gradio HTTP fallback: upload → call/predict → SSE → download
         headers = {"Authorization": f"Bearer {token}"} if token.strip() else {}
 
         with path.open("rb") as image_file:
@@ -131,11 +132,10 @@ def fetch_saliency_map(image_path: str, token: str = "", space_host: str = SPACE
                 f"Failed to download saliency map ({image_res.status_code}): {image_res.text}"
             )
 
-        saliency_u8 = np.array(
-            Image.open(io.BytesIO(image_res.content)).convert("L"),
+        return np.array(
+            Image.open(io.BytesIO(image_res.content)).convert("RGB"),
             dtype=np.uint8,
         )
-        return saliency_u8.astype(np.float32)
 
 
 def normalize_saliency(saliency: np.ndarray) -> np.ndarray:
@@ -145,6 +145,39 @@ def normalize_saliency(saliency: np.ndarray) -> np.ndarray:
     if max_val > min_val:
         return (saliency - min_val) / (max_val - min_val)
     return np.zeros_like(saliency, dtype=np.float32)
+
+
+def space_overlay_to_mask(
+    space_rgb: np.ndarray,
+    original_rgb: np.ndarray,
+    overlay_alpha: float = 0.65,
+) -> np.ndarray:
+    """
+    Invert the Space visualization:
+      out = alpha * inferno(s) + (1 - alpha) * image/255
+    back into a grayscale saliency mask in [0, 1].
+    """
+    import matplotlib.pyplot as plt
+
+    space = space_rgb.astype(np.float32)
+    original = original_rgb.astype(np.float32)
+    inferno_rgb = (space - (1.0 - overlay_alpha) * original) / overlay_alpha
+    inferno_rgb = np.clip(inferno_rgb, 0, 255)
+
+    lut = (plt.cm.inferno(np.linspace(0, 1, 256))[:, :3] * 255).astype(np.float32)
+    flat = inferno_rgb.reshape(-1, 3)
+    # Nearest LUT index per pixel
+    # Use chunked distance for memory
+    indices = np.empty(flat.shape[0], dtype=np.int32)
+    chunk = 50000
+    for start in range(0, flat.shape[0], chunk):
+        end = min(start + chunk, flat.shape[0])
+        diffs = flat[start:end, None, :] - lut[None, :, :]
+        dist = np.sum(diffs * diffs, axis=2)
+        indices[start:end] = np.argmin(dist, axis=1)
+
+    mask = indices.astype(np.float32).reshape(space_rgb.shape[:2]) / 255.0
+    return normalize_saliency(mask)
 
 
 def create_peripheral_image(
@@ -181,11 +214,10 @@ def blend_with_mask(
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def resize_mask_to_image(mask: np.ndarray, width: int, height: int) -> np.ndarray:
-    if mask.shape[0] == height and mask.shape[1] == width:
-        return mask
-    resized = cv2.resize(mask, (width, height), interpolation=cv2.INTER_LINEAR)
-    return resized.astype(np.float32)
+def resize_to_image(arr: np.ndarray, width: int, height: int) -> np.ndarray:
+    if arr.shape[0] == height and arr.shape[1] == width:
+        return arr
+    return cv2.resize(arr, (width, height), interpolation=cv2.INTER_LINEAR)
 
 
 def run_attention_blur(
@@ -203,10 +235,15 @@ def run_attention_blur(
     height, width = original_bgr.shape[:2]
     sharp_rgb = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
 
-    # 2–3. Fetch saliency map from MSI-Net Space and normalize to [0, 1]
-    saliency_raw = fetch_saliency_map(input_path, token=token)
-    saliency_raw = resize_mask_to_image(saliency_raw, width, height)
-    mask = normalize_saliency(saliency_raw)
+    # 2–3. Fetch Space overlay and recover saliency mask
+    overlay_rgb = fetch_saliency_overlay(input_path, token=token)
+    overlay_rgb = resize_to_image(overlay_rgb, width, height)
+    mask = space_overlay_to_mask(overlay_rgb, sharp_rgb)
+
+    # Also save Space-style map next to the blur output
+    map_path = str(Path(output_path).with_name(Path(output_path).stem + "_map.jpg"))
+    cv2.imwrite(map_path, cv2.cvtColor(overlay_rgb, cv2.COLOR_RGB2BGR))
+    print(f"Saved {map_path}")
 
     # 4. Peripheral vision version
     peripheral_rgb = create_peripheral_image(sharp_rgb, blur_radius, desaturation)
