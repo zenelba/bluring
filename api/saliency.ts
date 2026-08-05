@@ -6,6 +6,14 @@
 const DEFAULT_MODEL_URL =
   "https://api-inference.huggingface.co/models/alexanderkroner/MSI-Net";
 
+function buildRouterFallbackUrl(modelUrl: string): string | null {
+  const prefix = "https://api-inference.huggingface.co/models/";
+  if (!modelUrl.startsWith(prefix)) return null;
+  const modelId = modelUrl.slice(prefix.length);
+  if (!modelId) return null;
+  return `https://router.huggingface.co/hf-inference/models/${modelId}`;
+}
+
 interface SaliencyRequestBody {
   imageBase64?: string;
   mimeType?: string;
@@ -42,34 +50,59 @@ export default async function handler(
   const modelUrl = process.env.HF_SALIENCY_MODEL_URL ?? DEFAULT_MODEL_URL;
   const imageBuffer = Buffer.from(imageBase64, "base64");
 
-  try {
-    const response = await fetch(modelUrl, {
+  async function callHf(url: string) {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": mimeType ?? "image/jpeg",
+        Accept: "image/*",
       },
       body: imageBuffer,
     });
 
     if (!response.ok) {
       const text = await response.text();
-      res.status(response.status).json({
-        error: `Hugging Face API error (${response.status}): ${text}`,
-      });
-      return;
+      throw new Error(
+        `Hugging Face API error (${response.status}): ${text}`,
+      );
     }
 
     const arrayBuffer = await response.arrayBuffer();
     const contentType = response.headers.get("content-type") ?? "image/png";
+    return { arrayBuffer, contentType };
+  }
 
+  try {
+    const { arrayBuffer, contentType } = await callHf(modelUrl);
     res.status(200).json({
       imageBase64: Buffer.from(arrayBuffer).toString("base64"),
       mimeType: contentType,
     });
   } catch (error) {
-    const message =
+    const primaryMessage =
       error instanceof Error ? error.message : "Unknown saliency API error";
-    res.status(500).json({ error: message });
+
+    const routerUrl = buildRouterFallbackUrl(modelUrl);
+    if (!routerUrl) {
+      res.status(500).json({ error: primaryMessage });
+      return;
+    }
+
+    try {
+      const { arrayBuffer, contentType } = await callHf(routerUrl);
+      res.status(200).json({
+        imageBase64: Buffer.from(arrayBuffer).toString("base64"),
+        mimeType: contentType,
+      });
+    } catch (error2) {
+      const secondaryMessage =
+        error2 instanceof Error
+          ? error2.message
+          : "Unknown router saliency API error";
+      res.status(500).json({
+        error: `${primaryMessage}\nFallback failed: ${secondaryMessage}`,
+      });
+    }
   }
 }
