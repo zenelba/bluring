@@ -12,9 +12,15 @@ import {
   defaultFovealParamsForImage,
   renderFovealVision,
 } from "./lib/foveal";
+import {
+  DEFAULT_SALIENCY_PARAMS,
+  type SaliencyParams,
+  processAttentionBlur,
+  reblendAttentionBlur,
+} from "./lib/saliency";
 import "./App.css";
 
-type AppMode = "blur" | "foveal";
+type AppMode = "blur" | "foveal" | "saliency";
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -41,11 +47,23 @@ export default function App() {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState("image");
+  const [uploadedFileBlob, setUploadedFileBlob] = useState<Blob | null>(null);
+  const [uploadedMimeType, setUploadedMimeType] = useState("image/jpeg");
   const [blurLevelIndex, setBlurLevelIndex] = useState(DEFAULT_BLUR_LEVEL_INDEX);
   const currentBlurLevel = BLUR_LEVELS[blurLevelIndex];
   const blurAmount = currentBlurLevel.pixels;
   const [regions, setRegions] = useState<BlurRegion[]>([]);
   const [fovealParams, setFovealParams] = useState<FovealParams | null>(null);
+  const [saliencyParams, setSaliencyParams] = useState<SaliencyParams>({
+    ...DEFAULT_SALIENCY_PARAMS,
+  });
+  const [saliencyMask, setSaliencyMask] = useState<Float32Array | null>(null);
+  const [saliencyResult, setSaliencyResult] = useState<HTMLCanvasElement | null>(
+    null,
+  );
+  const [saliencyLoading, setSaliencyLoading] = useState(false);
+  const [saliencyError, setSaliencyError] = useState<string | null>(null);
+  const [hfToken, setHfToken] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(
     null,
@@ -76,8 +94,13 @@ export default function App() {
       });
       setImage(img);
       setUploadedFileName(getFileBaseName(file.name));
+      setUploadedFileBlob(file);
+      setUploadedMimeType(file.type || "image/jpeg");
       setRegions([fullImageRegion(img)]);
       setFovealParams(defaultFovealParamsForImage(img.naturalWidth, img.naturalHeight));
+      setSaliencyMask(null);
+      setSaliencyResult(null);
+      setSaliencyError(null);
     };
     img.src = url;
   }, []);
@@ -96,11 +119,14 @@ export default function App() {
 
   const renderOutput = useCallback(() => {
     if (!image) return null;
+    if (mode === "saliency" && saliencyResult) {
+      return saliencyResult;
+    }
     if (mode === "foveal" && fovealParams) {
       return renderFovealVision(image, fovealParams);
     }
     return renderImageWithBlurs(image, regions, blurAmount);
-  }, [image, mode, fovealParams, regions, blurAmount]);
+  }, [image, mode, saliencyResult, fovealParams, regions, blurAmount]);
 
   const drawFovealOverlay = useCallback(
     (octx: CanvasRenderingContext2D, params: FovealParams) => {
@@ -184,7 +210,7 @@ export default function App() {
         octx.fillRect(rect.x, rect.y, rect.width, rect.height);
         octx.strokeRect(rect.x, rect.y, rect.width, rect.height);
       }
-    } else if (fovealParams) {
+    } else if (mode === "foveal" && fovealParams) {
       drawFovealOverlay(octx, fovealParams);
     }
   }, [
@@ -201,7 +227,18 @@ export default function App() {
 
   useEffect(() => {
     redraw();
-  }, [redraw, blurLevelIndex, mode, fovealParams]);
+  }, [redraw, blurLevelIndex, mode, fovealParams, saliencyResult]);
+
+  useEffect(() => {
+    if (mode !== "saliency" || !image || !saliencyMask) return;
+    setSaliencyResult(reblendAttentionBlur(image, saliencyMask, saliencyParams));
+  }, [
+    mode,
+    image,
+    saliencyMask,
+    saliencyParams.blurIntensity,
+    saliencyParams.desaturation,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -228,6 +265,8 @@ export default function App() {
       );
       return;
     }
+
+    if (mode !== "blur") return;
 
     setIsDragging(true);
     setDragStart(coords);
@@ -285,15 +324,53 @@ export default function App() {
     setFovealParams((prev) => (prev ? { ...prev, ...patch } : prev));
   };
 
+  const updateSaliency = (patch: Partial<SaliencyParams>) => {
+    setSaliencyParams((prev) => ({ ...prev, ...patch }));
+  };
+
+  const runSaliencyAnalysis = async () => {
+    if (!image || !uploadedFileBlob) return;
+    setSaliencyLoading(true);
+    setSaliencyError(null);
+    try {
+      const { result, mask } = await processAttentionBlur(
+        image,
+        uploadedFileBlob,
+        uploadedMimeType,
+        saliencyParams,
+        hfToken.trim() || undefined,
+      );
+      setSaliencyMask(mask);
+      setSaliencyResult(result);
+    } catch (error) {
+      setSaliencyError(
+        error instanceof Error ? error.message : "Saliency analysis failed",
+      );
+    } finally {
+      setSaliencyLoading(false);
+    }
+  };
+
   const downloadImage = () => {
     if (!image) return;
     const canvas = renderOutput();
     if (!canvas) return;
+
+    if (mode === "saliency") {
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const link = document.createElement("a");
+        link.download = `${uploadedFileName}-attention.jpg`;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }, "image/jpeg", 0.92);
+      return;
+    }
+
     const link = document.createElement("a");
     const suffix =
-      mode === "foveal"
-        ? "foveal"
-        : `level-${blurAmount}`;
+      mode === "foveal" ? "foveal" : `level-${blurAmount}`;
     link.download = `${uploadedFileName}-${suffix}.png`;
     link.href = canvas.toDataURL("image/png");
     link.click();
@@ -303,6 +380,10 @@ export default function App() {
     setImage(null);
     setRegions([]);
     setFovealParams(null);
+    setSaliencyMask(null);
+    setSaliencyResult(null);
+    setSaliencyError(null);
+    setUploadedFileBlob(null);
     setUploadedFileName("image");
     if (imageUrl) {
       URL.revokeObjectURL(imageUrl);
@@ -322,7 +403,7 @@ export default function App() {
           <div>
             <div className="header__title">Bluring</div>
             <div className="header__subtitle">
-              Blur logos or simulate human foveal vision
+              Blur logos, foveal vision, or attention-based saliency
             </div>
           </div>
         </div>
@@ -349,6 +430,13 @@ export default function App() {
               onClick={() => setMode("foveal")}
             >
               Foveal vision
+            </button>
+            <button
+              type="button"
+              className={`mode-tab ${mode === "saliency" ? "mode-tab--active mode-tab--saliency" : ""}`}
+              onClick={() => setMode("saliency")}
+            >
+              Attention
             </button>
           </div>
 
@@ -564,11 +652,104 @@ export default function App() {
             </div>
           )}
 
+          {mode === "saliency" && (
+            <div className="panel">
+              <span className="panel__label">Attention saliency</span>
+              <p className="hint">
+                Uses Hugging Face Inference API to predict visual attention,
+                then blurs low-attention regions. Set{" "}
+                <code>HF_TOKEN</code> on Vercel, or paste a token below for
+                direct API calls.
+              </p>
+
+              <label className="field">
+                <span className="field__label">HF token (optional)</span>
+                <input
+                  type="password"
+                  className="field__input"
+                  placeholder="hf_..."
+                  value={hfToken}
+                  onChange={(e) => setHfToken(e.target.value)}
+                  disabled={!image || saliencyLoading}
+                />
+              </label>
+
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={runSaliencyAnalysis}
+                disabled={!image || saliencyLoading}
+              >
+                {saliencyLoading ? "Analyzing…" : "Analyze & apply blur"}
+              </button>
+
+              {saliencyError && (
+                <p className="error-text">{saliencyError}</p>
+              )}
+
+              {saliencyMask && (
+                <p className="hint hint--success">
+                  Saliency map loaded. Adjust peripheral blur below.
+                </p>
+              )}
+
+              <div className="slider-row">
+                <div className="slider-row__header">
+                  <span>Peripheral blur</span>
+                  <span className="slider-row__value slider-row__value--saliency">
+                    {saliencyParams.blurIntensity} px
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={60}
+                  step={1}
+                  value={saliencyParams.blurIntensity}
+                  onInput={(e) =>
+                    updateSaliency({
+                      blurIntensity: Number(
+                        (e.target as HTMLInputElement).value,
+                      ),
+                    })
+                  }
+                  disabled={!image || !saliencyMask}
+                />
+              </div>
+
+              <div className="slider-row">
+                <div className="slider-row__header">
+                  <span>Desaturation</span>
+                  <span className="slider-row__value slider-row__value--saliency">
+                    {Math.round(saliencyParams.desaturation * 100)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round(saliencyParams.desaturation * 100)}
+                  onInput={(e) =>
+                    updateSaliency({
+                      desaturation:
+                        Number((e.target as HTMLInputElement).value) / 100,
+                    })
+                  }
+                  disabled={!image || !saliencyMask}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="panel btn-group">
             <button
               className="btn btn--primary"
               onClick={downloadImage}
-              disabled={!image}
+              disabled={
+                !image ||
+                (mode === "saliency" && !saliencyResult)
+              }
             >
               Download result
             </button>
@@ -583,7 +764,11 @@ export default function App() {
               <canvas ref={displayCanvasRef} />
               <canvas
                 ref={overlayCanvasRef}
-                className="overlay-canvas overlay-canvas--interactive"
+                className={`overlay-canvas ${
+                  mode === "blur" || mode === "foveal"
+                    ? "overlay-canvas--interactive"
+                    : ""
+                }`}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
@@ -594,7 +779,7 @@ export default function App() {
             <div className="empty-state">
               <div className="empty-state__icon">🖼️</div>
               <p className="empty-state__title">No image yet</p>
-              <p>Upload an image to blur logos or simulate foveal vision</p>
+              <p>Upload an image to blur logos, simulate vision, or analyze attention</p>
             </div>
           )}
         </section>
