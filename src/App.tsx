@@ -435,9 +435,9 @@ export default function App() {
     <div className="app">
       <header className="header">
         <div className="header__brand">
-          <div className="header__logo">B</div>
+          <div className="header__logo">V</div>
           <div>
-            <div className="header__title">Bluring</div>
+            <div className="header__title">Visuals insight</div>
             <div className="header__subtitle">
               Blur logos, foveal vision, or attention-based saliency
             </div>

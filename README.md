@@ -1,6 +1,6 @@
-# Bluring
+# Visuals insight
 
-A simple web app to blur brand logotypes in images. Upload an image, draw rectangles over logos, adjust the blur level, and download the result.
+A simple web app to blur brand logotypes in images, simulate foveal vision, and apply attention-based blur. Upload an image, adjust settings, and download the result.
 
 ## Features
 
