@@ -66,7 +66,7 @@ export default function App() {
   const [saliencyView, setSaliencyView] = useState<"map" | "blur">("map");
   const [saliencyLoading, setSaliencyLoading] = useState(false);
   const [saliencyError, setSaliencyError] = useState<string | null>(null);
-  const [hfToken, setHfToken] = useState("");
+  const saliencyRequestRef = useRef(0);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(
     null,
@@ -344,30 +344,41 @@ export default function App() {
     setSaliencyParams((prev) => ({ ...prev, ...patch }));
   };
 
-  const runSaliencyAnalysis = async () => {
+  useEffect(() => {
+    if (mode !== "saliency") return;
     if (!image || !uploadedFileBlob) return;
+    if (saliencyMask) return;
+
+    const requestId = ++saliencyRequestRef.current;
     setSaliencyLoading(true);
     setSaliencyError(null);
-    try {
-      const { result, overlay, mask } = await processAttentionBlur(
-        image,
-        uploadedFileBlob,
-        uploadedMimeType,
-        saliencyParams,
-        hfToken.trim() || undefined,
-      );
-      setSaliencyMask(mask);
-      setSaliencyOverlay(overlay);
-      setSaliencyResult(result);
-      setSaliencyView("map");
-    } catch (error) {
-      setSaliencyError(
-        error instanceof Error ? error.message : "Saliency analysis failed",
-      );
-    } finally {
-      setSaliencyLoading(false);
-    }
-  };
+
+    void processAttentionBlur(
+      image,
+      uploadedFileBlob,
+      uploadedMimeType,
+      saliencyParams,
+    )
+      .then(({ result, overlay, mask }) => {
+        if (requestId !== saliencyRequestRef.current) return;
+        setSaliencyMask(mask);
+        setSaliencyOverlay(overlay);
+        setSaliencyResult(result);
+        setSaliencyView("map");
+      })
+      .catch((error) => {
+        if (requestId !== saliencyRequestRef.current) return;
+        setSaliencyError(
+          error instanceof Error ? error.message : "Saliency analysis failed",
+        );
+      })
+      .finally(() => {
+        if (requestId !== saliencyRequestRef.current) return;
+        setSaliencyLoading(false);
+      });
+    // Intentionally omit saliencyParams — blur/desat reblend after analysis.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, image, uploadedFileBlob, uploadedMimeType, saliencyMask]);
 
   const downloadImage = () => {
     if (!image) return;
@@ -681,32 +692,13 @@ export default function App() {
             <div className="panel">
               <span className="panel__label">Attention saliency</span>
               <p className="hint">
-                Uses the MSI-Net Gradio Space (
-                <code>alexanderkroner/saliency</code>) to predict visual
-                attention, then blurs low-attention regions. A Hugging Face
-                token is optional (helps with rate limits).
+                The model predicts visual attention, then blurs low-attention
+                regions.
               </p>
 
-              <label className="field">
-                <span className="field__label">HF token (optional)</span>
-                <input
-                  type="password"
-                  className="field__input"
-                  placeholder="hf_..."
-                  value={hfToken}
-                  onChange={(e) => setHfToken(e.target.value)}
-                  disabled={!image || saliencyLoading}
-                />
-              </label>
-
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={runSaliencyAnalysis}
-                disabled={!image || saliencyLoading}
-              >
-                {saliencyLoading ? "Analyzing…" : "Analyze & apply blur"}
-              </button>
+              {saliencyLoading && (
+                <p className="hint hint--success">Analyzing attention…</p>
+              )}
 
               {saliencyError && (
                 <p className="error-text">{saliencyError}</p>
@@ -715,8 +707,7 @@ export default function App() {
               {saliencyMask && (
                 <>
                   <p className="hint hint--success">
-                    Saliency map loaded (same inferno overlay as the HF Space).
-                    Switch views below.
+                    Saliency map ready. Switch views below.
                   </p>
                   <div className="mode-tabs">
                     <button
@@ -737,10 +728,9 @@ export default function App() {
                 </>
               )}
 
-              {!saliencyMask && (
+              {!saliencyMask && !saliencyLoading && !saliencyError && (
                 <p className="hint">
-                  After analysis, you can view the Space-style saliency map or
-                  the attention blur result.
+                  Upload an image to start attention analysis.
                 </p>
               )}
 
