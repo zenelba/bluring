@@ -1,40 +1,39 @@
-/** Accepted access codes (case-insensitive). Vision / perception themed. */
-export const ACCESS_CODES = [
-  "FOVEA",
-  "RETINA",
-  "GAZE",
-  "SALIENCY",
-  "ATTENTION",
-  "PERIPHERY",
-  "MACULA",
-  "FIXATION",
-  "INSIGHT",
-  "ACUITY",
-] as const;
+/** Client helpers for the server-backed access gate. */
 
-const STORAGE_KEY = "visuals-insight-access";
-
-export function normalizeCode(value: string): string {
-  return value.trim().toUpperCase();
-}
-
-export function isValidAccessCode(value: string): boolean {
-  const code = normalizeCode(value);
-  return ACCESS_CODES.some((accepted) => accepted === code);
-}
-
-export function hasUnlockedAccess(): boolean {
+export async function checkAccessSession(): Promise<boolean> {
   try {
-    return sessionStorage.getItem(STORAGE_KEY) === "1";
+    const res = await fetch("/api/access", {
+      method: "GET",
+      credentials: "include",
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { ok?: boolean };
+    return data.ok === true;
   } catch {
     return false;
   }
 }
 
-export function unlockAccess(): void {
+export async function unlockWithAccessCode(
+  code: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    sessionStorage.setItem(STORAGE_KEY, "1");
+    const res = await fetch("/api/access", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const data = (await res.json()) as { ok?: boolean; error?: string };
+    if (res.ok && data.ok) return { ok: true };
+    return {
+      ok: false,
+      error: data.error ?? "That code isn’t accepted. Try another.",
+    };
   } catch {
-    // Ignore storage failures; unlock still works for this session in memory.
+    return {
+      ok: false,
+      error: "Could not reach the server. Try again in a moment.",
+    };
   }
 }

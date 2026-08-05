@@ -6,6 +6,8 @@
  * Optional: set HF_TOKEN if the Space is private / rate-limited.
  */
 
+import { hasValidAccessCookie } from "../server/accessAuth";
+
 const SPACE_HOST =
   process.env.HF_SALIENCY_SPACE_URL ??
   "https://alexanderkroner-saliency.hf.space";
@@ -171,7 +173,11 @@ async function downloadImage(
 }
 
 export default async function handler(
-  req: { method?: string; body?: SaliencyRequestBody },
+  req: {
+    method?: string;
+    body?: SaliencyRequestBody;
+    headers?: { cookie?: string | string[] };
+  },
   res: {
     status: (code: number) => { json: (body: unknown) => void };
     setHeader: (name: string, value: string) => void;
@@ -180,6 +186,11 @@ export default async function handler(
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  if (!hasValidAccessCookie(req.headers?.cookie)) {
+    res.status(401).json({ error: "Access code required" });
     return;
   }
 

@@ -1,9 +1,5 @@
-import { type FormEvent, type ReactNode, useState } from "react";
-import {
-  hasUnlockedAccess,
-  isValidAccessCode,
-  unlockAccess,
-} from "./lib/access";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { checkAccessSession, unlockWithAccessCode } from "./lib/access";
 import "./App.css";
 
 type AccessGateProps = {
@@ -11,23 +7,53 @@ type AccessGateProps = {
 };
 
 export default function AccessGate({ children }: AccessGateProps) {
-  const [unlocked, setUnlocked] = useState(() => hasUnlockedAccess());
+  const [unlocked, setUnlocked] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ok = await checkAccessSession();
+      if (!cancelled) {
+        setUnlocked(ok);
+        setChecking(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (checking) {
+    return (
+      <div className="access-gate">
+        <div className="access-gate__panel">
+          <div className="access-gate__logo">V</div>
+          <p className="access-gate__copy">Checking access…</p>
+        </div>
+      </div>
+    );
+  }
 
   if (unlocked) {
     return <>{children}</>;
   }
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (isValidAccessCode(code)) {
-      unlockAccess();
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    const result = await unlockWithAccessCode(code);
+    setSubmitting(false);
+    if (result.ok) {
       setUnlocked(true);
-      setError(null);
       return;
     }
-    setError("That code isn’t accepted. Try another.");
+    setError(result.error);
   };
 
   return (
@@ -48,6 +74,7 @@ export default function AccessGate({ children }: AccessGateProps) {
             autoFocus
             spellCheck={false}
             value={code}
+            disabled={submitting}
             onChange={(e) => {
               setCode(e.target.value);
               if (error) setError(null);
@@ -55,8 +82,12 @@ export default function AccessGate({ children }: AccessGateProps) {
             placeholder="Enter code"
           />
           {error && <p className="access-gate__error">{error}</p>}
-          <button className="btn btn--primary access-gate__submit" type="submit">
-            Unlock
+          <button
+            className="btn btn--primary access-gate__submit"
+            type="submit"
+            disabled={submitting || !code.trim()}
+          >
+            {submitting ? "Checking…" : "Unlock"}
           </button>
         </form>
       </div>
