@@ -169,30 +169,38 @@ export async function fetchSaliencyMap(
     return loadSaliencyImage(blob);
   }
 
-  if (!hfToken?.trim()) {
-    const errBody = await apiRes.json().catch(() => null);
-    const message =
-      (errBody as { error?: string } | null)?.error ??
-      "Saliency API failed. Set HF_TOKEN on Vercel or enter a token below.";
-    throw new Error(message);
+  const errBody = await apiRes.json().catch(() => null);
+  const message =
+    (errBody as { error?: string } | null)?.error ??
+    `Saliency API failed (${apiRes.status}).`;
+
+  // Only allow direct Hugging Face calls when developing locally,
+  // because production browsers may block/DRY-run cross-domain fetches.
+  const isLocalhost =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1");
+
+  if (isLocalhost && hfToken?.trim()) {
+    const hfRes = await fetch(HF_SALIENCY_MODEL_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${hfToken.trim()}`,
+        "Content-Type": mimeType,
+      },
+      body: imageBlob,
+    });
+
+    if (!hfRes.ok) {
+      const text = await hfRes.text();
+      throw new Error(`Hugging Face API error (${hfRes.status}): ${text}`);
+    }
+
+    const blob = await hfRes.blob();
+    return loadSaliencyImage(blob);
   }
 
-  const hfRes = await fetch(HF_SALIENCY_MODEL_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${hfToken.trim()}`,
-      "Content-Type": mimeType,
-    },
-    body: imageBlob,
-  });
-
-  if (!hfRes.ok) {
-    const text = await hfRes.text();
-    throw new Error(`Hugging Face API error (${hfRes.status}): ${text}`);
-  }
-
-  const blob = await hfRes.blob();
-  return loadSaliencyImage(blob);
+  throw new Error(message);
 }
 
 export async function processAttentionBlur(
