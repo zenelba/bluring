@@ -26,7 +26,7 @@ from PIL import Image
 INPUT_IMAGE_PATH = "input.jpg"  # Path to your input image
 HF_TOKEN = "hf_YOUR_TOKEN_HERE"  # Your Hugging Face API token
 MODEL_URL = (
-    "https://api-inference.huggingface.co/models/YOUR_ORG/YOUR_SALIENCY_MODEL"
+    "https://api-inference.huggingface.co/models/alexanderkroner/MSI-Net"
 )
 
 OUTPUT_PATH = "attention_blur_output.jpg"

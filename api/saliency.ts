@@ -4,7 +4,7 @@
  */
 
 const DEFAULT_MODEL_URL =
-  "https://api-inference.huggingface.co/models/YOUR_ORG/YOUR_SALIENCY_MODEL";
+  "https://api-inference.huggingface.co/models/alexanderkroner/MSI-Net";
 
 interface SaliencyRequestBody {
   imageBase64?: string;
