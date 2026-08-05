@@ -6,12 +6,43 @@
 const DEFAULT_MODEL_URL =
   "https://api-inference.huggingface.co/models/alexanderkroner/MSI-Net";
 
-function buildRouterFallbackUrl(modelUrl: string): string | null {
-  const prefix = "https://api-inference.huggingface.co/models/";
-  if (!modelUrl.startsWith(prefix)) return null;
-  const modelId = modelUrl.slice(prefix.length);
+function extractModelId(modelUrl: string): string | null {
+  const idx = modelUrl.indexOf("/models/");
+  if (idx === -1) return null;
+  const modelId = modelUrl.slice(idx + "/models/".length);
   if (!modelId) return null;
-  return `https://router.huggingface.co/hf-inference/models/${modelId}`;
+  return modelId;
+}
+
+function buildCandidateModelUrls(primaryUrl: string): string[] {
+  const candidates: string[] = [primaryUrl];
+  const modelId = extractModelId(primaryUrl);
+  if (!modelId) return candidates;
+
+  // Try multiple Inference Providers (via HF Router).
+  // This is intentionally a small list to avoid long retry chains.
+  const providers = [
+    "hf-inference",
+    "fal-ai",
+    "together",
+    "replicate",
+    "deepinfra",
+    "fireworks-ai",
+    "novita",
+    "nscale",
+    "scaleway",
+    "wavespeed",
+    "zai-org",
+  ];
+
+  for (const provider of providers) {
+    candidates.push(
+      `https://router.huggingface.co/${provider}/models/${modelId}`,
+    );
+  }
+
+  // De-dupe while preserving order.
+  return [...new Set(candidates)];
 }
 
 interface SaliencyRequestBody {
@@ -73,36 +104,23 @@ export default async function handler(
     return { arrayBuffer, contentType };
   }
 
-  try {
-    const { arrayBuffer, contentType } = await callHf(modelUrl);
-    res.status(200).json({
-      imageBase64: Buffer.from(arrayBuffer).toString("base64"),
-      mimeType: contentType,
-    });
-  } catch (error) {
-    const primaryMessage =
-      error instanceof Error ? error.message : "Unknown saliency API error";
+  const candidates = buildCandidateModelUrls(modelUrl);
+  let lastError: string | null = null;
 
-    const routerUrl = buildRouterFallbackUrl(modelUrl);
-    if (!routerUrl) {
-      res.status(500).json({ error: primaryMessage });
-      return;
-    }
-
+  for (const url of candidates) {
     try {
-      const { arrayBuffer, contentType } = await callHf(routerUrl);
+      const { arrayBuffer, contentType } = await callHf(url);
       res.status(200).json({
         imageBase64: Buffer.from(arrayBuffer).toString("base64"),
         mimeType: contentType,
       });
-    } catch (error2) {
-      const secondaryMessage =
-        error2 instanceof Error
-          ? error2.message
-          : "Unknown router saliency API error";
-      res.status(500).json({
-        error: `${primaryMessage}\nFallback failed: ${secondaryMessage}`,
-      });
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
     }
   }
+
+  res.status(500).json({
+    error: `Saliency API failed for all providers.\nLast error: ${lastError}`,
+  });
 }
