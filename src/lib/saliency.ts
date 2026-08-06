@@ -208,6 +208,180 @@ export function renderAttentionBlur(
   return outCanvas;
 }
 
+export interface AttentionHotspot {
+  rank: number;
+  x: number;
+  y: number;
+  /** Peak saliency value in [0, 1]. */
+  value: number;
+  /** Share of total saliency mass assigned to this hotspot (sums to ~1). */
+  share: number;
+}
+
+const DEFAULT_HOTSPOT_COUNT = 3;
+
+/**
+ * Ranked attention hotspots via non-max suppression, with attention share
+ * from nearest-peak (Voronoi) assignment of the saliency mass.
+ */
+export function findAttentionHotspots(
+  mask: Float32Array,
+  width: number,
+  height: number,
+  count: number = DEFAULT_HOTSPOT_COUNT,
+): AttentionHotspot[] {
+  const n = Math.max(1, Math.min(8, Math.floor(count)));
+  if (width <= 0 || height <= 0 || mask.length < width * height) return [];
+
+  const minDist = Math.max(
+    20,
+    Math.round(0.07 * Math.hypot(width, height)),
+  );
+  const remaining = new Float32Array(mask);
+  const peaks: { x: number; y: number; value: number }[] = [];
+
+  for (let p = 0; p < n; p++) {
+    let best = -Infinity;
+    let bestIndex = -1;
+    for (let i = 0; i < remaining.length; i++) {
+      if (remaining[i] > best) {
+        best = remaining[i];
+        bestIndex = i;
+      }
+    }
+    if (bestIndex < 0 || best <= 1e-6) break;
+
+    const x = bestIndex % width;
+    const y = Math.floor(bestIndex / width);
+    peaks.push({ x, y, value: mask[bestIndex] });
+
+    const r2 = minDist * minDist;
+    for (let dy = -minDist; dy <= minDist; dy++) {
+      for (let dx = -minDist; dx <= minDist; dx++) {
+        if (dx * dx + dy * dy > r2) continue;
+        const xx = x + dx;
+        const yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
+        remaining[yy * width + xx] = 0;
+      }
+    }
+  }
+
+  if (peaks.length === 0) return [];
+
+  const masses = new Float64Array(peaks.length);
+  let total = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const weight = mask[y * width + x];
+      if (weight <= 0) continue;
+      let nearest = 0;
+      let nearestDist = Infinity;
+      for (let p = 0; p < peaks.length; p++) {
+        const dx = x - peaks[p].x;
+        const dy = y - peaks[p].y;
+        const d = dx * dx + dy * dy;
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearest = p;
+        }
+      }
+      masses[nearest] += weight;
+      total += weight;
+    }
+  }
+
+  const safeTotal = total > 0 ? total : 1;
+  return peaks.map((peak, index) => ({
+    rank: index + 1,
+    x: peak.x,
+    y: peak.y,
+    value: peak.value,
+    share: masses[index] / safeTotal,
+  }));
+}
+
+/** Draw ranked hotspot markers with attention-share labels. */
+export function drawAttentionHotspots(
+  ctx: CanvasRenderingContext2D,
+  hotspots: AttentionHotspot[],
+  imageWidth: number,
+): void {
+  if (hotspots.length === 0) return;
+  const scale = Math.max(1, imageWidth / 800);
+
+  for (const spot of hotspots) {
+    const r = 14 * scale;
+    const sharePct = Math.round(spot.share * 100);
+    const rankLabel = String(spot.rank);
+    const shareLabel = `${sharePct}%`;
+
+    ctx.beginPath();
+    ctx.arc(spot.x, spot.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(12, 13, 16, 0.82)";
+    ctx.fill();
+    ctx.lineWidth = 2 * scale;
+    ctx.strokeStyle = "rgba(52, 211, 153, 0.95)";
+    ctx.stroke();
+
+    ctx.fillStyle = "#ECFDF5";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `700 ${Math.round(13 * scale)}px DM Sans, sans-serif`;
+    ctx.fillText(rankLabel, spot.x, spot.y);
+
+    const badge = `Attention share ${shareLabel}`;
+    ctx.font = `600 ${Math.round(11 * scale)}px DM Sans, sans-serif`;
+    const textW = ctx.measureText(badge).width;
+    const padX = 8 * scale;
+    const padY = 5 * scale;
+    const bw = textW + padX * 2;
+    const bh = 11 * scale + padY * 2;
+    const preferRight = spot.x + r + 6 * scale + bw < imageWidth - 8 * scale;
+    const bx = preferRight
+      ? spot.x + r + 6 * scale
+      : spot.x - r - 6 * scale - bw;
+    const by = spot.y - 10 * scale;
+
+    ctx.fillStyle = "rgba(12, 13, 16, 0.88)";
+    ctx.beginPath();
+    const radius = 6 * scale;
+    ctx.moveTo(bx + radius, by);
+    ctx.arcTo(bx + bw, by, bx + bw, by + bh, radius);
+    ctx.arcTo(bx + bw, by + bh, bx, by + bh, radius);
+    ctx.arcTo(bx, by + bh, bx, by, radius);
+    ctx.arcTo(bx, by, bx + bw, by, radius);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(52, 211, 153, 0.55)";
+    ctx.lineWidth = 1 * scale;
+    ctx.stroke();
+
+    ctx.fillStyle = "#A7F3D0";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(badge, bx + padX, by + bh / 2);
+  }
+
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
+}
+
+/** Bake hotspot markers onto a copy of the saliency overlay for download. */
+export function renderSaliencyOverlayWithHotspots(
+  overlay: HTMLCanvasElement,
+  hotspots: AttentionHotspot[],
+): HTMLCanvasElement {
+  const out = document.createElement("canvas");
+  out.width = overlay.width;
+  out.height = overlay.height;
+  const ctx = out.getContext("2d");
+  if (!ctx) return overlay;
+  ctx.drawImage(overlay, 0, 0);
+  drawAttentionHotspots(ctx, hotspots, overlay.width);
+  return out;
+}
+
 /** Draw Space-style saliency overlay at original image size for display/download. */
 export function renderSaliencyOverlay(
   saliencyCanvas: HTMLCanvasElement,

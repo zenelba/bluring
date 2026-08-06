@@ -14,13 +14,23 @@ import {
 } from "./lib/foveal";
 import {
   DEFAULT_SALIENCY_PARAMS,
+  type AttentionHotspot,
   type SaliencyParams,
+  drawAttentionHotspots,
+  findAttentionHotspots,
   processAttentionBlur,
   reblendAttentionBlur,
+  renderSaliencyOverlayWithHotspots,
 } from "./lib/saliency";
+import {
+  type ReportProgress,
+  buildInsightReport,
+  downloadBlob,
+  progressLabel,
+} from "./lib/report";
 import "./App.css";
 
-type AppMode = "blur" | "foveal" | "saliency";
+type AppMode = "blur" | "foveal" | "saliency" | "report";
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -66,7 +76,14 @@ export default function App() {
   const [saliencyView, setSaliencyView] = useState<"map" | "blur">("map");
   const [saliencyLoading, setSaliencyLoading] = useState(false);
   const [saliencyError, setSaliencyError] = useState<string | null>(null);
+  const [hotspotCount, setHotspotCount] = useState(3);
+  const [attentionHotspots, setAttentionHotspots] = useState<
+    AttentionHotspot[]
+  >([]);
   const saliencyRequestRef = useRef(0);
+  const [reportProgress, setReportProgress] = useState<ReportProgress>("idle");
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(
     null,
@@ -106,6 +123,9 @@ export default function App() {
       setSaliencyOverlay(null);
       setSaliencyError(null);
       setSaliencyView("map");
+      setAttentionHotspots([]);
+      setReportProgress("idle");
+      setReportError(null);
     };
     img.src = url;
   }, []);
@@ -198,8 +218,9 @@ export default function App() {
     const output = renderOutput();
     if (output) {
       ctx.drawImage(output, 0, 0);
-    } else if (mode === "saliency") {
-      // Show the original while attention analysis is running / pending.
+    } else if (mode === "saliency" || mode === "report") {
+      // Show the original while attention analysis is running / pending,
+      // and as the PowerPoint report workspace preview.
       ctx.drawImage(image, 0, 0);
     }
 
@@ -249,6 +270,28 @@ export default function App() {
       octx.fillText(label, w / 2, h / 2);
       octx.textAlign = "start";
       octx.textBaseline = "alphabetic";
+    } else if (
+      mode === "saliency" &&
+      saliencyView === "map" &&
+      attentionHotspots.length > 0
+    ) {
+      drawAttentionHotspots(octx, attentionHotspots, image.naturalWidth);
+    } else if (mode === "report" && reportBusy) {
+      const w = overlay.width;
+      const h = overlay.height;
+      const lineScale = Math.max(1, w / 800);
+
+      octx.fillStyle = "rgba(12, 13, 16, 0.45)";
+      octx.fillRect(0, 0, w, h);
+
+      const label = progressLabel(reportProgress) || "Generating report…";
+      octx.font = `600 ${Math.round(20 * lineScale)}px DM Sans, sans-serif`;
+      octx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      octx.textAlign = "center";
+      octx.textBaseline = "middle";
+      octx.fillText(label, w / 2, h / 2);
+      octx.textAlign = "start";
+      octx.textBaseline = "alphabetic";
     }
   }, [
     image,
@@ -259,6 +302,10 @@ export default function App() {
     dragCurrent,
     fovealParams,
     saliencyLoading,
+    saliencyView,
+    attentionHotspots,
+    reportBusy,
+    reportProgress,
     renderOutput,
     drawFovealOverlay,
   ]);
@@ -274,7 +321,25 @@ export default function App() {
     saliencyOverlay,
     saliencyView,
     saliencyLoading,
+    attentionHotspots,
+    reportBusy,
+    reportProgress,
   ]);
+
+  useEffect(() => {
+    if (!image || !saliencyMask) {
+      setAttentionHotspots([]);
+      return;
+    }
+    setAttentionHotspots(
+      findAttentionHotspots(
+        saliencyMask,
+        image.naturalWidth,
+        image.naturalHeight,
+        hotspotCount,
+      ),
+    );
+  }, [image, saliencyMask, hotspotCount]);
 
   useEffect(() => {
     if (mode !== "saliency" || !image || !saliencyMask) return;
@@ -417,9 +482,19 @@ export default function App() {
     if (!canvas) return;
 
     if (mode === "saliency") {
-      const canvas =
+      let canvas =
         saliencyView === "map" ? saliencyOverlay : saliencyResult;
       if (!canvas) return;
+      if (
+        saliencyView === "map" &&
+        saliencyOverlay &&
+        attentionHotspots.length > 0
+      ) {
+        canvas = renderSaliencyOverlayWithHotspots(
+          saliencyOverlay,
+          attentionHotspots,
+        );
+      }
       canvas.toBlob((blob) => {
         if (!blob) return;
         const link = document.createElement("a");
@@ -450,6 +525,10 @@ export default function App() {
     setSaliencyOverlay(null);
     setSaliencyError(null);
     setSaliencyView("map");
+    setAttentionHotspots([]);
+    setReportProgress("idle");
+    setReportError(null);
+    setReportBusy(false);
     setUploadedFileBlob(null);
     setUploadedFileName("image");
     if (imageUrl) {
@@ -457,6 +536,47 @@ export default function App() {
       setImageUrl(null);
     }
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const generateReport = async () => {
+    if (!image || !uploadedFileBlob || reportBusy) return;
+    setReportBusy(true);
+    setReportError(null);
+    setReportProgress("blur");
+    try {
+      const { blob, fileName, mask, overlay, peak } = await buildInsightReport({
+        image,
+        imageBlob: uploadedFileBlob,
+        mimeType: uploadedMimeType,
+        fileName: uploadedFileName,
+        regions,
+        saliencyParams,
+        existingMask: saliencyMask,
+        existingOverlay: saliencyOverlay,
+        onProgress: setReportProgress,
+      });
+      setSaliencyMask(mask);
+      setSaliencyOverlay(overlay);
+      setSaliencyResult(
+        reblendAttentionBlur(image, mask, saliencyParams),
+      );
+      if (fovealParams) {
+        setFovealParams({
+          ...fovealParams,
+          focalX: peak.x,
+          focalY: peak.y,
+        });
+      }
+      downloadBlob(blob, fileName);
+      setReportProgress("done");
+    } catch (error) {
+      setReportProgress("error");
+      setReportError(
+        error instanceof Error ? error.message : "Failed to build PowerPoint",
+      );
+    } finally {
+      setReportBusy(false);
+    }
   };
 
   const foveaSliderMax = imageRef > 0 ? imageRef * 0.2 : 200;
@@ -470,7 +590,7 @@ export default function App() {
           <div>
             <div className="header__title">Visuals insight</div>
             <div className="header__subtitle">
-              Blur logos, foveal vision, or attention-based saliency
+              Blur, foveal vision, attention, and PowerPoint reports
             </div>
           </div>
         </div>
@@ -486,14 +606,14 @@ export default function App() {
           <div className="mode-tabs">
             <button
               type="button"
-              className={`mode-tab ${mode === "blur" ? "mode-tab--active" : ""}`}
+              className={`mode-tab ${mode === "blur" ? "mode-tab--active mode-tab--blur" : ""}`}
               onClick={() => setMode("blur")}
             >
               Logo blur
             </button>
             <button
               type="button"
-              className={`mode-tab ${mode === "foveal" ? "mode-tab--active" : ""}`}
+              className={`mode-tab ${mode === "foveal" ? "mode-tab--active mode-tab--foveal" : ""}`}
               onClick={() => setMode("foveal")}
             >
               Foveal vision
@@ -504,6 +624,13 @@ export default function App() {
               onClick={() => setMode("saliency")}
             >
               Attention
+            </button>
+            <button
+              type="button"
+              className={`mode-tab ${mode === "report" ? "mode-tab--active mode-tab--report" : ""}`}
+              onClick={() => setMode("report")}
+            >
+              PowerPoint
             </button>
           </div>
 
@@ -738,7 +865,7 @@ export default function App() {
               {saliencyMask && (
                 <>
                   <p className="hint hint--success">
-                    Saliency map ready. Switch views below.
+                    Saliency map ready. Ranked hotspots show attention share.
                   </p>
                   <div className="mode-tabs">
                     <button
@@ -756,6 +883,41 @@ export default function App() {
                       Attention blur
                     </button>
                   </div>
+
+                  <div className="slider-row">
+                    <div className="slider-row__header">
+                      <span>Hotspots</span>
+                      <span className="slider-row__value slider-row__value--saliency">
+                        Top {hotspotCount}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={hotspotCount}
+                      onInput={(e) =>
+                        setHotspotCount(
+                          Number((e.target as HTMLInputElement).value),
+                        )
+                      }
+                    />
+                  </div>
+
+                  {attentionHotspots.length > 0 && (
+                    <ul className="hotspot-list">
+                      {attentionHotspots.map((spot) => (
+                        <li key={spot.rank} className="hotspot-list__item">
+                          <span className="hotspot-list__rank">{spot.rank}</span>
+                          <span className="hotspot-list__meta">
+                            Attention share{" "}
+                            <strong>{Math.round(spot.share * 100)}%</strong>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </>
               )}
 
@@ -814,6 +976,41 @@ export default function App() {
             </div>
           )}
 
+          {mode === "report" && (
+            <div className="panel">
+              <span className="panel__label">PowerPoint report</span>
+              <p className="hint">
+                Builds a deck from all three analyses: every logo-blur level
+                with its description, the attention saliency map, and foveal
+                vision centred on the peak heat point.
+              </p>
+              <ol className="report-steps">
+                <li>Logo blur — all steps + perceptual notes</li>
+                <li>Attention saliency — map + what it means</li>
+                <li>Foveal vision — focus on highest heat + why it matters</li>
+              </ol>
+              {reportBusy && (
+                <p className="hint hint--success">
+                  {progressLabel(reportProgress)}
+                </p>
+              )}
+              {!reportBusy && reportProgress === "done" && (
+                <p className="hint hint--success">Report downloaded.</p>
+              )}
+              {reportError && <p className="error-text">{reportError}</p>}
+              <button
+                type="button"
+                className="btn btn--primary"
+                style={{ width: "100%" }}
+                onClick={() => void generateReport()}
+                disabled={!image || !uploadedFileBlob || reportBusy}
+              >
+                {reportBusy ? "Generating…" : "Generate PowerPoint"}
+              </button>
+            </div>
+          )}
+
+          {mode !== "report" && (
           <div className="panel btn-group">
             <button
               className="btn btn--primary"
@@ -826,6 +1023,7 @@ export default function App() {
               Download result
             </button>
           </div>
+          )}
         </aside>
 
         <section
@@ -851,7 +1049,7 @@ export default function App() {
             <div className="empty-state">
               <div className="empty-state__icon">🖼️</div>
               <p className="empty-state__title">No image yet</p>
-              <p>Upload an image to blur logos, simulate vision, or analyze attention</p>
+              <p>Upload an image to blur logos, simulate vision, analyze attention, or build a report</p>
             </div>
           )}
         </section>

@@ -66,6 +66,7 @@
 
 .mode-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.375rem;
   padding: 0.25rem;
   background: var(--surface);
@@ -74,7 +75,8 @@
 }
 
 .mode-tab {
-  flex: 1;
+  flex: 1 1 calc(50% - 0.375rem);
+  min-width: 0;
   padding: 0.5rem 0.4rem;
   border-radius: 7px;
   font-size: 0.72rem;
@@ -93,16 +95,20 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-.mode-tab--active:first-child {
+.mode-tab--active.mode-tab--blur {
   color: var(--accent);
 }
 
-.mode-tab--active:last-child {
+.mode-tab--active.mode-tab--foveal {
   color: #a78bfa;
 }
 
 .mode-tab--active.mode-tab--saliency {
   color: #34d399;
+}
+
+.mode-tab--active.mode-tab--report {
+  color: #fbbf24;
 }
 
 .slider-row__value--foveal {
@@ -111,6 +117,56 @@
 
 .slider-row__value--saliency {
   color: #34d399;
+}
+
+.report-steps {
+  margin: 0.25rem 0 1rem;
+  padding-left: 1.15rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.report-steps li::marker {
+  color: #fbbf24;
+}
+
+.hotspot-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.75rem 0 0.25rem;
+  padding: 0;
+}
+
+.hotspot-list__item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.hotspot-list__rank {
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #ecfdf5;
+  background: #065f46;
+  border: 1px solid #34d399;
+  flex-shrink: 0;
+}
+
+.hotspot-list__meta strong {
+  color: #34d399;
+  font-weight: 600;
 }
 
 .field {
