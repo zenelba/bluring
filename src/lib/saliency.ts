@@ -275,6 +275,7 @@ export async function fetchSaliencyMap(
 
   const apiRes = await fetch("/api/saliency", {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ imageBase64, mimeType }),
   });

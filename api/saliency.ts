@@ -6,7 +6,7 @@
  * Optional: set HF_TOKEN if the Space is private / rate-limited.
  */
 
-import { hasValidAccessCookie } from "./access";
+import { hasValidAccessCookie } from "./helpers/accessAuth.js";
 
 const SPACE_HOST =
   process.env.HF_SALIENCY_SPACE_URL ??

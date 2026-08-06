@@ -196,7 +196,12 @@ export default function App() {
     overlay.height = image.naturalHeight;
 
     const output = renderOutput();
-    if (output) ctx.drawImage(output, 0, 0);
+    if (output) {
+      ctx.drawImage(output, 0, 0);
+    } else if (mode === "saliency") {
+      // Show the original while attention analysis is running / pending.
+      ctx.drawImage(image, 0, 0);
+    }
 
     const octx = overlay.getContext("2d");
     if (!octx) return;
@@ -228,6 +233,22 @@ export default function App() {
       }
     } else if (mode === "foveal" && fovealParams) {
       drawFovealOverlay(octx, fovealParams);
+    } else if (mode === "saliency" && saliencyLoading) {
+      const w = overlay.width;
+      const h = overlay.height;
+      const lineScale = Math.max(1, w / 800);
+
+      octx.fillStyle = "rgba(12, 13, 16, 0.45)";
+      octx.fillRect(0, 0, w, h);
+
+      const label = "Analyzing attention…";
+      octx.font = `600 ${Math.round(22 * lineScale)}px DM Sans, sans-serif`;
+      octx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      octx.textAlign = "center";
+      octx.textBaseline = "middle";
+      octx.fillText(label, w / 2, h / 2);
+      octx.textAlign = "start";
+      octx.textBaseline = "alphabetic";
     }
   }, [
     image,
@@ -237,13 +258,23 @@ export default function App() {
     dragStart,
     dragCurrent,
     fovealParams,
+    saliencyLoading,
     renderOutput,
     drawFovealOverlay,
   ]);
 
   useEffect(() => {
     redraw();
-  }, [redraw, blurLevelIndex, mode, fovealParams, saliencyResult, saliencyOverlay, saliencyView]);
+  }, [
+    redraw,
+    blurLevelIndex,
+    mode,
+    fovealParams,
+    saliencyResult,
+    saliencyOverlay,
+    saliencyView,
+    saliencyLoading,
+  ]);
 
   useEffect(() => {
     if (mode !== "saliency" || !image || !saliencyMask) return;
