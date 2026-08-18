@@ -82,6 +82,7 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
   const [background, setBackground] = useState(DEFAULT_PORTRAIT_BG);
   const [hexDraft, setHexDraft] = useState(DEFAULT_PORTRAIT_BG);
   const [busy, setBusy] = useState(false);
+  const [includeBrands, setIncludeBrands] = useState(true);
   const [zipError, setZipError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const aspectRef = useRef(
@@ -233,7 +234,7 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
   const handleDownload = async () => {
     setZipError(null);
     try {
-      await downloadPortraitZip(items, width, height);
+      await downloadPortraitZip(items, width, height, includeBrands);
     } catch (error) {
       setZipError(
         error instanceof Error ? error.message : "Failed to build ZIP",
@@ -390,6 +391,23 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
               if (e.target.files) addFiles(e.target.files);
             }}
           />
+
+          <div className="osebe-toggle-row">
+            <div>
+              <div className="osebe-toggle-row__title">Include brands.json</div>
+              <p>Name list with ID and zip filename (on by default)</p>
+            </div>
+            <button
+              type="button"
+              className={`osebe-switch ${includeBrands ? "osebe-switch--on" : ""}`}
+              role="switch"
+              aria-checked={includeBrands}
+              disabled={busy}
+              onClick={() => setIncludeBrands((v) => !v)}
+            >
+              <span />
+            </button>
+          </div>
 
           <button
             type="button"

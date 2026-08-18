@@ -35,6 +35,8 @@ export interface PortraitItem {
   file: File;
   sourceName: string;
   outputId: string | null;
+  fullName: string;
+  shortName: string;
   parseError: string | null;
   status: PortraitStatus;
   progressNote: string;
@@ -56,18 +58,40 @@ export interface FaceBox {
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const ACCEPTED_EXT = /\.(jpe?g|png|webp)$/i;
 
-/** Leading sequential ID from `[ID]_[Name]_[Surname].ext`. */
+/** Leading ID plus name/surname from `[ID]_[Name]_[Surname].ext` or `1-Name Surname.jpg`. */
+export function parsePortraitMeta(filename: string): {
+  id: string | null;
+  fullName: string;
+  shortName: string;
+  error: string | null;
+} {
+  const base = filename.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+  const match = /^(\d+)(?:[_\-\s.]+(.+))?$/.exec(base);
+  if (!match) {
+    return {
+      id: null,
+      fullName: "",
+      shortName: "",
+      error: `Missing leading ID in “${filename.replace(/^.*[\\/]/, "")}”. Use e.g. 01_Janez_Novak.jpg`,
+    };
+  }
+  const id = match[1];
+  const rest = (match[2] ?? "").trim();
+  const parts = rest
+    .split(/[_\s.]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const fullName = parts.join(" ");
+  const shortName = parts.length > 0 ? parts[parts.length - 1] : "";
+  return { id, fullName, shortName, error: null };
+}
+
 export function parsePortraitId(filename: string): {
   id: string | null;
   error: string | null;
 } {
-  const base = filename.replace(/^.*[\\/]/, "");
-  const match = /^(\d+)(?:[_\-\s.]|$)/.exec(base);
-  if (match) return { id: match[1], error: null };
-  return {
-    id: null,
-    error: `Missing leading ID in “${base}”. Use e.g. 01_Janez_Novak.jpg`,
-  };
+  const parsed = parsePortraitMeta(filename);
+  return { id: parsed.id, error: parsed.error };
 }
 
 export function isAcceptedPortraitFile(file: File): boolean {
@@ -426,12 +450,14 @@ export async function processPortrait(
 
 export function createPortraitItems(files: File[]): PortraitItem[] {
   return files.filter(isAcceptedPortraitFile).map((file) => {
-    const parsed = parsePortraitId(file.name);
+    const parsed = parsePortraitMeta(file.name);
     return {
       localId: crypto.randomUUID(),
       file,
       sourceName: file.name,
       outputId: parsed.id,
+      fullName: parsed.fullName,
+      shortName: parsed.shortName,
       parseError: parsed.error,
       status: parsed.id ? "queued" : "error",
       progressNote: parsed.error ?? "Queued",
@@ -463,10 +489,32 @@ export function readImageSize(
   });
 }
 
+export function buildBrandsFile(
+  entries: Array<{
+    fullName: string;
+    shortName: string;
+    id: string;
+    zipName: string;
+  }>,
+): string {
+  const lines = entries.map((entry, index) => {
+    const record = {
+      T: entry.fullName,
+      short: entry.shortName,
+      active: 1,
+      ID: entry.id,
+      I: entry.zipName,
+    };
+    return `      ${index + 1}:${JSON.stringify(record)}`;
+  });
+  return `brands={\n${lines.join(",\n")}\n}`;
+}
+
 export async function downloadPortraitZip(
   items: PortraitItem[],
   width: number,
   height: number,
+  includeBrands = true,
 ): Promise<void> {
   const ready = items.filter((item) => item.status === "done" && item.blob && item.outputId);
   if (ready.length === 0) {
@@ -475,6 +523,13 @@ export async function downloadPortraitZip(
 
   const zip = new JSZip();
   const used = new Set<string>();
+  const brandEntries: Array<{
+    fullName: string;
+    shortName: string;
+    id: string;
+    zipName: string;
+  }> = [];
+
   for (const item of ready) {
     let name = `${item.outputId}.png`;
     if (used.has(name)) {
@@ -484,6 +539,16 @@ export async function downloadPortraitZip(
     }
     used.add(name);
     zip.file(name, item.blob!);
+    brandEntries.push({
+      fullName: item.fullName,
+      shortName: item.shortName,
+      id: item.outputId!,
+      zipName: name,
+    });
+  }
+
+  if (includeBrands) {
+    zip.file("brands.json", buildBrandsFile(brandEntries));
   }
 
   const archive = await zip.generateAsync({ type: "blob" });
