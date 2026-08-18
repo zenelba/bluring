@@ -28,9 +28,10 @@ import {
   downloadBlob,
   progressLabel,
 } from "./lib/report";
+import PortraitsMode from "./PortraitsMode";
 import "./App.css";
 
-type AppMode = "blur" | "foveal" | "saliency" | "report";
+type AppMode = "blur" | "foveal" | "saliency" | "report" | "portraits";
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -582,15 +583,56 @@ export default function App() {
   const foveaSliderMax = imageRef > 0 ? imageRef * 0.2 : 200;
   const spreadSliderMax = imageRef > 0 ? imageRef * 0.5 : 500;
 
+  const modeTabs = (
+    <div className="mode-tabs">
+      <button
+        type="button"
+        className={`mode-tab ${mode === "blur" ? "mode-tab--active mode-tab--blur" : ""}`}
+        onClick={() => setMode("blur")}
+      >
+        Logo blur
+      </button>
+      <button
+        type="button"
+        className={`mode-tab ${mode === "foveal" ? "mode-tab--active mode-tab--foveal" : ""}`}
+        onClick={() => setMode("foveal")}
+      >
+        Foveal vision
+      </button>
+      <button
+        type="button"
+        className={`mode-tab ${mode === "saliency" ? "mode-tab--active mode-tab--saliency" : ""}`}
+        onClick={() => setMode("saliency")}
+      >
+        Attention
+      </button>
+      <button
+        type="button"
+        className={`mode-tab ${mode === "report" ? "mode-tab--active mode-tab--report" : ""}`}
+        onClick={() => setMode("report")}
+      >
+        PowerPoint
+      </button>
+      <button
+        type="button"
+        className={`mode-tab ${mode === "portraits" ? "mode-tab--active mode-tab--portraits" : ""}`}
+        onClick={() => setMode("portraits")}
+      >
+        Osebe
+      </button>
+    </div>
+  );
+
   return (
-    <div className="app">
+    <div className={`app ${mode === "portraits" ? "app--osebe" : ""}`}>
+      {mode !== "portraits" && (
       <header className="header">
         <div className="header__brand">
           <div className="header__logo">V</div>
           <div>
             <div className="header__title">Visuals insight</div>
             <div className="header__subtitle">
-              Blur, foveal vision, attention, and PowerPoint reports
+              Blur, foveal vision, attention, portraits, and PowerPoint reports
             </div>
           </div>
         </div>
@@ -600,39 +642,14 @@ export default function App() {
           </button>
         )}
       </header>
+      )}
 
+      {mode === "portraits" ? (
+        <PortraitsMode tabs={modeTabs} />
+      ) : (
       <div className="main">
         <aside className="sidebar">
-          <div className="mode-tabs">
-            <button
-              type="button"
-              className={`mode-tab ${mode === "blur" ? "mode-tab--active mode-tab--blur" : ""}`}
-              onClick={() => setMode("blur")}
-            >
-              Logo blur
-            </button>
-            <button
-              type="button"
-              className={`mode-tab ${mode === "foveal" ? "mode-tab--active mode-tab--foveal" : ""}`}
-              onClick={() => setMode("foveal")}
-            >
-              Foveal vision
-            </button>
-            <button
-              type="button"
-              className={`mode-tab ${mode === "saliency" ? "mode-tab--active mode-tab--saliency" : ""}`}
-              onClick={() => setMode("saliency")}
-            >
-              Attention
-            </button>
-            <button
-              type="button"
-              className={`mode-tab ${mode === "report" ? "mode-tab--active mode-tab--report" : ""}`}
-              onClick={() => setMode("report")}
-            >
-              PowerPoint
-            </button>
-          </div>
+          {modeTabs}
 
           <div className="panel">
             <span className="panel__label">Upload</span>
@@ -1054,6 +1071,7 @@ export default function App() {
           )}
         </section>
       </div>
+      )}
     </div>
   );
 }

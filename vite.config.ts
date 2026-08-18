@@ -88,4 +88,7 @@ function accessApiDevPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [react(), accessApiDevPlugin()],
+  optimizeDeps: {
+    exclude: ["@imgly/background-removal", "onnxruntime-web"],
+  },
 });
