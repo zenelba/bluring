@@ -62,7 +62,7 @@ export function parsePortraitId(filename: string): {
   error: string | null;
 } {
   const base = filename.replace(/^.*[\\/]/, "");
-  const match = /^(\d+)[_\-.]/.exec(base);
+  const match = /^(\d+)(?:[_\-\s.]|$)/.exec(base);
   if (match) return { id: match[1], error: null };
   return {
     id: null,
@@ -295,23 +295,31 @@ async function removeBackground(
   onProgress?: (note: string) => void,
 ): Promise<Blob> {
   const { removeBackground } = await import("@imgly/background-removal");
-  return removeBackground(blob, {
-    publicPath: IMGLY_PUBLIC_PATH,
-    model: "isnet_quint8",
-    device: "cpu",
-    proxyToWorker: false,
-    output: { format: "image/png", quality: 0.9 },
-    progress: (key, current, total) => {
-      if (!onProgress || !total) return;
-      const pct = Math.min(100, Math.round((current / total) * 100));
-      const label = key.includes("wasm")
-        ? "runtime"
-        : key.includes("onnx") || key.includes("isnet")
-          ? "model"
-          : key;
-      onProgress(`Downloading ${label} ${pct}%`);
-    },
-  });
+  let listening = true;
+  try {
+    const result = await removeBackground(blob, {
+      publicPath: IMGLY_PUBLIC_PATH,
+      model: "isnet_quint8",
+      device: "cpu",
+      proxyToWorker: false,
+      output: { format: "image/png", quality: 0.9 },
+      progress: (key, current, total) => {
+        if (!listening || !onProgress || !total) return;
+        const pct = Math.min(100, Math.round((current / total) * 100));
+        const label = key.includes("wasm")
+          ? "runtime"
+          : key.includes("onnx") || key.includes("isnet")
+            ? "model"
+            : key.replace(/^compute:/, "");
+        onProgress(
+          pct >= 100 ? "Removing background…" : `Downloading ${label} ${pct}%`,
+        );
+      },
+    });
+    return result;
+  } finally {
+    listening = false;
+  }
 }
 
 export async function processPortrait(
@@ -371,7 +379,8 @@ export async function processPortrait(
     }
     const cropBlob = await canvasToPng(inputForCutout);
     const cutoutBlob = await removeBackground(cropBlob, (note) => {
-      onStatus({ status: "cutout", progressNote: note });
+      // Progress only — a late 100% callback must not reset status after compose/done.
+      onStatus({ progressNote: note });
     });
     const cutout = await loadImageFromBlob(cutoutBlob);
 

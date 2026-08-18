@@ -136,7 +136,22 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
 
   const patchItem = (localId: string, patch: Partial<PortraitItem>) => {
     setItems((prev) =>
-      prev.map((item) => (item.localId === localId ? { ...item, ...patch } : item)),
+      prev.map((item) => {
+        if (item.localId !== localId) return item;
+        const finished =
+          item.status === "done" ||
+          item.status === "composing" ||
+          item.status === "error";
+        if (
+          finished &&
+          patch.status !== "done" &&
+          patch.status !== "error" &&
+          patch.status !== "queued"
+        ) {
+          return item;
+        }
+        return { ...item, ...patch };
+      }),
     );
   };
 
