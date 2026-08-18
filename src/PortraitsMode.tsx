@@ -104,6 +104,13 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
   const currentStep = busy
     ? Math.min(items.length, Math.max(processedLike, activeIndex + 1, 1))
     : processedLike;
+  const liveNote =
+    items.find(
+      (item) =>
+        item.status === "detecting" ||
+        item.status === "cutout" ||
+        item.status === "composing",
+    )?.progressNote ?? "";
 
   const settings: PortraitSettings = useMemo(
     () => ({
@@ -202,6 +209,7 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
         settings,
         (patch) => patchItem(item.localId, patch),
       );
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
 
     setBusy(false);
@@ -416,7 +424,7 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
               {items.length === 0
                 ? "Waiting for files…"
                 : busy
-                  ? `Processing ${currentStep} of ${items.length} images… ${percent}%`
+                  ? `${liveNote || `Processing ${currentStep} of ${items.length} images…`} (${currentStep}/${items.length})`
                   : doneCount === items.length && items.length > 0
                     ? "All images processed."
                     : `${doneCount} processed · ${items.length - doneCount - errorCount} queued · ${errorCount} failed`}
@@ -459,6 +467,14 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
                       >
                         {statusLabel(item.status)}
                       </span>
+                      {item.status !== "queued" && item.status !== "done" && (
+                        <div className="osebe-card__note">{item.progressNote}</div>
+                      )}
+                      {item.status === "error" && (
+                        <div className="osebe-card__note osebe-card__note--error">
+                          {item.progressNote}
+                        </div>
+                      )}
                     </div>
                   </article>
                 );

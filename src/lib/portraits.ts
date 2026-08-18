@@ -183,9 +183,33 @@ export function faceCropRect(
 
 type FaceDetector = {
   estimateFaces: (
-    input: HTMLImageElement,
+    input: HTMLCanvasElement | HTMLImageElement,
   ) => Promise<Array<{ box: { xMin: number; yMin: number; width: number; height: number } }>>;
 };
+
+const FACE_LOAD_MS = 18_000;
+const FACE_INFER_MS = 8_000;
+const IMGLY_PUBLIC_PATH =
+  "https://staticimgly.com/@imgly/background-removal-data/1.7.0/dist/";
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 let detectorPromise: Promise<FaceDetector | null> | null = null;
 
@@ -199,9 +223,13 @@ async function getFaceDetector(): Promise<FaceDetector | null> {
         await tf.setBackend("webgl");
         await tf.ready();
         const faceDetection = await import("@tensorflow-models/face-detection");
-        return (await faceDetection.createDetector(
-          faceDetection.SupportedModels.MediaPipeFaceDetector,
-          { runtime: "tfjs", modelType: "short", maxFaces: 1 },
+        return (await withTimeout(
+          faceDetection.createDetector(
+            faceDetection.SupportedModels.MediaPipeFaceDetector,
+            { runtime: "tfjs", modelType: "short", maxFaces: 1 },
+          ) as Promise<FaceDetector>,
+          FACE_LOAD_MS,
+          "Face detector",
         )) as FaceDetector;
       } catch (error) {
         console.warn("Face detector failed to load; using center crop.", error);
@@ -212,49 +240,78 @@ async function getFaceDetector(): Promise<FaceDetector | null> {
   return detectorPromise;
 }
 
+function scaleToMaxEdge(
+  image: HTMLImageElement,
+  maxEdge: number,
+): { canvas: HTMLCanvasElement; scale: number } {
+  const srcW = image.naturalWidth;
+  const srcH = image.naturalHeight;
+  const scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(srcW * scale));
+  canvas.height = Math.max(1, Math.round(srcH * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { canvas, scale };
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return { canvas, scale };
+}
+
+function extractRegion(image: HTMLImageElement, region: FaceBox): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  const w = Math.max(1, Math.round(region.width));
+  const h = Math.max(1, Math.round(region.height));
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  ctx.drawImage(image, region.x, region.y, region.width, region.height, 0, 0, w, h);
+  return canvas;
+}
+
 export async function detectPrimaryFace(
   image: HTMLImageElement,
 ): Promise<FaceBox | null> {
   const detector = await getFaceDetector();
   if (!detector) return null;
-  const faces = await detector.estimateFaces(image);
+  const { canvas, scale } = scaleToMaxEdge(image, 512);
+  const faces = await withTimeout(
+    detector.estimateFaces(canvas),
+    FACE_INFER_MS,
+    "Face detection",
+  );
   if (!faces.length) return null;
   const box = faces[0].box;
   if (!box || box.width <= 1 || box.height <= 1) return null;
   return {
-    x: box.xMin,
-    y: box.yMin,
-    width: box.width,
-    height: box.height,
+    x: box.xMin / scale,
+    y: box.yMin / scale,
+    width: box.width / scale,
+    height: box.height / scale,
   };
 }
 
-async function removeBackground(blob: Blob): Promise<Blob> {
+async function removeBackground(
+  blob: Blob,
+  onProgress?: (note: string) => void,
+): Promise<Blob> {
   const { removeBackground } = await import("@imgly/background-removal");
   return removeBackground(blob, {
+    publicPath: IMGLY_PUBLIC_PATH,
     model: "isnet_quint8",
+    device: "cpu",
+    proxyToWorker: false,
     output: { format: "image/png", quality: 0.9 },
+    progress: (key, current, total) => {
+      if (!onProgress || !total) return;
+      const pct = Math.min(100, Math.round((current / total) * 100));
+      const label = key.includes("wasm")
+        ? "runtime"
+        : key.includes("onnx") || key.includes("isnet")
+          ? "model"
+          : key;
+      onProgress(`Downloading ${label} ${pct}%`);
+    },
   });
-}
-
-function drawCover(
-  ctx: CanvasRenderingContext2D,
-  source: CanvasImageSource,
-  src: FaceBox,
-  destW: number,
-  destH: number,
-): void {
-  ctx.drawImage(
-    source,
-    src.x,
-    src.y,
-    src.width,
-    src.height,
-    0,
-    0,
-    destW,
-    destH,
-  );
 }
 
 export async function processPortrait(
@@ -283,24 +340,40 @@ export async function processPortrait(
 
     if (settings.smartFaceCrop) {
       onStatus({ status: "detecting", progressNote: "Detecting face…" });
-      const face = await detectPrimaryFace(original);
-      if (face) {
-        crop = faceCropRect(imgW, imgH, face, settings.width, settings.height);
-        usedFaceFallback = false;
+      try {
+        const face = await detectPrimaryFace(original);
+        if (face) {
+          crop = faceCropRect(imgW, imgH, face, settings.width, settings.height);
+          usedFaceFallback = false;
+        }
+      } catch (error) {
+        console.warn("Face detection skipped:", error);
       }
     }
 
-    onStatus({ status: "cutout", progressNote: "Removing background…" });
-    const cutoutBlob = await removeBackground(item.file);
+    onStatus({ status: "cutout", progressNote: "Preparing cutout…" });
+    const cropCanvas = extractRegion(original, crop);
+    const maxEdge = 1024;
+    const cropScale = Math.min(
+      1,
+      maxEdge / Math.max(cropCanvas.width, cropCanvas.height),
+    );
+    let inputForCutout = cropCanvas;
+    if (cropScale < 1) {
+      const scaled = document.createElement("canvas");
+      scaled.width = Math.max(1, Math.round(cropCanvas.width * cropScale));
+      scaled.height = Math.max(1, Math.round(cropCanvas.height * cropScale));
+      const sctx = scaled.getContext("2d");
+      if (sctx) {
+        sctx.drawImage(cropCanvas, 0, 0, scaled.width, scaled.height);
+        inputForCutout = scaled;
+      }
+    }
+    const cropBlob = await canvasToPng(inputForCutout);
+    const cutoutBlob = await removeBackground(cropBlob, (note) => {
+      onStatus({ status: "cutout", progressNote: note });
+    });
     const cutout = await loadImageFromBlob(cutoutBlob);
-    const scaleX = cutout.naturalWidth / imgW;
-    const scaleY = cutout.naturalHeight / imgH;
-    const mappedCrop = {
-      x: crop.x * scaleX,
-      y: crop.y * scaleY,
-      width: crop.width * scaleX,
-      height: crop.height * scaleY,
-    };
 
     onStatus({ status: "composing", progressNote: "Composing portrait…" });
     const canvas = document.createElement("canvas");
@@ -313,7 +386,7 @@ export async function processPortrait(
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    drawCover(ctx, cutout, mappedCrop, canvas.width, canvas.height);
+    ctx.drawImage(cutout, 0, 0, canvas.width, canvas.height);
 
     const blob = await canvasToPng(canvas);
     const previewUrl = URL.createObjectURL(blob);

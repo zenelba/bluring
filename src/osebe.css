@@ -385,6 +385,17 @@
   margin: 0.15rem 0 0.45rem;
 }
 
+.osebe-card__note {
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--osebe-muted);
+  line-height: 1.3;
+}
+
+.osebe-card__note--error {
+  color: #b91c1c;
+}
+
 .osebe-badge {
   display: inline-flex;
   align-items: center;
