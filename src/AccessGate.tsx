@@ -31,7 +31,7 @@ export default function AccessGate({ children }: AccessGateProps) {
     return (
       <div className="access-gate">
         <div className="access-gate__panel">
-          <div className="access-gate__logo">V</div>
+          <div className="access-gate__logo">I</div>
           <p className="access-gate__copy">Checking access…</p>
         </div>
       </div>
@@ -59,8 +59,8 @@ export default function AccessGate({ children }: AccessGateProps) {
   return (
     <div className="access-gate">
       <div className="access-gate__panel">
-        <div className="access-gate__logo">V</div>
-        <h1 className="access-gate__title">Visuals insight</h1>
+        <div className="access-gate__logo">I</div>
+        <h1 className="access-gate__title">Image Processor</h1>
         <p className="access-gate__copy">Enter an access code to continue.</p>
         <form className="access-gate__form" onSubmit={handleSubmit}>
           <label className="access-gate__label" htmlFor="access-code">

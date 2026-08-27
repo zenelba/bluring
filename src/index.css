@@ -7,19 +7,21 @@
 }
 
 :root {
-  color-scheme: dark;
-  --bg: #0c0d10;
-  --surface: #15171c;
-  --surface-raised: #1c1f27;
-  --border: #2a2e3a;
-  --text: #eef0f4;
-  --text-muted: #8b92a5;
-  --accent: #5b8def;
-  --accent-hover: #7aa3f5;
-  --accent-muted: rgba(91, 141, 239, 0.15);
-  --danger: #ef5b5b;
-  --radius: 12px;
+  color-scheme: light;
+  --bg: #eef0f3;
+  --surface: #ffffff;
+  --surface-raised: #f9fafb;
+  --border: #e5e7eb;
+  --text: #111827;
+  --text-muted: #6b7280;
+  --accent: #111827;
+  --accent-hover: #000000;
+  --accent-muted: rgba(17, 24, 39, 0.08);
+  --danger: #dc2626;
+  --radius: 14px;
   --font: "DM Sans", system-ui, sans-serif;
+  --green: #22c55e;
+  --green-dark: #16a34a;
 }
 
 html,
@@ -44,5 +46,5 @@ button {
 }
 
 input[type="range"] {
-  accent-color: var(--accent);
+  accent-color: #111827;
 }

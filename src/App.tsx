@@ -33,6 +33,30 @@ import "./App.css";
 
 type AppMode = "blur" | "foveal" | "saliency" | "report" | "portraits";
 
+const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
+  { id: "blur", label: "Logo blur" },
+  { id: "foveal", label: "Foveal vision" },
+  { id: "saliency", label: "Attention" },
+  { id: "report", label: "PowerPoint" },
+  { id: "portraits", label: "Faces" },
+];
+
+function modeSubtitle(mode: AppMode): string {
+  if (mode === "portraits") {
+    return "Automated pipeline for political headshots and portraits";
+  }
+  if (mode === "report") {
+    return "Build a PowerPoint deck from blur, attention, and foveal analyses";
+  }
+  if (mode === "saliency") {
+    return "Predict where viewers look first, then soften the rest";
+  }
+  if (mode === "foveal") {
+    return "Simulate sharp centre vision with a soft periphery";
+  }
+  return "Blur logo regions step by step and judge what stays readable";
+}
+
 function generateId(): string {
   return crypto.randomUUID();
 }
@@ -583,74 +607,46 @@ export default function App() {
   const foveaSliderMax = imageRef > 0 ? imageRef * 0.2 : 200;
   const spreadSliderMax = imageRef > 0 ? imageRef * 0.5 : 500;
 
-  const modeTabs = (
-    <div className="mode-tabs">
-      <button
-        type="button"
-        className={`mode-tab ${mode === "blur" ? "mode-tab--active mode-tab--blur" : ""}`}
-        onClick={() => setMode("blur")}
+  const modeSelect = (
+    <label className="mode-select">
+      <span className="mode-select__label">Mode</span>
+      <select
+        className="mode-select__control"
+        value={mode}
+        onChange={(e) => setMode(e.target.value as AppMode)}
+        aria-label="Application mode"
       >
-        Logo blur
-      </button>
-      <button
-        type="button"
-        className={`mode-tab ${mode === "foveal" ? "mode-tab--active mode-tab--foveal" : ""}`}
-        onClick={() => setMode("foveal")}
-      >
-        Foveal vision
-      </button>
-      <button
-        type="button"
-        className={`mode-tab ${mode === "saliency" ? "mode-tab--active mode-tab--saliency" : ""}`}
-        onClick={() => setMode("saliency")}
-      >
-        Attention
-      </button>
-      <button
-        type="button"
-        className={`mode-tab ${mode === "report" ? "mode-tab--active mode-tab--report" : ""}`}
-        onClick={() => setMode("report")}
-      >
-        PowerPoint
-      </button>
-      <button
-        type="button"
-        className={`mode-tab ${mode === "portraits" ? "mode-tab--active mode-tab--portraits" : ""}`}
-        onClick={() => setMode("portraits")}
-      >
-        Osebe
-      </button>
-    </div>
+        {APP_MODES.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 
   return (
-    <div className={`app ${mode === "portraits" ? "app--osebe" : ""}`}>
-      {mode !== "portraits" && (
-      <header className="header">
-        <div className="header__brand">
-          <div className="header__logo">V</div>
-          <div>
-            <div className="header__title">Visuals insight</div>
-            <div className="header__subtitle">
-              Blur, foveal vision, attention, portraits, and PowerPoint reports
-            </div>
-          </div>
+    <div className="app">
+      <header className="app-top">
+        <div>
+          <h1 className="app-top__title">Image Processor</h1>
+          <p className="app-top__sub">{modeSubtitle(mode)}</p>
         </div>
-        {image && (
-          <button className="btn btn--secondary" onClick={reset}>
-            New image
-          </button>
-        )}
+        <div className="app-top__actions">
+          {image && mode !== "portraits" && (
+            <button type="button" className="btn btn--ghost" onClick={reset}>
+              New image
+            </button>
+          )}
+          {modeSelect}
+        </div>
       </header>
-      )}
 
       {mode === "portraits" ? (
-        <PortraitsMode tabs={modeTabs} />
+        <PortraitsMode />
       ) : (
       <div className="main">
         <aside className="sidebar">
-          {modeTabs}
-
           <div className="panel">
             <span className="panel__label">Upload</span>
             <div
@@ -680,7 +676,7 @@ export default function App() {
 
           {mode === "blur" && (
             <>
-              <div className="panel">
+              <div className="panel panel--card">
                 <span className="panel__label">Blur intensity</span>
                 <div className="slider-row">
                   <div className="slider-row__header">
@@ -717,7 +713,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="panel">
+              <div className="panel panel--card">
                 <span className="panel__label">Logo regions ({regions.length})</span>
                 {regions.length > 0 ? (
                   <div className="region-list">
@@ -752,7 +748,7 @@ export default function App() {
           )}
 
           {mode === "foveal" && fovealParams && (
-            <div className="panel">
+            <div className="panel panel--card">
               <span className="panel__label">Foveal vision</span>
               <p className="hint">
                 Click the image to set the focal point (x, y). Sharp vision in
@@ -762,7 +758,7 @@ export default function App() {
               <div className="slider-row">
                 <div className="slider-row__header">
                   <span>Focal point</span>
-                  <span className="slider-row__value slider-row__value--foveal">
+                  <span className="slider-row__value">
                     {Math.round(fovealParams.focalX)}, {Math.round(fovealParams.focalY)}
                   </span>
                 </div>
@@ -771,7 +767,7 @@ export default function App() {
               <div className="slider-row">
                 <div className="slider-row__header">
                   <span>Fovea radius</span>
-                  <span className="slider-row__value slider-row__value--foveal">
+                  <span className="slider-row__value">
                     {Math.round(fovealParams.foveaRadius)} px
                   </span>
                 </div>
@@ -793,7 +789,7 @@ export default function App() {
               <div className="slider-row">
                 <div className="slider-row__header">
                   <span>Transition spread</span>
-                  <span className="slider-row__value slider-row__value--foveal">
+                  <span className="slider-row__value">
                     {Math.round(fovealParams.transitionSpread)} px
                   </span>
                 </div>
@@ -817,7 +813,7 @@ export default function App() {
               <div className="slider-row">
                 <div className="slider-row__header">
                   <span>Peripheral blur</span>
-                  <span className="slider-row__value slider-row__value--foveal">
+                  <span className="slider-row__value">
                     {fovealParams.blurIntensity} px
                   </span>
                 </div>
@@ -841,7 +837,7 @@ export default function App() {
               <div className="slider-row">
                 <div className="slider-row__header">
                   <span>Desaturation</span>
-                  <span className="slider-row__value slider-row__value--foveal">
+                  <span className="slider-row__value">
                     {Math.round(fovealParams.desaturation * 100)}%
                   </span>
                 </div>
@@ -864,7 +860,7 @@ export default function App() {
           )}
 
           {mode === "saliency" && (
-            <div className="panel">
+            <div className="panel panel--card">
               <span className="panel__label">Attention saliency</span>
               <p className="hint">
                 The model predicts visual attention, then blurs low-attention
@@ -884,27 +880,26 @@ export default function App() {
                   <p className="hint hint--success">
                     Saliency map ready. Ranked hotspots show attention share.
                   </p>
-                  <div className="mode-tabs">
-                    <button
-                      type="button"
-                      className={`mode-tab ${saliencyView === "map" ? "mode-tab--active mode-tab--saliency" : ""}`}
-                      onClick={() => setSaliencyView("map")}
+                  <label className="field">
+                    <span className="field__label">View</span>
+                    <select
+                      className="field__input"
+                      value={saliencyView}
+                      onChange={(e) =>
+                        setSaliencyView(
+                          e.target.value as "map" | "blur",
+                        )
+                      }
                     >
-                      Saliency map
-                    </button>
-                    <button
-                      type="button"
-                      className={`mode-tab ${saliencyView === "blur" ? "mode-tab--active mode-tab--saliency" : ""}`}
-                      onClick={() => setSaliencyView("blur")}
-                    >
-                      Attention blur
-                    </button>
-                  </div>
+                      <option value="map">Saliency map</option>
+                      <option value="blur">Attention blur</option>
+                    </select>
+                  </label>
 
                   <div className="slider-row">
                     <div className="slider-row__header">
                       <span>Hotspots</span>
-                      <span className="slider-row__value slider-row__value--saliency">
+                      <span className="slider-row__value">
                         Top {hotspotCount}
                       </span>
                     </div>
@@ -947,7 +942,7 @@ export default function App() {
               <div className="slider-row">
                 <div className="slider-row__header">
                   <span>Peripheral blur</span>
-                  <span className="slider-row__value slider-row__value--saliency">
+                  <span className="slider-row__value">
                     {saliencyParams.blurIntensity} px
                   </span>
                 </div>
@@ -971,7 +966,7 @@ export default function App() {
               <div className="slider-row">
                 <div className="slider-row__header">
                   <span>Desaturation</span>
-                  <span className="slider-row__value slider-row__value--saliency">
+                  <span className="slider-row__value">
                     {Math.round(saliencyParams.desaturation * 100)}%
                   </span>
                 </div>
@@ -994,7 +989,7 @@ export default function App() {
           )}
 
           {mode === "report" && (
-            <div className="panel">
+            <div className="panel panel--card">
               <span className="panel__label">PowerPoint report</span>
               <p className="hint">
                 Builds a deck from all three analyses: every logo-blur level
@@ -1047,23 +1042,26 @@ export default function App() {
           className={`canvas-area ${!image ? "canvas-area--empty" : ""}`}
         >
           {image ? (
-            <div className="canvas-wrapper">
-              <canvas ref={displayCanvasRef} />
-              <canvas
-                ref={overlayCanvasRef}
-                className={`overlay-canvas ${
-                  mode === "blur" || mode === "foveal"
-                    ? "overlay-canvas--interactive"
-                    : ""
-                }`}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerLeave={handlePointerUp}
-              />
+            <div className="canvas-stage">
+              <div className="canvas-stage__label">Preview</div>
+              <div className="canvas-wrapper">
+                <canvas ref={displayCanvasRef} />
+                <canvas
+                  ref={overlayCanvasRef}
+                  className={`overlay-canvas ${
+                    mode === "blur" || mode === "foveal"
+                      ? "overlay-canvas--interactive"
+                      : ""
+                  }`}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerLeave={handlePointerUp}
+                />
+              </div>
             </div>
           ) : (
-            <div className="empty-state">
+            <div className="empty-state panel--card">
               <div className="empty-state__icon">🖼️</div>
               <p className="empty-state__title">No image yet</p>
               <p>Upload an image to blur logos, simulate vision, analyze attention, or build a report</p>

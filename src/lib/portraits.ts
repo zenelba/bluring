@@ -3,7 +3,7 @@ import JSZip from "jszip";
 
 export const DEFAULT_PORTRAIT_BG = "#C8C8C8";
 export const DEFAULT_PORTRAIT_SIZE = { width: 100, height: 100 };
-export const PORTRAIT_PRESET = "Osebe / Portraits";
+export const PORTRAIT_PRESET = "Faces / Portraits";
 
 export const BG_PRESETS = [
   "#C8C8C8",

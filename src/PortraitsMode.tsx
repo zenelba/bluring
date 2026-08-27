@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BG_REMOVAL_MODELS,
   DEFAULT_BG_REMOVAL_MODEL,
@@ -19,10 +19,6 @@ import {
   readImageSize,
 } from "./lib/portraits";
 import "./osebe.css";
-
-type PortraitsModeProps = {
-  tabs: ReactNode;
-};
 
 function statusLabel(status: PortraitStatus): string {
   if (status === "queued") return "Queued";
@@ -77,7 +73,7 @@ function LockIcon({ locked }: { locked: boolean }) {
   );
 }
 
-export default function PortraitsMode({ tabs }: PortraitsModeProps) {
+export default function PortraitsMode() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<PortraitItem[]>([]);
   const [smartFaceCrop, setSmartFaceCrop] = useState(true);
@@ -292,27 +288,17 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
 
   return (
     <div className="osebe">
-      <header className="osebe-top">
-        <div>
-          <h1 className="osebe-top__title">Image Processor</h1>
-          <p className="osebe-top__sub">
-            Automated pipeline for political headshots and portraits
-          </p>
-        </div>
-        {tabs}
-      </header>
-
       <div className="osebe-shell">
         <aside className="osebe-side">
           <div className="osebe-brand">
-            <h2>Image Processor</h2>
+            <h2>Faces</h2>
             <p>Configure batch settings and upload source files.</p>
           </div>
 
           <label className="osebe-field">
             <span className="osebe-kicker">Mode Preset</span>
-            <select className="osebe-select" value="osebe" disabled>
-              <option value="osebe">{PORTRAIT_PRESET}</option>
+            <select className="osebe-select" value="faces" disabled>
+              <option value="faces">{PORTRAIT_PRESET}</option>
             </select>
           </label>
 
