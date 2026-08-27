@@ -6,12 +6,14 @@ import {
   type PortraitItem,
   type PortraitSettings,
   type PortraitStatus,
+  buildOutputFilename,
   clampSize,
   createPortraitItems,
   downloadPortraitZip,
   normalizeHex,
   processPortrait,
   readImageSize,
+  sanitizeFilenameSuffix,
 } from "./lib/portraits";
 import "./osebe.css";
 
@@ -83,6 +85,7 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
   const [hexDraft, setHexDraft] = useState(DEFAULT_PORTRAIT_BG);
   const [busy, setBusy] = useState(false);
   const [includeBrands, setIncludeBrands] = useState(true);
+  const [filenameSuffix, setFilenameSuffix] = useState("");
   const [zipError, setZipError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const aspectRef = useRef(
@@ -234,7 +237,13 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
   const handleDownload = async () => {
     setZipError(null);
     try {
-      await downloadPortraitZip(items, width, height, includeBrands);
+      await downloadPortraitZip(
+        items,
+        width,
+        height,
+        includeBrands,
+        filenameSuffix,
+      );
     } catch (error) {
       setZipError(
         error instanceof Error ? error.message : "Failed to build ZIP",
@@ -391,6 +400,32 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
               if (e.target.files) addFiles(e.target.files);
             }}
           />
+
+          <label className="osebe-field">
+            <span className="osebe-field__label">Filename suffix</span>
+            <input
+              className="osebe-input"
+              type="text"
+              spellCheck={false}
+              placeholder="_hq"
+              value={filenameSuffix}
+              disabled={busy}
+              onChange={(e) => setFilenameSuffix(e.target.value)}
+              aria-label="Filename suffix after ID"
+            />
+            <span className="osebe-hint">
+              Output example:{" "}
+              <code>
+                {buildOutputFilename(
+                  items.find((item) => item.outputId)?.outputId ?? "1",
+                  filenameSuffix,
+                )}
+              </code>
+              {sanitizeFilenameSuffix(filenameSuffix)
+                ? ""
+                : " (empty = ID only)"}
+            </span>
+          </label>
 
           <div className="osebe-toggle-row">
             <div>

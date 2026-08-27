@@ -108,6 +108,20 @@
   color: #374151;
 }
 
+.osebe-hint {
+  font-size: 0.72rem;
+  color: var(--osebe-muted);
+  line-height: 1.35;
+}
+
+.osebe-hint code {
+  font-size: 0.72rem;
+  color: #111827;
+  background: #f3f4f6;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+}
+
 .osebe-select,
 .osebe-input {
   width: 100%;

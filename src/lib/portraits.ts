@@ -489,6 +489,16 @@ export function readImageSize(
   });
 }
 
+/** Keep only safe filename characters for the optional ID suffix. */
+export function sanitizeFilenameSuffix(value: string): string {
+  return value.replace(/[\\/:*?"<>|]/g, "").trim();
+}
+
+/** Build `[ID][suffix].png`, e.g. `1_hq.png` or `01.png`. */
+export function buildOutputFilename(id: string, suffix = ""): string {
+  return `${id}${sanitizeFilenameSuffix(suffix)}.png`;
+}
+
 export function buildBrandsFile(
   entries: Array<{
     fullName: string;
@@ -515,12 +525,14 @@ export async function downloadPortraitZip(
   width: number,
   height: number,
   includeBrands = true,
+  filenameSuffix = "",
 ): Promise<void> {
   const ready = items.filter((item) => item.status === "done" && item.blob && item.outputId);
   if (ready.length === 0) {
     throw new Error("No processed portraits to download");
   }
 
+  const suffix = sanitizeFilenameSuffix(filenameSuffix);
   const zip = new JSZip();
   const used = new Set<string>();
   const brandEntries: Array<{
@@ -531,11 +543,11 @@ export async function downloadPortraitZip(
   }> = [];
 
   for (const item of ready) {
-    let name = `${item.outputId}.png`;
+    let name = buildOutputFilename(item.outputId!, suffix);
     if (used.has(name)) {
       let n = 2;
-      while (used.has(`${item.outputId}-${n}.png`)) n += 1;
-      name = `${item.outputId}-${n}.png`;
+      while (used.has(buildOutputFilename(`${item.outputId}-${n}`, suffix))) n += 1;
+      name = buildOutputFilename(`${item.outputId}-${n}`, suffix);
     }
     used.add(name);
     zip.file(name, item.blob!);
