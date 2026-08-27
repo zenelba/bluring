@@ -323,10 +323,12 @@ async function removeBackground(
   try {
     const result = await removeBackground(blob, {
       publicPath: IMGLY_PUBLIC_PATH,
-      model: "isnet_quint8",
+      // fp16 keeps cleaner hair/shoulder edges than the quantized model.
+      model: "isnet_fp16",
       device: "cpu",
       proxyToWorker: false,
-      output: { format: "image/png", quality: 0.9 },
+      rescale: true,
+      output: { format: "image/png", quality: 1 },
       progress: (key, current, total) => {
         if (!listening || !onProgress || !total) return;
         const pct = Math.min(100, Math.round((current / total) * 100));
@@ -344,6 +346,158 @@ async function removeBackground(
   } finally {
     listening = false;
   }
+}
+
+function clampByte(n: number): number {
+  return Math.max(0, Math.min(255, Math.round(n)));
+}
+
+/**
+ * Harden soft mattes and remove light-background fringe/halos that otherwise
+ * show up as dirty residue when compositing onto a solid color.
+ */
+export function cleanCutoutMatte(
+  source: HTMLImageElement | HTMLCanvasElement,
+): HTMLCanvasElement {
+  const width =
+    source instanceof HTMLImageElement ? source.naturalWidth : source.width;
+  const height =
+    source instanceof HTMLImageElement ? source.naturalHeight : source.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  ctx.drawImage(source, 0, 0);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const pixelCount = width * height;
+
+  // Estimate original background from near-transparent fringe pixels.
+  let bgR = 0;
+  let bgG = 0;
+  let bgB = 0;
+  let bgN = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3];
+    if (a > 0 && a < 48) {
+      bgR += data[i];
+      bgG += data[i + 1];
+      bgB += data[i + 2];
+      bgN += 1;
+    }
+  }
+  if (bgN < 8) {
+    bgR = 245;
+    bgG = 245;
+    bgB = 245;
+  } else {
+    bgR /= bgN;
+    bgG /= bgN;
+    bgB /= bgN;
+  }
+
+  const ALPHA_KILL = 56;
+  const ALPHA_KEEP = 168;
+  const alpha = new Uint8ClampedArray(pixelCount);
+
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    let a = data[i + 3];
+    if (a <= ALPHA_KILL) {
+      data[i] = 0;
+      data[i + 1] = 0;
+      data[i + 2] = 0;
+      data[i + 3] = 0;
+      alpha[p] = 0;
+      continue;
+    }
+
+    const af = a / 255;
+    // Unmix assumed studio/light background from fringe RGB.
+    data[i] = clampByte((data[i] - (1 - af) * bgR) / af);
+    data[i + 1] = clampByte((data[i + 1] - (1 - af) * bgG) / af);
+    data[i + 2] = clampByte((data[i + 2] - (1 - af) * bgB) / af);
+
+    if (a >= ALPHA_KEEP) {
+      a = 255;
+    } else {
+      const t = (a - ALPHA_KILL) / (ALPHA_KEEP - ALPHA_KILL);
+      a = clampByte(255 * (t * t * (3 - 2 * t)));
+    }
+    data[i + 3] = a;
+    alpha[p] = a;
+  }
+
+  // Slight erode kills leftover 1px halo around hair/shoulders.
+  const eroded = new Uint8ClampedArray(alpha);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x;
+      let minA = alpha[p];
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          minA = Math.min(minA, alpha[(y + dy) * width + (x + dx)]);
+        }
+      }
+      eroded[p] = minA;
+    }
+  }
+
+  // Drop tiny disconnected alpha islands (blotches away from the subject).
+  const keep = new Uint8Array(pixelCount);
+  const queue = new Int32Array(pixelCount);
+  let qh = 0;
+  let qt = 0;
+  let seed = -1;
+  let seedScore = -1;
+  for (let p = 0; p < pixelCount; p++) {
+    if (eroded[p] < 200) continue;
+    const x = p % width;
+    const y = (p / width) | 0;
+    // Prefer a solid pixel near the image center (the face/torso).
+    const score =
+      eroded[p] -
+      Math.hypot(x - width / 2, y - height / 2) * 0.15;
+    if (score > seedScore) {
+      seedScore = score;
+      seed = p;
+    }
+  }
+  if (seed >= 0) {
+    keep[seed] = 1;
+    queue[qt++] = seed;
+    while (qh < qt) {
+      const p = queue[qh++];
+      const x = p % width;
+      const y = (p / width) | 0;
+      const candidates = [
+        [x - 1, y],
+        [x + 1, y],
+        [x, y - 1],
+        [x, y + 1],
+      ] as const;
+      for (const [nx, ny] of candidates) {
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const n = ny * width + nx;
+        if (keep[n] || eroded[n] <= ALPHA_KILL) continue;
+        keep[n] = 1;
+        queue[qt++] = n;
+      }
+    }
+  }
+
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const a = seed >= 0 && !keep[p] ? 0 : eroded[p];
+    data[i + 3] = a;
+    if (a === 0) {
+      data[i] = 0;
+      data[i + 1] = 0;
+      data[i + 2] = 0;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
 }
 
 export async function processPortrait(
@@ -406,7 +560,9 @@ export async function processPortrait(
       // Progress only — a late 100% callback must not reset status after compose/done.
       onStatus({ progressNote: note });
     });
-    const cutout = await loadImageFromBlob(cutoutBlob);
+    const cutoutRaw = await loadImageFromBlob(cutoutBlob);
+    onStatus({ status: "composing", progressNote: "Cleaning edges…" });
+    const cutout = cleanCutoutMatte(cutoutRaw);
 
     onStatus({ status: "composing", progressNote: "Composing portrait…" });
     const canvas = document.createElement("canvas");
@@ -487,6 +643,13 @@ export function readImageSize(
     };
     img.src = url;
   });
+}
+
+/** Default export suffix from pixel size, e.g. `_100` or `_120x150`. */
+export function defaultFilenameSuffix(width: number, height: number): string {
+  const w = clampSize(width);
+  const h = clampSize(height);
+  return w === h ? `_${w}` : `_${w}x${h}`;
 }
 
 /** Keep only safe filename characters for the optional ID suffix. */

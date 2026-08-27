@@ -9,11 +9,11 @@ import {
   buildOutputFilename,
   clampSize,
   createPortraitItems,
+  defaultFilenameSuffix,
   downloadPortraitZip,
   normalizeHex,
   processPortrait,
   readImageSize,
-  sanitizeFilenameSuffix,
 } from "./lib/portraits";
 import "./osebe.css";
 
@@ -85,9 +85,15 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
   const [hexDraft, setHexDraft] = useState(DEFAULT_PORTRAIT_BG);
   const [busy, setBusy] = useState(false);
   const [includeBrands, setIncludeBrands] = useState(true);
-  const [filenameSuffix, setFilenameSuffix] = useState("");
+  const [filenameSuffix, setFilenameSuffix] = useState(() =>
+    defaultFilenameSuffix(
+      DEFAULT_PORTRAIT_SIZE.width,
+      DEFAULT_PORTRAIT_SIZE.height,
+    ),
+  );
   const [zipError, setZipError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const suffixManualRef = useRef(false);
   const aspectRef = useRef(
     DEFAULT_PORTRAIT_SIZE.width / DEFAULT_PORTRAIT_SIZE.height,
   );
@@ -199,14 +205,26 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
 
   const handleWidth = (value: number) => {
     const nextW = clampSize(value);
+    const nextH = lockAspect
+      ? clampSize(nextW / aspectRef.current)
+      : height;
     setWidth(nextW);
-    if (lockAspect) setHeight(clampSize(nextW / aspectRef.current));
+    if (lockAspect) setHeight(nextH);
+    if (!suffixManualRef.current) {
+      setFilenameSuffix(defaultFilenameSuffix(nextW, nextH));
+    }
   };
 
   const handleHeight = (value: number) => {
     const nextH = clampSize(value);
+    const nextW = lockAspect
+      ? clampSize(nextH * aspectRef.current)
+      : width;
     setHeight(nextH);
-    if (lockAspect) setWidth(clampSize(nextH * aspectRef.current));
+    if (lockAspect) setWidth(nextW);
+    if (!suffixManualRef.current) {
+      setFilenameSuffix(defaultFilenameSuffix(nextW, nextH));
+    }
   };
 
   const handleBackground = (value: string) => {
@@ -407,10 +425,13 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
               className="osebe-input"
               type="text"
               spellCheck={false}
-              placeholder="_hq"
+              placeholder="_100"
               value={filenameSuffix}
               disabled={busy}
-              onChange={(e) => setFilenameSuffix(e.target.value)}
+              onChange={(e) => {
+                suffixManualRef.current = true;
+                setFilenameSuffix(e.target.value);
+              }}
               aria-label="Filename suffix after ID"
             />
             <span className="osebe-hint">
@@ -421,9 +442,8 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
                   filenameSuffix,
                 )}
               </code>
-              {sanitizeFilenameSuffix(filenameSuffix)
-                ? ""
-                : " (empty = ID only)"}
+              {" · default is _"}
+              {width === height ? width : `${width}x${height}`}
             </span>
           </label>
 
