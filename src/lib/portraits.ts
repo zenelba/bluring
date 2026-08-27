@@ -14,12 +14,43 @@ export const BG_PRESETS = [
   "#1A1A1A",
 ] as const;
 
+/** IMG.LY ISNet variants for in-browser background removal. */
+export type BgRemovalModel = "isnet_fp16" | "isnet_quint8" | "isnet";
+
+export const DEFAULT_BG_REMOVAL_MODEL: BgRemovalModel = "isnet_fp16";
+
+export const BG_REMOVAL_MODELS: ReadonlyArray<{
+  id: BgRemovalModel;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "isnet_fp16",
+    label: "Balanced (default)",
+    description:
+      "Best trade-off for headshots: clean hair and shoulder edges without a huge download (~80 MB).",
+  },
+  {
+    id: "isnet_quint8",
+    label: "Fast",
+    description:
+      "Smallest and quickest (~40 MB). Good for bulk previews; fine hair edges can look softer.",
+  },
+  {
+    id: "isnet",
+    label: "Highest quality",
+    description:
+      "Sharpest cutouts on hair and detail. Slowest and largest download (~176 MB).",
+  },
+];
+
 export interface PortraitSettings {
   smartFaceCrop: boolean;
   width: number;
   height: number;
   lockAspect: boolean;
   background: string;
+  bgRemovalModel: BgRemovalModel;
 }
 
 export type PortraitStatus =
@@ -316,6 +347,7 @@ export async function detectPrimaryFace(
 
 async function removeBackground(
   blob: Blob,
+  model: BgRemovalModel,
   onProgress?: (note: string) => void,
 ): Promise<Blob> {
   const { removeBackground } = await import("@imgly/background-removal");
@@ -323,8 +355,7 @@ async function removeBackground(
   try {
     const result = await removeBackground(blob, {
       publicPath: IMGLY_PUBLIC_PATH,
-      // fp16 keeps cleaner hair/shoulder edges than the quantized model.
-      model: "isnet_fp16",
+      model,
       device: "cpu",
       proxyToWorker: false,
       rescale: true,
@@ -556,10 +587,14 @@ export async function processPortrait(
       }
     }
     const cropBlob = await canvasToPng(inputForCutout);
-    const cutoutBlob = await removeBackground(cropBlob, (note) => {
-      // Progress only — a late 100% callback must not reset status after compose/done.
-      onStatus({ progressNote: note });
-    });
+    const cutoutBlob = await removeBackground(
+      cropBlob,
+      settings.bgRemovalModel,
+      (note) => {
+        // Progress only — a late 100% callback must not reset status after compose/done.
+        onStatus({ progressNote: note });
+      },
+    );
     const cutoutRaw = await loadImageFromBlob(cutoutBlob);
     onStatus({ status: "composing", progressNote: "Cleaning edges…" });
     const cutout = cleanCutoutMatte(cutoutRaw);

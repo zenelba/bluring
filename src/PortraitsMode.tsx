@@ -1,8 +1,11 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BG_REMOVAL_MODELS,
+  DEFAULT_BG_REMOVAL_MODEL,
   DEFAULT_PORTRAIT_BG,
   DEFAULT_PORTRAIT_SIZE,
   PORTRAIT_PRESET,
+  type BgRemovalModel,
   type PortraitItem,
   type PortraitSettings,
   type PortraitStatus,
@@ -78,6 +81,9 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<PortraitItem[]>([]);
   const [smartFaceCrop, setSmartFaceCrop] = useState(true);
+  const [bgRemovalModel, setBgRemovalModel] = useState<BgRemovalModel>(
+    DEFAULT_BG_REMOVAL_MODEL,
+  );
   const [width, setWidth] = useState(DEFAULT_PORTRAIT_SIZE.width);
   const [height, setHeight] = useState(DEFAULT_PORTRAIT_SIZE.height);
   const [lockAspect, setLockAspect] = useState(true);
@@ -122,6 +128,10 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
         item.status === "composing",
     )?.progressNote ?? "";
 
+  const selectedBgModel =
+    BG_REMOVAL_MODELS.find((m) => m.id === bgRemovalModel) ??
+    BG_REMOVAL_MODELS[0];
+
   const settings: PortraitSettings = useMemo(
     () => ({
       smartFaceCrop,
@@ -129,8 +139,9 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
       height,
       lockAspect,
       background: normalizeHex(background),
+      bgRemovalModel,
     }),
-    [smartFaceCrop, width, height, lockAspect, background],
+    [smartFaceCrop, width, height, lockAspect, background, bgRemovalModel],
   );
 
   useEffect(() => {
@@ -321,6 +332,26 @@ export default function PortraitsMode({ tabs }: PortraitsModeProps) {
               <span />
             </button>
           </div>
+
+          <label className="osebe-field">
+            <span className="osebe-field__label">Background removal model</span>
+            <select
+              className="osebe-select"
+              value={bgRemovalModel}
+              disabled={busy}
+              onChange={(e) =>
+                setBgRemovalModel(e.target.value as BgRemovalModel)
+              }
+              aria-label="Background removal model"
+            >
+              {BG_REMOVAL_MODELS.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+            <span className="osebe-hint">{selectedBgModel.description}</span>
+          </label>
 
           <div className="osebe-kicker osebe-kicker--section">Configuration</div>
 
