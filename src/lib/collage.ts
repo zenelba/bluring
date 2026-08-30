@@ -518,13 +518,17 @@ function composeHorizontal(
   return canvas;
 }
 
-/** Landscape grid collage: equal cells, images contained, left-to-right then top-to-bottom. */
+/**
+ * Tight landscape grid: cell size = max content box (no forced squares),
+ * gap only between cells, each image contained and centred in its cell.
+ */
 function composeCollage(
   images: HTMLCanvasElement[],
   gap: number,
   targetWidth = COLLAGE_TARGET_WIDTH,
   gridCols?: number,
   gridRows?: number,
+  fillColor = "#FFFFFF",
 ): HTMLCanvasElement {
   if (images.length === 0) {
     const empty = document.createElement("canvas");
@@ -536,20 +540,35 @@ function composeCollage(
   const proposed = proposeLandscapeGrid(images.length);
   const cols = Math.max(1, gridCols ?? proposed.cols);
   const rows = Math.max(1, gridRows ?? proposed.rows);
-  const cellGap = Math.max(0, gap);
-  const cellW = Math.max(
-    1,
-    Math.floor((targetWidth - cellGap * (cols - 1)) / cols),
-  );
-  // Square cells + cols ≥ rows ⇒ overall landscape canvas.
-  const cellH = cellW;
+  const cellGap = Math.max(0, Math.round(gap));
+  const fill = normalizeHex(fillColor);
+
+  // Normalize so images share a common scale, then size cells to the largest.
+  const REF = 1000;
+  const norms = images.map((img) => {
+    const s = REF / Math.max(img.width, img.height, 1);
+    return {
+      img,
+      w: Math.max(1, img.width * s),
+      h: Math.max(1, img.height * s),
+    };
+  });
+  let cellW = Math.max(...norms.map((n) => n.w), 1);
+  let cellH = Math.max(...norms.map((n) => n.h), 1);
+
+  // Fit the whole grid to the target width without adding padding around it.
+  const rawW = cols * cellW + cellGap * Math.max(0, cols - 1);
+  const fit = targetWidth / Math.max(1, rawW);
+  cellW = Math.max(1, Math.round(cellW * fit));
+  cellH = Math.max(1, Math.round(cellH * fit));
+
   const canvas = document.createElement("canvas");
-  canvas.width = cols * cellW + cellGap * (cols - 1);
-  canvas.height = rows * cellH + cellGap * (rows - 1);
+  canvas.width = cols * cellW + cellGap * Math.max(0, cols - 1);
+  canvas.height = rows * cellH + cellGap * Math.max(0, rows - 1);
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
 
-  ctx.fillStyle = "#FFFFFF";
+  ctx.fillStyle = fill;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   for (let i = 0; i < images.length; i++) {
@@ -559,6 +578,8 @@ function composeCollage(
     const img = images[i];
     const x0 = col * (cellW + cellGap);
     const y0 = row * (cellH + cellGap);
+
+    // Contain + centre: no crop, minimal empty margins only when aspects differ.
     const scale = Math.min(cellW / img.width, cellH / img.height);
     const w = Math.max(1, Math.round(img.width * scale));
     const h = Math.max(1, Math.round(img.height * scale));
@@ -673,6 +694,7 @@ export async function buildCollage(
       collageWidth,
       settings.gridCols,
       settings.gridRows,
+      settings.background,
     );
   }
 

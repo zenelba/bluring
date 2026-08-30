@@ -396,19 +396,25 @@
 }
 
 .osebe-plan-options {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin-bottom: 1.25rem;
 }
 
 .osebe-plan-option {
+  width: 6.75rem;
+  height: 6.75rem;
+  padding: 0.4rem 0.4rem 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
   text-align: left;
   background: var(--osebe-panel);
   border: 1px solid var(--osebe-line);
-  border-radius: 14px;
-  padding: 0.75rem 0.85rem 0.9rem;
+  border-radius: 10px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  flex-shrink: 0;
 }
 
 .osebe-plan-option:hover:not(:disabled) {
@@ -423,33 +429,29 @@
 .osebe-plan-option__label {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.95rem;
+  justify-content: space-between;
+  gap: 0.25rem;
+  font-size: 0.72rem;
   font-weight: 700;
+  line-height: 1;
 }
 
 .osebe-plan-option__tag {
-  font-size: 0.62rem;
+  font-size: 0.52rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #15803d;
   background: #dcfce7;
-  padding: 0.12rem 0.4rem;
+  padding: 0.08rem 0.28rem;
   border-radius: 999px;
 }
 
-.osebe-plan-option__orient {
-  font-size: 0.72rem;
-  color: var(--osebe-muted);
-  margin: 0.2rem 0 0.55rem;
-}
-
-.osebe-plan__meta {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--osebe-muted);
-  margin-bottom: 0.65rem;
+.osebe-plan-option__preview {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
 }
 
 .osebe-plan__grid {
@@ -459,25 +461,21 @@
 }
 
 .osebe-plan__grid--mini {
-  gap: 0.15rem;
+  gap: 2px;
 }
 
-.osebe-plan__cell {
-  position: relative;
+.osebe-plan__grid--mini .osebe-plan__cell {
   aspect-ratio: 1;
-  background: #f3f4f6;
-  border: 1px solid var(--osebe-line);
-  border-radius: 4px;
-  overflow: hidden;
-  display: grid;
-  place-items: center;
+  border-radius: 2px;
+  border: none;
+  background: #e5e7eb;
 }
 
-.osebe-plan__grid--mini .osebe-plan__idx {
-  min-width: 0.85rem;
-  height: 0.85rem;
-  font-size: 0.5rem;
-  padding: 0 0.15rem;
+.osebe-plan__grid--mini .osebe-plan__cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .osebe-plan__cell {

@@ -427,6 +427,10 @@ export default function CollagesMode() {
                 setGap(Math.max(0, Math.min(120, Number(e.target.value) || 0)))
               }
             />
+            <span className="osebe-hint">
+              Space between cells only. 0 = tight pack; unequal images stay centred
+              in their cell.
+            </span>
           </label>
 
           <div
@@ -540,34 +544,32 @@ export default function CollagesMode() {
                         onClick={() => setSelectedGrid(grid)}
                       >
                         <div className="osebe-plan-option__label">
-                          {grid.cols} × {grid.rows}
+                          {grid.cols}×{grid.rows}
                           {recommended ? (
-                            <span className="osebe-plan-option__tag">Landscape</span>
+                            <span className="osebe-plan-option__tag">L</span>
                           ) : null}
                         </div>
-                        <div className="osebe-plan-option__orient">
-                          {grid.cols > grid.rows
-                            ? "landscape"
-                            : grid.cols < grid.rows
-                              ? "portrait"
-                              : "square"}{" "}
-                          · {grid.cols} across, {grid.rows} down
-                        </div>
-                        <div
-                          className="osebe-plan__grid osebe-plan__grid--mini"
-                          style={{
-                            gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`,
-                          }}
-                        >
-                          {items.map((item, index) => (
-                            <div key={item.localId} className="osebe-plan__cell">
-                              <img
-                                src={item.processedPreviewUrl ?? item.thumbUrl}
-                                alt=""
-                              />
-                              <span className="osebe-plan__idx">{index + 1}</span>
-                            </div>
-                          ))}
+                        <div className="osebe-plan-option__preview">
+                          <div
+                            className="osebe-plan__grid osebe-plan__grid--mini"
+                            style={{
+                              gridTemplateColumns: `repeat(${grid.cols}, 1fr)`,
+                              aspectRatio: `${grid.cols} / ${grid.rows}`,
+                              width:
+                                grid.cols >= grid.rows
+                                  ? "100%"
+                                  : `${(grid.cols / grid.rows) * 100}%`,
+                            }}
+                          >
+                            {items.map((item) => (
+                              <div key={item.localId} className="osebe-plan__cell">
+                                <img
+                                  src={item.processedPreviewUrl ?? item.thumbUrl}
+                                  alt=""
+                                />
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </button>
                     );
