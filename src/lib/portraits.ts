@@ -350,10 +350,12 @@ async function removeBackground(
   model: BgRemovalModel,
   onProgress?: (note: string) => void,
 ): Promise<Blob> {
-  const { removeBackground } = await import("@imgly/background-removal");
+  const { removeBackground: imglyRemove } = await import(
+    "@imgly/background-removal"
+  );
   let listening = true;
   try {
-    const result = await removeBackground(blob, {
+    const result = await imglyRemove(blob, {
       publicPath: IMGLY_PUBLIC_PATH,
       model,
       device: "cpu",
@@ -377,6 +379,15 @@ async function removeBackground(
   } finally {
     listening = false;
   }
+}
+
+/** Shared cutout helper for Faces, Collages, and other modes. */
+export async function removeBackgroundCutout(
+  blob: Blob,
+  model: BgRemovalModel,
+  onProgress?: (note: string) => void,
+): Promise<Blob> {
+  return removeBackground(blob, model, onProgress);
 }
 
 function clampByte(n: number): number {

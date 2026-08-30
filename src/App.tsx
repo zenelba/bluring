@@ -29,9 +29,16 @@ import {
   progressLabel,
 } from "./lib/report";
 import PortraitsMode from "./PortraitsMode";
+import CollagesMode from "./CollagesMode";
 import "./App.css";
 
-type AppMode = "blur" | "foveal" | "saliency" | "report" | "portraits";
+type AppMode =
+  | "blur"
+  | "foveal"
+  | "saliency"
+  | "report"
+  | "portraits"
+  | "collages";
 
 const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
   { id: "blur", label: "Logo blur" },
@@ -39,9 +46,13 @@ const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
   { id: "saliency", label: "Attention" },
   { id: "report", label: "PowerPoint" },
   { id: "portraits", label: "Faces" },
+  { id: "collages", label: "Collages" },
 ];
 
 function modeSubtitle(mode: AppMode): string {
+  if (mode === "collages") {
+    return "Compose vertical or horizontal ribbons and packed collages";
+  }
   if (mode === "portraits") {
     return "Automated pipeline for political headshots and portraits";
   }
@@ -633,7 +644,7 @@ export default function App() {
           <p className="app-top__sub">{modeSubtitle(mode)}</p>
         </div>
         <div className="app-top__actions">
-          {image && mode !== "portraits" && (
+          {image && mode !== "portraits" && mode !== "collages" && (
             <button type="button" className="btn btn--ghost" onClick={reset}>
               New image
             </button>
@@ -644,6 +655,8 @@ export default function App() {
 
       {mode === "portraits" ? (
         <PortraitsMode />
+      ) : mode === "collages" ? (
+        <CollagesMode />
       ) : (
       <div className="main">
         <aside className="sidebar">
