@@ -52,7 +52,6 @@ function CloudIcon() {
 
 export default function CollagesMode() {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const zipInputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<CollageItem[]>([]);
   const [layout, setLayout] = useState<CollageLayout>(DEFAULT_COLLAGE_LAYOUT);
   const [stripWhitespace, setStripWhitespace] = useState(true);
@@ -178,7 +177,6 @@ export default function CollagesMode() {
     } finally {
       setReadingUpload(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      if (zipInputRef.current) zipInputRef.current.value = "";
     }
   };
 
@@ -415,30 +413,12 @@ export default function CollagesMode() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".zip,.jpg,.jpeg,.png,.webp"
             multiple
             hidden
             onChange={(e) => {
               if (e.target.files) void addFiles(e.target.files);
             }}
           />
-          <input
-            ref={zipInputRef}
-            type="file"
-            accept=".zip,application/zip,application/x-zip-compressed"
-            hidden
-            onChange={(e) => {
-              if (e.target.files) void addFiles(e.target.files);
-            }}
-          />
-          <button
-            type="button"
-            className="osebe-btn osebe-btn--ghost"
-            disabled={busy || readingUpload}
-            onClick={() => zipInputRef.current?.click()}
-          >
-            Upload ZIP…
-          </button>
 
           <button
             type="button"
