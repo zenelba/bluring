@@ -8,6 +8,7 @@ import {
   createCollageItems,
   describeGridProposal,
   downloadCollageImage,
+  fitGridInSquare,
   gridsEqual,
   listExactGrids,
   proposeLandscapeGrid,
@@ -76,6 +77,13 @@ export default function CollagesMode() {
   const [resultSize, setResultSize] = useState<{
     width: number;
     height: number;
+  } | null>(null);
+  const [resultExport, setResultExport] = useState<{
+    layout: CollageLayout;
+    stripWhitespace: boolean;
+    gridCols?: number;
+    gridRows?: number;
+    optimized: boolean;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
@@ -166,6 +174,7 @@ export default function CollagesMode() {
     setResultUrl(null);
     setResultBlob(null);
     setResultSize(null);
+    setResultExport(null);
   };
 
   const addFiles = async (fileList: FileList | File[]) => {
@@ -252,6 +261,13 @@ export default function CollagesMode() {
       setResultBlob(blob);
       setResultUrl(url);
       setResultSize({ width, height });
+      setResultExport({
+        layout: buildSettings.layout,
+        stripWhitespace: buildSettings.stripWhitespace,
+        gridCols: proposal?.cols,
+        gridRows: proposal?.rows,
+        optimized: buildSettings.optimizeForPowerpoint,
+      });
       setLiveNote(
         proposal
           ? `Ready · ${describeGridProposal(proposal.cols, proposal.rows)}`
@@ -266,8 +282,16 @@ export default function CollagesMode() {
   };
 
   const handleDownload = () => {
-    if (!resultBlob) return;
-    downloadCollageImage(resultBlob, layout, optimizeForPowerpoint);
+    if (!resultBlob || !resultSize || !resultExport) return;
+    downloadCollageImage(resultBlob, {
+      layout: resultExport.layout,
+      width: resultSize.width,
+      height: resultSize.height,
+      stripWhitespace: resultExport.stripWhitespace,
+      gridCols: resultExport.gridCols,
+      gridRows: resultExport.gridRows,
+      optimized: resultExport.optimized,
+    });
   };
 
   const clearAll = () => {
@@ -535,6 +559,7 @@ export default function CollagesMode() {
                     const selected = gridsEqual(grid, activeGrid);
                     const recommended =
                       defaultGrid != null && gridsEqual(grid, defaultGrid);
+                    const mini = fitGridInSquare(grid.cols, grid.rows, 72, 2);
                     return (
                       <button
                         key={`${grid.cols}x${grid.rows}`}
@@ -553,12 +578,10 @@ export default function CollagesMode() {
                           <div
                             className="osebe-plan__grid osebe-plan__grid--mini"
                             style={{
-                              gridTemplateColumns: `repeat(${grid.cols}, 1fr)`,
-                              aspectRatio: `${grid.cols} / ${grid.rows}`,
-                              width:
-                                grid.cols >= grid.rows
-                                  ? "100%"
-                                  : `${(grid.cols / grid.rows) * 100}%`,
+                              width: mini.width,
+                              height: mini.height,
+                              gridTemplateColumns: `repeat(${grid.cols}, ${mini.cell}px)`,
+                              gridAutoRows: `${mini.cell}px`,
                             }}
                           >
                             {items.map((item) => (

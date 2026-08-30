@@ -238,6 +238,27 @@ export function gridsEqual(a: CollageGrid, b: CollageGrid): boolean {
   return a.cols === b.cols && a.rows === b.rows;
 }
 
+/** Fit a cols×rows grid of equal square cells into a square of `sizePx`. */
+export function fitGridInSquare(
+  cols: number,
+  rows: number,
+  sizePx: number,
+  gapPx = 2,
+): { cell: number; width: number; height: number } {
+  const c = Math.max(1, cols);
+  const r = Math.max(1, rows);
+  const gap = Math.max(0, gapPx);
+  const cell = Math.max(
+    1,
+    Math.floor((sizePx - gap * (Math.max(c, r) - 1)) / Math.max(c, r)),
+  );
+  return {
+    cell,
+    width: c * cell + gap * (c - 1),
+    height: r * cell + gap * (r - 1),
+  };
+}
+
 export function createCollageItems(files: File[]): CollageItem[] {
   return sortCollageFiles(files.filter(isAcceptedCollageFile)).map((file) => ({
     localId: crypto.randomUUID(),
@@ -519,8 +540,9 @@ function composeHorizontal(
 }
 
 /**
- * Tight landscape grid: cell size = max content box (no forced squares),
- * gap only between cells, each image contained and centred in its cell.
+ * Tight grid pack: shared content scale, then each column width = max width
+ * in that column and each row height = max height in that row. Gap only
+ * between cells — no inherited empty bands from other rows/columns.
  */
 function composeCollage(
   images: HTMLCanvasElement[],
@@ -542,10 +564,11 @@ function composeCollage(
   const rows = Math.max(1, gridRows ?? proposed.rows);
   const cellGap = Math.max(0, Math.round(gap));
   const fill = normalizeHex(fillColor);
+  const count = Math.min(images.length, cols * rows);
 
-  // Normalize so images share a common scale, then size cells to the largest.
+  // Normalize so images share a common visual scale (longest edge → REF).
   const REF = 1000;
-  const norms = images.map((img) => {
+  const norms = images.slice(0, count).map((img) => {
     const s = REF / Math.max(img.width, img.height, 1);
     return {
       img,
@@ -553,38 +576,57 @@ function composeCollage(
       h: Math.max(1, img.height * s),
     };
   });
-  let cellW = Math.max(...norms.map((n) => n.w), 1);
-  let cellH = Math.max(...norms.map((n) => n.h), 1);
 
-  // Fit the whole grid to the target width without adding padding around it.
-  const rawW = cols * cellW + cellGap * Math.max(0, cols - 1);
+  const colW = Array.from({ length: cols }, () => 1);
+  const rowH = Array.from({ length: rows }, () => 1);
+  for (let i = 0; i < norms.length; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    colW[col] = Math.max(colW[col], norms[i].w);
+    rowH[row] = Math.max(rowH[row], norms[i].h);
+  }
+
+  const rawW =
+    colW.reduce((sum, w) => sum + w, 0) + cellGap * Math.max(0, cols - 1);
   const fit = targetWidth / Math.max(1, rawW);
-  cellW = Math.max(1, Math.round(cellW * fit));
-  cellH = Math.max(1, Math.round(cellH * fit));
+  const colWpx = colW.map((w) => Math.max(1, Math.round(w * fit)));
+  const rowHpx = rowH.map((h) => Math.max(1, Math.round(h * fit)));
 
   const canvas = document.createElement("canvas");
-  canvas.width = cols * cellW + cellGap * Math.max(0, cols - 1);
-  canvas.height = rows * cellH + cellGap * Math.max(0, rows - 1);
+  canvas.width =
+    colWpx.reduce((sum, w) => sum + w, 0) + cellGap * Math.max(0, cols - 1);
+  canvas.height =
+    rowHpx.reduce((sum, h) => sum + h, 0) + cellGap * Math.max(0, rows - 1);
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
 
   ctx.fillStyle = fill;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  for (let i = 0; i < images.length; i++) {
+  const xOff: number[] = [];
+  const yOff: number[] = [];
+  let xCursor = 0;
+  for (let c = 0; c < cols; c++) {
+    xOff[c] = xCursor;
+    xCursor += colWpx[c] + (c < cols - 1 ? cellGap : 0);
+  }
+  let yCursor = 0;
+  for (let r = 0; r < rows; r++) {
+    yOff[r] = yCursor;
+    yCursor += rowHpx[r] + (r < rows - 1 ? cellGap : 0);
+  }
+
+  for (let i = 0; i < norms.length; i++) {
     const col = i % cols;
     const row = Math.floor(i / cols);
-    if (row >= rows) break;
-    const img = images[i];
-    const x0 = col * (cellW + cellGap);
-    const y0 = row * (cellH + cellGap);
-
-    // Contain + centre: no crop, minimal empty margins only when aspects differ.
+    const img = norms[i].img;
+    const cellW = colWpx[col];
+    const cellH = rowHpx[row];
     const scale = Math.min(cellW / img.width, cellH / img.height);
     const w = Math.max(1, Math.round(img.width * scale));
     const h = Math.max(1, Math.round(img.height * scale));
-    const x = x0 + Math.round((cellW - w) / 2);
-    const y = y0 + Math.round((cellH - h) / 2);
+    const x = xOff[col] + Math.round((cellW - w) / 2);
+    const y = yOff[row] + Math.round((cellH - h) / 2);
     drawScaled(ctx, img, x, y, w, h);
   }
 
@@ -713,13 +755,76 @@ export async function buildCollage(
   return { blob, width: result.width, height: result.height };
 }
 
+export function collageOutputFilename(options: {
+  layout: CollageLayout;
+  width: number;
+  height: number;
+  stripWhitespace: boolean;
+  gridCols?: number;
+  gridRows?: number;
+  optimized?: boolean;
+  mimeType?: string;
+}): string {
+  const {
+    layout,
+    width,
+    height,
+    stripWhitespace,
+    gridCols,
+    gridRows,
+    optimized = false,
+    mimeType,
+  } = options;
+  const ext =
+    mimeType === "image/jpeg" || optimized
+      ? "jpg"
+      : mimeType === "image/webp"
+        ? "webp"
+        : "png";
+
+  const parts: string[] = [layout];
+  if (
+    layout === "collage" &&
+    gridCols != null &&
+    gridRows != null &&
+    gridCols > 0 &&
+    gridRows > 0
+  ) {
+    parts.push(`${gridCols}x${gridRows}`);
+  }
+  parts.push(`${Math.max(1, Math.round(width))}x${Math.max(1, Math.round(height))}`);
+
+  if (stripWhitespace) {
+    const axis = trimAxisForLayout(layout);
+    if (axis === "both") parts.push("strip");
+    else if (axis === "vertical") parts.push("strip-v");
+    else parts.push("strip-h");
+  } else {
+    parts.push("nostrip");
+  }
+
+  return `${parts.join("-")}.${ext}`;
+}
+
 export function downloadCollageImage(
   blob: Blob,
-  layout: CollageLayout,
-  optimized: boolean,
+  options: {
+    layout: CollageLayout;
+    width: number;
+    height: number;
+    stripWhitespace: boolean;
+    gridCols?: number;
+    gridRows?: number;
+    optimized: boolean;
+  },
 ) {
-  const ext = blob.type === "image/jpeg" || optimized ? "jpg" : "png";
-  saveAs(blob, `${layout}-collage.${ext}`);
+  saveAs(
+    blob,
+    collageOutputFilename({
+      ...options,
+      mimeType: blob.type,
+    }),
+  );
 }
 
 /** @deprecated Prefer downloadCollageImage */

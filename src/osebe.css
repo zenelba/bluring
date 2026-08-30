@@ -415,6 +415,7 @@
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .osebe-plan-option:hover:not(:disabled) {
@@ -434,6 +435,7 @@
   font-size: 0.72rem;
   font-weight: 700;
   line-height: 1;
+  flex-shrink: 0;
 }
 
 .osebe-plan-option__tag {
@@ -452,6 +454,7 @@
   min-height: 0;
   display: grid;
   place-items: center;
+  overflow: hidden;
 }
 
 .osebe-plan__grid {
@@ -462,13 +465,17 @@
 
 .osebe-plan__grid--mini {
   gap: 2px;
+  flex-shrink: 0;
 }
 
 .osebe-plan__grid--mini .osebe-plan__cell {
-  aspect-ratio: 1;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
   border-radius: 2px;
   border: none;
   background: #e5e7eb;
+  overflow: hidden;
 }
 
 .osebe-plan__grid--mini .osebe-plan__cell img {
