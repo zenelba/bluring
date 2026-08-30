@@ -236,7 +236,7 @@ function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
 }
 
 /** Build a ¼-scale object URL for grid overlay previews. */
-function createProcessedPreviewUrl(canvas: HTMLCanvasElement): Promise<string> {
+function createProcessedPreviewUrl(canvas: HTMLCanvasElement): string {
   const preview = document.createElement("canvas");
   preview.width = Math.max(1, Math.round(canvas.width * 0.25));
   preview.height = Math.max(1, Math.round(canvas.height * 0.25));
@@ -246,15 +246,8 @@ function createProcessedPreviewUrl(canvas: HTMLCanvasElement): Promise<string> {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(canvas, 0, 0, preview.width, preview.height);
   }
-  return new Promise((resolve, reject) => {
-    preview.toBlob(
-      (blob) =>
-        blob
-          ? resolve(URL.createObjectURL(blob))
-          : reject(new Error("Preview encode failed")),
-      "image/png",
-    );
-  });
+  // Data URL is sync and avoids blob URL race/revoke issues in the UI.
+  return preview.toDataURL("image/jpeg", 0.88);
 }
 
 /** Shrink so the longest edge fits within `maxEdge`. */
@@ -609,7 +602,7 @@ export async function buildCollage(
         onProgress?.(note);
       });
       prepared.push(canvas);
-      const processedPreviewUrl = await createProcessedPreviewUrl(canvas);
+      const processedPreviewUrl = createProcessedPreviewUrl(canvas);
       onItem(item.localId, {
         status: "done",
         progressNote: "Ready",
@@ -617,6 +610,8 @@ export async function buildCollage(
         sourceHeight: canvas.height,
         processedPreviewUrl,
       });
+      // Let React paint the inset before the next heavy image.
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Failed to process image";

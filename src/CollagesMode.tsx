@@ -124,9 +124,6 @@ export default function CollagesMode() {
     return () => {
       for (const item of items) {
         URL.revokeObjectURL(item.thumbUrl);
-        if (item.processedPreviewUrl) {
-          URL.revokeObjectURL(item.processedPreviewUrl);
-        }
       }
       if (resultUrl) URL.revokeObjectURL(resultUrl);
     };
@@ -138,13 +135,6 @@ export default function CollagesMode() {
     setItems((prev) =>
       prev.map((item) => {
         if (item.localId !== localId) return item;
-        if (
-          patch.processedPreviewUrl &&
-          item.processedPreviewUrl &&
-          patch.processedPreviewUrl !== item.processedPreviewUrl
-        ) {
-          URL.revokeObjectURL(item.processedPreviewUrl);
-        }
         return { ...item, ...patch };
       }),
     );
@@ -176,9 +166,6 @@ export default function CollagesMode() {
       setItems((prev) => {
         for (const item of prev) {
           URL.revokeObjectURL(item.thumbUrl);
-          if (item.processedPreviewUrl) {
-            URL.revokeObjectURL(item.processedPreviewUrl);
-          }
         }
         return incoming;
       });
@@ -208,17 +195,12 @@ export default function CollagesMode() {
     clearResult();
     setLiveNote("Starting…");
     setItems((prev) =>
-      prev.map((item) => {
-        if (item.processedPreviewUrl) {
-          URL.revokeObjectURL(item.processedPreviewUrl);
-        }
-        return {
-          ...item,
-          status: "queued",
-          progressNote: "",
-          processedPreviewUrl: null,
-        };
-      }),
+      prev.map((item) => ({
+        ...item,
+        status: "queued",
+        progressNote: "",
+        processedPreviewUrl: null,
+      })),
     );
 
     try {
@@ -249,9 +231,6 @@ export default function CollagesMode() {
   const clearAll = () => {
     for (const item of items) {
       URL.revokeObjectURL(item.thumbUrl);
-      if (item.processedPreviewUrl) {
-        URL.revokeObjectURL(item.processedPreviewUrl);
-      }
     }
     setItems([]);
     clearResult();
@@ -556,11 +535,11 @@ export default function CollagesMode() {
                     {item.processedPreviewUrl && (
                       <div
                         className="osebe-card__inset"
-                        title="Processed preview (¼ size)"
+                        title="Processed preview"
                       >
                         <img
                           src={item.processedPreviewUrl}
-                          alt={`${item.sourceName} processed`}
+                          alt={`${item.sourceName} after processing`}
                         />
                       </div>
                     )}
