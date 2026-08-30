@@ -70,7 +70,17 @@ export interface CollageSettings {
   /** Optional fixed grid for collage layout (landscape preferred). */
   gridCols?: number;
   gridRows?: number;
+  /** When set, compose each grid from the same prepared images. */
+  grids?: CollageGrid[];
 }
+
+export type CollageOutput = {
+  blob: Blob;
+  width: number;
+  height: number;
+  gridCols?: number;
+  gridRows?: number;
+};
 
 export const DEFAULT_COLLAGE_SETTINGS: CollageSettings = {
   layout: DEFAULT_COLLAGE_LAYOUT,
@@ -678,7 +688,7 @@ export async function buildCollage(
   settings: CollageSettings,
   onItem: (localId: string, patch: Partial<CollageItem>) => void,
   onProgress?: (note: string) => void,
-): Promise<{ blob: Blob; width: number; height: number }> {
+): Promise<CollageOutput[]> {
   if (items.length === 0) throw new Error("No images to compose");
 
   const prepared: HTMLCanvasElement[] = [];
@@ -719,40 +729,85 @@ export async function buildCollage(
     }
   }
 
-  onProgress?.("Composing layout…");
   const gap = Math.max(0, Math.round(settings.gap));
   const collageWidth = settings.optimizeForPowerpoint
     ? POWERPOINT_MAX_EDGE
     : COLLAGE_TARGET_WIDTH;
-  let result: HTMLCanvasElement;
-  if (settings.layout === "vertical") {
-    result = composeVertical(prepared, gap);
-  } else if (settings.layout === "horizontal") {
-    result = composeHorizontal(prepared, gap);
-  } else {
-    result = composeCollage(
-      prepared,
-      gap,
-      collageWidth,
-      settings.gridCols,
-      settings.gridRows,
-      settings.background,
+
+  const gridList: Array<CollageGrid | null> =
+    settings.layout === "collage"
+      ? settings.grids && settings.grids.length > 0
+        ? settings.grids
+        : [
+            (() => {
+              const proposed = proposeLandscapeGrid(prepared.length);
+              return {
+                cols: settings.gridCols ?? proposed.cols,
+                rows: settings.gridRows ?? proposed.rows,
+              };
+            })(),
+          ]
+      : [null];
+
+  const outputs: CollageOutput[] = [];
+  for (let g = 0; g < gridList.length; g++) {
+    const grid = gridList[g];
+    onProgress?.(
+      grid
+        ? gridList.length > 1
+          ? `Composing ${g + 1}/${gridList.length} · ${describeGridProposal(grid.cols, grid.rows)}…`
+          : "Composing layout…"
+        : "Composing layout…",
     );
+
+    let result: HTMLCanvasElement;
+    if (settings.layout === "vertical") {
+      result = composeVertical(prepared, gap);
+    } else if (settings.layout === "horizontal") {
+      result = composeHorizontal(prepared, gap);
+    } else {
+      result = composeCollage(
+        prepared,
+        gap,
+        collageWidth,
+        grid?.cols,
+        grid?.rows,
+        settings.background,
+      );
+    }
+
+    if (settings.optimizeForPowerpoint) {
+      onProgress?.(
+        gridList.length > 1
+          ? `Optimising ${g + 1}/${gridList.length} for PowerPoint…`
+          : "Optimising for PowerPoint…",
+      );
+      result = optimizeCanvasForPowerpoint(result);
+      const blob = await canvasToBlob(
+        result,
+        "image/jpeg",
+        POWERPOINT_JPEG_QUALITY,
+      );
+      outputs.push({
+        blob,
+        width: result.width,
+        height: result.height,
+        gridCols: grid?.cols,
+        gridRows: grid?.rows,
+      });
+    } else {
+      const blob = await canvasToPng(result);
+      outputs.push({
+        blob,
+        width: result.width,
+        height: result.height,
+        gridCols: grid?.cols,
+        gridRows: grid?.rows,
+      });
+    }
   }
 
-  if (settings.optimizeForPowerpoint) {
-    onProgress?.("Optimising for PowerPoint…");
-    result = optimizeCanvasForPowerpoint(result);
-    const blob = await canvasToBlob(
-      result,
-      "image/jpeg",
-      POWERPOINT_JPEG_QUALITY,
-    );
-    return { blob, width: result.width, height: result.height };
-  }
-
-  const blob = await canvasToPng(result);
-  return { blob, width: result.width, height: result.height };
+  return outputs;
 }
 
 export function collageOutputFilename(options: {
@@ -825,6 +880,65 @@ export function downloadCollageImage(
       mimeType: blob.type,
     }),
   );
+}
+
+export async function downloadCollageOutputs(
+  outputs: CollageOutput[],
+  options: {
+    layout: CollageLayout;
+    stripWhitespace: boolean;
+    optimized: boolean;
+  },
+) {
+  if (outputs.length === 0) return;
+  if (outputs.length === 1) {
+    const only = outputs[0];
+    downloadCollageImage(only.blob, {
+      layout: options.layout,
+      width: only.width,
+      height: only.height,
+      stripWhitespace: options.stripWhitespace,
+      gridCols: only.gridCols,
+      gridRows: only.gridRows,
+      optimized: options.optimized,
+    });
+    return;
+  }
+
+  const zip = new JSZip();
+  const used = new Set<string>();
+  for (const output of outputs) {
+    let name = collageOutputFilename({
+      layout: options.layout,
+      width: output.width,
+      height: output.height,
+      stripWhitespace: options.stripWhitespace,
+      gridCols: output.gridCols,
+      gridRows: output.gridRows,
+      optimized: options.optimized,
+      mimeType: output.blob.type,
+    });
+    if (used.has(name)) {
+      const dot = name.lastIndexOf(".");
+      const base = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : "";
+      let n = 2;
+      while (used.has(`${base}-${n}${ext}`)) n += 1;
+      name = `${base}-${n}${ext}`;
+    }
+    used.add(name);
+    zip.file(name, output.blob);
+  }
+
+  const stripPart = options.stripWhitespace
+    ? trimAxisForLayout(options.layout) === "both"
+      ? "strip"
+      : trimAxisForLayout(options.layout) === "vertical"
+        ? "strip-v"
+        : "strip-h"
+    : "nostrip";
+  const archive = await zip.generateAsync({ type: "blob" });
+  saveAs(archive, `${options.layout}-all-${stripPart}.zip`);
 }
 
 /** @deprecated Prefer downloadCollageImage */

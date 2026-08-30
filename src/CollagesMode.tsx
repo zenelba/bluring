@@ -7,7 +7,7 @@ import {
   collectCollageSourceFiles,
   createCollageItems,
   describeGridProposal,
-  downloadCollageImage,
+  downloadCollageOutputs,
   fitGridInSquare,
   gridsEqual,
   listExactGrids,
@@ -17,6 +17,7 @@ import {
   type CollageItem,
   type CollageItemStatus,
   type CollageLayout,
+  type CollageOutput,
   type CollageSettings,
 } from "./lib/collage";
 import {
@@ -72,22 +73,19 @@ export default function CollagesMode() {
   const [busy, setBusy] = useState(false);
   const [readingUpload, setReadingUpload] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [resultUrl, setResultUrl] = useState<string | null>(null);
-  const [resultBlob, setResultBlob] = useState<Blob | null>(null);
-  const [resultSize, setResultSize] = useState<{
-    width: number;
-    height: number;
-  } | null>(null);
+  const [results, setResults] = useState<
+    Array<CollageOutput & { url: string }>
+  >([]);
   const [resultExport, setResultExport] = useState<{
     layout: CollageLayout;
     stripWhitespace: boolean;
-    gridCols?: number;
-    gridRows?: number;
     optimized: boolean;
+    allGrids: boolean;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
   const [selectedGrid, setSelectedGrid] = useState<CollageGrid | null>(null);
+  const [allGrids, setAllGrids] = useState(false);
 
   const selectedLayout =
     COLLAGE_LAYOUTS.find((item) => item.id === layout) ?? COLLAGE_LAYOUTS[0];
@@ -154,7 +152,9 @@ export default function CollagesMode() {
       for (const item of items) {
         URL.revokeObjectURL(item.thumbUrl);
       }
-      if (resultUrl) URL.revokeObjectURL(resultUrl);
+      for (const result of results) {
+        URL.revokeObjectURL(result.url);
+      }
     };
     // Only on unmount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -170,10 +170,10 @@ export default function CollagesMode() {
   };
 
   const clearResult = () => {
-    if (resultUrl) URL.revokeObjectURL(resultUrl);
-    setResultUrl(null);
-    setResultBlob(null);
-    setResultSize(null);
+    setResults((prev) => {
+      for (const result of prev) URL.revokeObjectURL(result.url);
+      return [];
+    });
     setResultExport(null);
   };
 
@@ -194,6 +194,7 @@ export default function CollagesMode() {
       }
       clearResult();
       setSelectedGrid(null);
+      setAllGrids(false);
       setItems((prev) => {
         for (const item of prev) {
           URL.revokeObjectURL(item.thumbUrl);
@@ -224,13 +225,29 @@ export default function CollagesMode() {
     setError(null);
     clearResult();
 
-    const proposal =
-      layout === "collage" ? activeGrid : null;
-    if (proposal) {
-      setSelectedGrid(proposal);
+    const gridsForBuild =
+      layout === "collage"
+        ? allGrids
+          ? gridOptions
+          : activeGrid
+            ? [activeGrid]
+            : []
+        : [];
+
+    if (layout === "collage" && gridsForBuild.length === 0) {
+      setBusy(false);
+      setError("Pick a grid tiling first.");
+      return;
+    }
+
+    if (layout === "collage" && !allGrids && activeGrid) {
+      setSelectedGrid(activeGrid);
       setLiveNote(
-        `Using ${describeGridProposal(proposal.cols, proposal.rows)} — building…`,
+        `Using ${describeGridProposal(activeGrid.cols, activeGrid.rows)} — building…`,
       );
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
+    } else if (layout === "collage" && allGrids) {
+      setLiveNote(`Building all ${gridsForBuild.length} tilings…`);
       await new Promise((resolve) => window.setTimeout(resolve, 200));
     } else {
       setLiveNote("Starting…");
@@ -248,30 +265,33 @@ export default function CollagesMode() {
     try {
       const buildSettings: CollageSettings = {
         ...settings,
-        gridCols: proposal?.cols,
-        gridRows: proposal?.rows,
+        gridCols: gridsForBuild[0]?.cols,
+        gridRows: gridsForBuild[0]?.rows,
+        grids: layout === "collage" ? gridsForBuild : undefined,
       };
-      const { blob, width, height } = await buildCollage(
+      const outputs = await buildCollage(
         items,
         buildSettings,
         patchItem,
         setLiveNote,
       );
-      const url = URL.createObjectURL(blob);
-      setResultBlob(blob);
-      setResultUrl(url);
-      setResultSize({ width, height });
+      const withUrls = outputs.map((output) => ({
+        ...output,
+        url: URL.createObjectURL(output.blob),
+      }));
+      setResults(withUrls);
       setResultExport({
         layout: buildSettings.layout,
         stripWhitespace: buildSettings.stripWhitespace,
-        gridCols: proposal?.cols,
-        gridRows: proposal?.rows,
         optimized: buildSettings.optimizeForPowerpoint,
+        allGrids: layout === "collage" && allGrids,
       });
       setLiveNote(
-        proposal
-          ? `Ready · ${describeGridProposal(proposal.cols, proposal.rows)}`
-          : "Collage ready.",
+        withUrls.length > 1
+          ? `Ready · ${withUrls.length} grids`
+          : gridsForBuild[0]
+            ? `Ready · ${describeGridProposal(gridsForBuild[0].cols, gridsForBuild[0].rows)}`
+            : "Collage ready.",
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to build collage");
@@ -281,17 +301,22 @@ export default function CollagesMode() {
     }
   };
 
-  const handleDownload = () => {
-    if (!resultBlob || !resultSize || !resultExport) return;
-    downloadCollageImage(resultBlob, {
-      layout: resultExport.layout,
-      width: resultSize.width,
-      height: resultSize.height,
-      stripWhitespace: resultExport.stripWhitespace,
-      gridCols: resultExport.gridCols,
-      gridRows: resultExport.gridRows,
-      optimized: resultExport.optimized,
-    });
+  const handleDownload = async () => {
+    if (results.length === 0 || !resultExport) return;
+    await downloadCollageOutputs(
+      results.map(({ blob, width, height, gridCols, gridRows }) => ({
+        blob,
+        width,
+        height,
+        gridCols,
+        gridRows,
+      })),
+      {
+        layout: resultExport.layout,
+        stripWhitespace: resultExport.stripWhitespace,
+        optimized: resultExport.optimized,
+      },
+    );
   };
 
   const clearAll = () => {
@@ -301,6 +326,7 @@ export default function CollagesMode() {
     setItems([]);
     clearResult();
     setSelectedGrid(null);
+    setAllGrids(false);
     setError(null);
     setLiveNote("");
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -504,16 +530,18 @@ export default function CollagesMode() {
           <button
             type="button"
             className="osebe-btn osebe-btn--green"
-            onClick={handleDownload}
-            disabled={busy || !resultBlob}
+            onClick={() => void handleDownload()}
+            disabled={busy || results.length === 0}
           >
-            Download {optimizeForPowerpoint ? "JPEG" : "PNG"}
+            {results.length > 1
+              ? `Download ZIP (${results.length})`
+              : `Download ${optimizeForPowerpoint ? "JPEG" : "PNG"}`}
           </button>
           <button
             type="button"
             className="osebe-btn osebe-btn--ghost"
             onClick={clearAll}
-            disabled={busy || (items.length === 0 && !resultBlob)}
+            disabled={busy || (items.length === 0 && results.length === 0)}
           >
             Clear
           </button>
@@ -538,8 +566,10 @@ export default function CollagesMode() {
                 ? "Waiting for files…"
                 : busy
                   ? `${liveNote || `Processing ${currentStep} of ${items.length}…`} (${currentStep}/${items.length})`
-                  : resultUrl
-                    ? `Ready${resultSize ? ` · ${resultSize.width}×${resultSize.height}` : ""}`
+                  : results.length > 0
+                    ? results.length > 1
+                      ? `Ready · ${results.length} grids`
+                      : `Ready · ${results[0].width}×${results[0].height}`
                     : `${items.length} image${items.length === 1 ? "" : "s"} sorted · ${doneCount} ready · ${errorCount} failed`}
             </p>
           </div>
@@ -550,13 +580,53 @@ export default function CollagesMode() {
                   <span className="osebe-kicker">Grid options</span>
                 </div>
                 <p className="osebe-status__copy" style={{ marginBottom: "0.75rem" }}>
-                  {items.length} images · pick a tiling. Default is landscape
+                  {items.length} images · pick a tiling, or ALL for every exact
+                  grid. Default is landscape
                   ({defaultGrid ? `${defaultGrid.cols} × ${defaultGrid.rows}` : ""}
                   ).
                 </p>
                 <div className="osebe-plan-options">
+                  <button
+                    type="button"
+                    className={`osebe-plan-option${allGrids ? " osebe-plan-option--on" : ""}`}
+                    disabled={busy}
+                    onClick={() => setAllGrids(true)}
+                    title={`Build all ${gridOptions.length} exact tilings`}
+                  >
+                    <div className="osebe-plan-option__label">
+                      ALL
+                      <span className="osebe-plan-option__tag">×{gridOptions.length}</span>
+                    </div>
+                    <div className="osebe-plan-option__preview">
+                      <div className="osebe-plan-option__all">
+                        {gridOptions.map((grid) => {
+                          const mini = fitGridInSquare(grid.cols, grid.rows, 18, 1);
+                          return (
+                            <div
+                              key={`${grid.cols}x${grid.rows}`}
+                              className="osebe-plan__grid osebe-plan__grid--mini"
+                              style={{
+                                width: mini.width,
+                                height: mini.height,
+                                gridTemplateColumns: `repeat(${grid.cols}, ${mini.cell}px)`,
+                                gridAutoRows: `${mini.cell}px`,
+                              }}
+                            >
+                              {items.map((item) => (
+                                <div
+                                  key={item.localId}
+                                  className="osebe-plan__cell"
+                                />
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </button>
                   {gridOptions.map((grid) => {
-                    const selected = gridsEqual(grid, activeGrid);
+                    const selected =
+                      !allGrids && gridsEqual(grid, activeGrid);
                     const recommended =
                       defaultGrid != null && gridsEqual(grid, defaultGrid);
                     const mini = fitGridInSquare(grid.cols, grid.rows, 72, 2);
@@ -566,7 +636,10 @@ export default function CollagesMode() {
                         type="button"
                         className={`osebe-plan-option${selected ? " osebe-plan-option--on" : ""}`}
                         disabled={busy}
-                        onClick={() => setSelectedGrid(grid)}
+                        onClick={() => {
+                          setAllGrids(false);
+                          setSelectedGrid(grid);
+                        }}
                       >
                         <div className="osebe-plan-option__label">
                           {grid.cols}×{grid.rows}
@@ -601,22 +674,52 @@ export default function CollagesMode() {
               </>
             )}
 
-          {resultUrl && (
+          {results.length > 0 && (
             <>
               <div className="osebe-grid-head">
-                <span className="osebe-kicker">Result</span>
+                <span className="osebe-kicker">
+                  {results.length > 1 ? `Results (${results.length})` : "Result"}
+                </span>
               </div>
-              <div className="osebe-card osebe-result">
-                <div
-                  className="osebe-result__frame"
-                  style={{
-                    background: removeBackground
-                      ? normalizeHex(background)
-                      : "#f3f4f6",
-                  }}
-                >
-                  <img src={resultUrl} alt="Collage result" />
-                </div>
+              <div
+                className={
+                  results.length > 1
+                    ? "osebe-results osebe-results--multi"
+                    : "osebe-results"
+                }
+              >
+                {results.map((result) => (
+                  <div
+                    key={`${result.gridCols ?? "x"}x${result.gridRows ?? "y"}-${result.width}x${result.height}`}
+                    className="osebe-card osebe-result"
+                  >
+                    {result.gridCols != null && result.gridRows != null ? (
+                      <div className="osebe-result__caption">
+                        {result.gridCols}×{result.gridRows}
+                        <span>
+                          {result.width}×{result.height}
+                        </span>
+                      </div>
+                    ) : null}
+                    <div
+                      className="osebe-result__frame"
+                      style={{
+                        background: removeBackground
+                          ? normalizeHex(background)
+                          : "#f3f4f6",
+                      }}
+                    >
+                      <img
+                        src={result.url}
+                        alt={
+                          result.gridCols != null && result.gridRows != null
+                            ? `Collage ${result.gridCols}×${result.gridRows}`
+                            : "Collage result"
+                        }
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
             </>
           )}
