@@ -124,6 +124,9 @@ export default function CollagesMode() {
     return () => {
       for (const item of items) {
         URL.revokeObjectURL(item.thumbUrl);
+        if (item.processedPreviewUrl) {
+          URL.revokeObjectURL(item.processedPreviewUrl);
+        }
       }
       if (resultUrl) URL.revokeObjectURL(resultUrl);
     };
@@ -133,7 +136,17 @@ export default function CollagesMode() {
 
   const patchItem = (localId: string, patch: Partial<CollageItem>) => {
     setItems((prev) =>
-      prev.map((item) => (item.localId === localId ? { ...item, ...patch } : item)),
+      prev.map((item) => {
+        if (item.localId !== localId) return item;
+        if (
+          patch.processedPreviewUrl &&
+          item.processedPreviewUrl &&
+          patch.processedPreviewUrl !== item.processedPreviewUrl
+        ) {
+          URL.revokeObjectURL(item.processedPreviewUrl);
+        }
+        return { ...item, ...patch };
+      }),
     );
   };
 
@@ -161,7 +174,12 @@ export default function CollagesMode() {
       }
       clearResult();
       setItems((prev) => {
-        for (const item of prev) URL.revokeObjectURL(item.thumbUrl);
+        for (const item of prev) {
+          URL.revokeObjectURL(item.thumbUrl);
+          if (item.processedPreviewUrl) {
+            URL.revokeObjectURL(item.processedPreviewUrl);
+          }
+        }
         return incoming;
       });
       setLiveNote(`${incoming.length} image${incoming.length === 1 ? "" : "s"} loaded.`);
@@ -190,11 +208,17 @@ export default function CollagesMode() {
     clearResult();
     setLiveNote("Starting…");
     setItems((prev) =>
-      prev.map((item) => ({
-        ...item,
-        status: "queued",
-        progressNote: "",
-      })),
+      prev.map((item) => {
+        if (item.processedPreviewUrl) {
+          URL.revokeObjectURL(item.processedPreviewUrl);
+        }
+        return {
+          ...item,
+          status: "queued",
+          progressNote: "",
+          processedPreviewUrl: null,
+        };
+      }),
     );
 
     try {
@@ -223,7 +247,12 @@ export default function CollagesMode() {
   };
 
   const clearAll = () => {
-    for (const item of items) URL.revokeObjectURL(item.thumbUrl);
+    for (const item of items) {
+      URL.revokeObjectURL(item.thumbUrl);
+      if (item.processedPreviewUrl) {
+        URL.revokeObjectURL(item.processedPreviewUrl);
+      }
+    }
     setItems([]);
     clearResult();
     setError(null);
@@ -515,8 +544,26 @@ export default function CollagesMode() {
             <div className="osebe-grid">
               {items.map((item, index) => (
                 <article key={item.localId} className="osebe-card">
-                  <div className="osebe-card__photo">
+                  <div
+                    className="osebe-card__photo"
+                    style={
+                      item.processedPreviewUrl && removeBackground
+                        ? { background: normalizeHex(background) }
+                        : undefined
+                    }
+                  >
                     <img src={item.thumbUrl} alt={item.sourceName} />
+                    {item.processedPreviewUrl && (
+                      <div
+                        className="osebe-card__inset"
+                        title="Processed preview (¼ size)"
+                      >
+                        <img
+                          src={item.processedPreviewUrl}
+                          alt={`${item.sourceName} processed`}
+                        />
+                      </div>
+                    )}
                   </div>
                   <div className="osebe-card__meta">
                     <div className="osebe-card__name" title={item.sourceName}>

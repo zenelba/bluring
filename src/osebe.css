@@ -334,12 +334,37 @@
   aspect-ratio: 4 / 3;
   background: #f3f4f6;
   overflow: hidden;
+  position: relative;
 }
 
-.osebe-card__photo img {
+.osebe-card__photo > img:first-child {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.osebe-card__inset {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 25%;
+  height: 25%;
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  z-index: 2;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+  background: #fff;
+  pointer-events: none;
+}
+
+.osebe-card__inset img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .osebe-result {

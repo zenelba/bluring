@@ -48,6 +48,8 @@ export interface CollageItem {
   file: File;
   sourceName: string;
   thumbUrl: string;
+  /** Quarter-size live preview after strip / cutout (overlay on grid thumb). */
+  processedPreviewUrl: string | null;
   status: CollageItemStatus;
   progressNote: string;
   sourceWidth: number | null;
@@ -191,6 +193,7 @@ export function createCollageItems(files: File[]): CollageItem[] {
     file,
     sourceName: file.name,
     thumbUrl: URL.createObjectURL(file),
+    processedPreviewUrl: null,
     status: "queued",
     progressNote: "",
     sourceWidth: null,
@@ -230,6 +233,28 @@ function canvasToBlob(
 
 function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
   return canvasToBlob(canvas, "image/png");
+}
+
+/** Build a ¼-scale object URL for grid overlay previews. */
+function createProcessedPreviewUrl(canvas: HTMLCanvasElement): Promise<string> {
+  const preview = document.createElement("canvas");
+  preview.width = Math.max(1, Math.round(canvas.width * 0.25));
+  preview.height = Math.max(1, Math.round(canvas.height * 0.25));
+  const ctx = preview.getContext("2d");
+  if (ctx) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(canvas, 0, 0, preview.width, preview.height);
+  }
+  return new Promise((resolve, reject) => {
+    preview.toBlob(
+      (blob) =>
+        blob
+          ? resolve(URL.createObjectURL(blob))
+          : reject(new Error("Preview encode failed")),
+      "image/png",
+    );
+  });
 }
 
 /** Shrink so the longest edge fits within `maxEdge`. */
@@ -584,11 +609,13 @@ export async function buildCollage(
         onProgress?.(note);
       });
       prepared.push(canvas);
+      const processedPreviewUrl = await createProcessedPreviewUrl(canvas);
       onItem(item.localId, {
         status: "done",
         progressNote: "Ready",
         sourceWidth: canvas.width,
         sourceHeight: canvas.height,
+        processedPreviewUrl,
       });
     } catch (error) {
       const message =
