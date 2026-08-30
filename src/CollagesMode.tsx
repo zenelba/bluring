@@ -4,8 +4,9 @@ import {
   DEFAULT_COLLAGE_BG,
   DEFAULT_COLLAGE_LAYOUT,
   buildCollage,
+  collectCollageSourceFiles,
   createCollageItems,
-  downloadCollagePng,
+  downloadCollageImage,
   stripHintForLayout,
   type CollageItem,
   type CollageItemStatus,
@@ -54,6 +55,7 @@ export default function CollagesMode() {
   const [items, setItems] = useState<CollageItem[]>([]);
   const [layout, setLayout] = useState<CollageLayout>(DEFAULT_COLLAGE_LAYOUT);
   const [stripWhitespace, setStripWhitespace] = useState(true);
+  const [optimizeForPowerpoint, setOptimizeForPowerpoint] = useState(true);
   const [removeBackground, setRemoveBackground] = useState(false);
   const [background, setBackground] = useState(DEFAULT_COLLAGE_BG);
   const [hexDraft, setHexDraft] = useState(DEFAULT_COLLAGE_BG);
@@ -86,8 +88,17 @@ export default function CollagesMode() {
       background: normalizeHex(background),
       bgRemovalModel,
       gap,
+      optimizeForPowerpoint,
     }),
-    [layout, stripWhitespace, removeBackground, background, bgRemovalModel, gap],
+    [
+      layout,
+      stripWhitespace,
+      removeBackground,
+      background,
+      bgRemovalModel,
+      gap,
+      optimizeForPowerpoint,
+    ],
   );
 
   const doneCount = items.filter((item) => item.status === "done").length;
@@ -131,15 +142,28 @@ export default function CollagesMode() {
     setResultSize(null);
   };
 
-  const addFiles = (fileList: FileList | File[]) => {
-    const incoming = createCollageItems(Array.from(fileList));
-    if (incoming.length === 0) return;
-    setError(null);
-    clearResult();
-    setItems((prev) => {
-      for (const item of prev) URL.revokeObjectURL(item.thumbUrl);
-      return incoming;
-    });
+  const addFiles = async (fileList: FileList | File[]) => {
+    if (busy) return;
+    try {
+      const sources = await collectCollageSourceFiles(fileList);
+      const incoming = createCollageItems(sources);
+      if (incoming.length === 0) {
+        setError(
+          "No images found. Upload JPG/PNG/WEBP files or a ZIP of images.",
+        );
+        return;
+      }
+      setError(null);
+      clearResult();
+      setItems((prev) => {
+        for (const item of prev) URL.revokeObjectURL(item.thumbUrl);
+        return incoming;
+      });
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to read ZIP or image files",
+      );
+    }
   };
 
   const handleBackground = (value: string) => {
@@ -184,7 +208,7 @@ export default function CollagesMode() {
 
   const handleDownload = () => {
     if (!resultBlob) return;
-    downloadCollagePng(resultBlob, `${layout}-collage.png`);
+    downloadCollageImage(resultBlob, layout, optimizeForPowerpoint);
   };
 
   const clearAll = () => {
@@ -234,6 +258,28 @@ export default function CollagesMode() {
               aria-checked={stripWhitespace}
               disabled={busy}
               onClick={() => setStripWhitespace((v) => !v)}
+            >
+              <span />
+            </button>
+          </div>
+
+          <div className="osebe-toggle-row">
+            <div>
+              <div className="osebe-toggle-row__title">
+                Optimise for PowerPoint
+              </div>
+              <p>
+                Caps the longest edge at 1920px and exports JPEG for smaller
+                decks (on by default)
+              </p>
+            </div>
+            <button
+              type="button"
+              className={`osebe-switch ${optimizeForPowerpoint ? "osebe-switch--on" : ""}`}
+              role="switch"
+              aria-checked={optimizeForPowerpoint}
+              disabled={busy}
+              onClick={() => setOptimizeForPowerpoint((v) => !v)}
             >
               <span />
             </button>
@@ -337,12 +383,12 @@ export default function CollagesMode() {
           >
             <CloudIcon />
             <strong>Click to upload or drag and drop</strong>
-            <span>JPG, PNG, WEBP · sorted by filename (2 before 12)</span>
+            <span>JPG, PNG, WEBP, or a ZIP of images · sorted by filename (2 before 12)</span>
           </div>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+            accept=".jpg,.jpeg,.png,.webp,.zip,image/jpeg,image/png,image/webp,application/zip"
             multiple
             hidden
             onChange={(e) => {
@@ -364,7 +410,7 @@ export default function CollagesMode() {
             onClick={handleDownload}
             disabled={busy || !resultBlob}
           >
-            Download PNG
+            Download {optimizeForPowerpoint ? "JPEG" : "PNG"}
           </button>
           <button
             type="button"
@@ -404,22 +450,16 @@ export default function CollagesMode() {
               <div className="osebe-grid-head">
                 <span className="osebe-kicker">Result</span>
               </div>
-              <div className="osebe-card" style={{ marginBottom: "1.25rem" }}>
+              <div className="osebe-card osebe-result">
                 <div
-                  className="osebe-card__photo"
+                  className="osebe-result__frame"
                   style={{
-                    aspectRatio: "auto",
-                    maxHeight: 520,
                     background: removeBackground
                       ? normalizeHex(background)
                       : "#f3f4f6",
                   }}
                 >
-                  <img
-                    src={resultUrl}
-                    alt="Collage result"
-                    style={{ objectFit: "contain" }}
-                  />
+                  <img src={resultUrl} alt="Collage result" />
                 </div>
               </div>
             </>

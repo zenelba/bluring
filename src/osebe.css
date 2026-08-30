@@ -342,6 +342,29 @@
   object-fit: cover;
 }
 
+.osebe-result {
+  margin-bottom: 1.25rem;
+}
+
+.osebe-result__frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.85rem;
+  background: #f3f4f6;
+  max-height: min(70vh, 680px);
+  overflow: hidden;
+}
+
+.osebe-result__frame img {
+  display: block;
+  max-width: 100%;
+  max-height: min(calc(70vh - 1.7rem), 650px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
 .osebe-card__meta {
   padding: 0.7rem 0.8rem 0.85rem;
 }

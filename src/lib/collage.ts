@@ -1,4 +1,5 @@
 import { saveAs } from "file-saver";
+import JSZip from "jszip";
 import {
   DEFAULT_BG_REMOVAL_MODEL,
   cleanCutoutMatte,
@@ -61,6 +62,8 @@ export interface CollageSettings {
   bgRemovalModel: BgRemovalModel;
   /** Gap in px between images in ribbons / collage rows. */
   gap: number;
+  /** Downscale + JPEG export sized for PowerPoint slides. */
+  optimizeForPowerpoint: boolean;
 }
 
 export const DEFAULT_COLLAGE_SETTINGS: CollageSettings = {
@@ -70,16 +73,75 @@ export const DEFAULT_COLLAGE_SETTINGS: CollageSettings = {
   background: DEFAULT_COLLAGE_BG,
   bgRemovalModel: DEFAULT_BG_REMOVAL_MODEL,
   gap: 0,
+  optimizeForPowerpoint: true,
 };
 
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const ACCEPTED_EXT = /\.(jpe?g|png|webp)$/i;
+const ZIP_EXT = /\.zip$/i;
 const MAX_EDGE = 2048;
 const COLLAGE_TARGET_WIDTH = 2000;
+/** Longest edge for PPT-friendly exports (≈ full HD slide width). */
+export const POWERPOINT_MAX_EDGE = 1920;
+const POWERPOINT_JPEG_QUALITY = 0.85;
 
 export function isAcceptedCollageFile(file: File): boolean {
   if (ACCEPTED_TYPES.has(file.type)) return true;
   return ACCEPTED_EXT.test(file.name);
+}
+
+export function isZipFile(file: File): boolean {
+  return (
+    file.type === "application/zip" ||
+    file.type === "application/x-zip-compressed" ||
+    ZIP_EXT.test(file.name)
+  );
+}
+
+function basename(path: string): string {
+  return path.replace(/^.*[\\/]/, "");
+}
+
+function isUsableZipEntry(path: string): boolean {
+  const name = basename(path);
+  if (!name || name.startsWith(".")) return false;
+  if (path.includes("__MACOSX/") || path.startsWith("__MACOSX")) return false;
+  return ACCEPTED_EXT.test(name);
+}
+
+export async function extractImagesFromZip(file: File): Promise<File[]> {
+  const zip = await JSZip.loadAsync(file);
+  const files: File[] = [];
+  const entries = Object.values(zip.files).filter(
+    (entry) => !entry.dir && isUsableZipEntry(entry.name),
+  );
+  for (const entry of entries) {
+    const blob = await entry.async("blob");
+    const name = basename(entry.name);
+    const type = name.toLowerCase().endsWith(".png")
+      ? "image/png"
+      : name.toLowerCase().endsWith(".webp")
+        ? "image/webp"
+        : "image/jpeg";
+    files.push(new File([blob], name, { type }));
+  }
+  return files;
+}
+
+/** Expand mixed image + ZIP uploads into a single sorted image list. */
+export async function collectCollageSourceFiles(
+  fileList: FileList | File[],
+): Promise<File[]> {
+  const incoming = Array.from(fileList);
+  const collected: File[] = [];
+  for (const file of incoming) {
+    if (isZipFile(file)) {
+      collected.push(...(await extractImagesFromZip(file)));
+    } else if (isAcceptedCollageFile(file)) {
+      collected.push(file);
+    }
+  }
+  return sortCollageFiles(collected);
 }
 
 /** Natural filename sort: `2` before `12` when digits appear in the name. */
@@ -123,13 +185,30 @@ function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
   });
 }
 
-function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
+function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  type: "image/png" | "image/jpeg",
+  quality?: number,
+): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error("PNG encode failed"))),
-      "image/png",
+      (blob) => (blob ? resolve(blob) : reject(new Error("Image encode failed"))),
+      type,
+      quality,
     );
   });
+}
+
+function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
+  return canvasToBlob(canvas, "image/png");
+}
+
+/** Shrink so the longest edge fits within `maxEdge`. */
+export function optimizeCanvasForPowerpoint(
+  source: HTMLCanvasElement,
+  maxEdge = POWERPOINT_MAX_EDGE,
+): HTMLCanvasElement {
+  return scaleToMaxEdge(source, maxEdge);
 }
 
 function parseRgb(hex: string): { r: number; g: number; b: number } {
@@ -491,19 +570,43 @@ export async function buildCollage(
 
   onProgress?.("Composing layout…");
   const gap = Math.max(0, Math.round(settings.gap));
+  const collageWidth = settings.optimizeForPowerpoint
+    ? POWERPOINT_MAX_EDGE
+    : COLLAGE_TARGET_WIDTH;
   let result: HTMLCanvasElement;
   if (settings.layout === "vertical") {
     result = composeVertical(prepared, gap);
   } else if (settings.layout === "horizontal") {
     result = composeHorizontal(prepared, gap);
   } else {
-    result = composeCollage(prepared, gap);
+    result = composeCollage(prepared, gap, collageWidth);
+  }
+
+  if (settings.optimizeForPowerpoint) {
+    onProgress?.("Optimising for PowerPoint…");
+    result = optimizeCanvasForPowerpoint(result);
+    const blob = await canvasToBlob(
+      result,
+      "image/jpeg",
+      POWERPOINT_JPEG_QUALITY,
+    );
+    return { blob, width: result.width, height: result.height };
   }
 
   const blob = await canvasToPng(result);
   return { blob, width: result.width, height: result.height };
 }
 
+export function downloadCollageImage(
+  blob: Blob,
+  layout: CollageLayout,
+  optimized: boolean,
+) {
+  const ext = blob.type === "image/jpeg" || optimized ? "jpg" : "png";
+  saveAs(blob, `${layout}-collage.${ext}`);
+}
+
+/** @deprecated Prefer downloadCollageImage */
 export function downloadCollagePng(blob: Blob, filename = "collage.png") {
   saveAs(blob, filename);
 }
