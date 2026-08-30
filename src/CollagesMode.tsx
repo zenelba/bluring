@@ -8,8 +8,11 @@ import {
   createCollageItems,
   describeGridProposal,
   downloadCollageImage,
+  gridsEqual,
+  listExactGrids,
   proposeLandscapeGrid,
   stripHintForLayout,
+  type CollageGrid,
   type CollageItem,
   type CollageItemStatus,
   type CollageLayout,
@@ -76,10 +79,7 @@ export default function CollagesMode() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
-  const [gridProposal, setGridProposal] = useState<{
-    cols: number;
-    rows: number;
-  } | null>(null);
+  const [selectedGrid, setSelectedGrid] = useState<CollageGrid | null>(null);
 
   const selectedLayout =
     COLLAGE_LAYOUTS.find((item) => item.id === layout) ?? COLLAGE_LAYOUTS[0];
@@ -87,10 +87,18 @@ export default function CollagesMode() {
     BG_REMOVAL_MODELS.find((m) => m.id === bgRemovalModel) ??
     BG_REMOVAL_MODELS[0];
 
-  const proposedGrid = useMemo(
+  const gridOptions = useMemo(
+    () => (items.length > 0 ? listExactGrids(items.length) : []),
+    [items.length],
+  );
+  const defaultGrid = useMemo(
     () => (items.length > 0 ? proposeLandscapeGrid(items.length) : null),
     [items.length],
   );
+  const activeGrid =
+    selectedGrid && gridOptions.some((g) => gridsEqual(g, selectedGrid))
+      ? selectedGrid
+      : defaultGrid;
 
   const settings: CollageSettings = useMemo(
     () => ({
@@ -101,8 +109,8 @@ export default function CollagesMode() {
       bgRemovalModel,
       gap,
       optimizeForPowerpoint,
-      gridCols: gridProposal?.cols ?? proposedGrid?.cols,
-      gridRows: gridProposal?.rows ?? proposedGrid?.rows,
+      gridCols: activeGrid?.cols,
+      gridRows: activeGrid?.rows,
     }),
     [
       layout,
@@ -112,8 +120,7 @@ export default function CollagesMode() {
       bgRemovalModel,
       gap,
       optimizeForPowerpoint,
-      gridProposal,
-      proposedGrid,
+      activeGrid,
     ],
   );
 
@@ -177,7 +184,7 @@ export default function CollagesMode() {
         return;
       }
       clearResult();
-      setGridProposal(null);
+      setSelectedGrid(null);
       setItems((prev) => {
         for (const item of prev) {
           URL.revokeObjectURL(item.thumbUrl);
@@ -209,16 +216,13 @@ export default function CollagesMode() {
     clearResult();
 
     const proposal =
-      layout === "collage"
-        ? proposeLandscapeGrid(items.length)
-        : null;
-    setGridProposal(proposal);
+      layout === "collage" ? activeGrid : null;
     if (proposal) {
+      setSelectedGrid(proposal);
       setLiveNote(
-        `Proposed ${describeGridProposal(proposal.cols, proposal.rows)} — building…`,
+        `Using ${describeGridProposal(proposal.cols, proposal.rows)} — building…`,
       );
-      // Let the proposal grid paint before heavy work.
-      await new Promise((resolve) => window.setTimeout(resolve, 350));
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
     } else {
       setLiveNote("Starting…");
     }
@@ -272,7 +276,7 @@ export default function CollagesMode() {
     }
     setItems([]);
     clearResult();
-    setGridProposal(null);
+    setSelectedGrid(null);
     setError(null);
     setLiveNote("");
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -303,16 +307,6 @@ export default function CollagesMode() {
             </select>
             <span className="osebe-hint">{selectedLayout.description}</span>
           </label>
-
-          {layout === "collage" && proposedGrid && (
-            <p className="osebe-hint">
-              Proposed:{" "}
-              <strong>
-                {describeGridProposal(proposedGrid.cols, proposedGrid.rows)}
-              </strong>{" "}
-              for {items.length} image{items.length === 1 ? "" : "s"}
-            </p>
-          )}
 
           <div className="osebe-toggle-row">
             <div>
@@ -522,49 +516,62 @@ export default function CollagesMode() {
             </p>
           </div>
 
-          {(gridProposal || (layout === "collage" && proposedGrid)) &&
-            items.length > 0 && (
+          {layout === "collage" && items.length > 0 && activeGrid && (
               <>
                 <div className="osebe-grid-head">
-                  <span className="osebe-kicker">
-                    {busy || resultUrl ? "Grid proposal" : "Proposed grid"}
-                  </span>
+                  <span className="osebe-kicker">Grid options</span>
                 </div>
-                <div className="osebe-card osebe-plan">
-                  <div className="osebe-plan__meta">
-                    {describeGridProposal(
-                      (gridProposal ?? proposedGrid)!.cols,
-                      (gridProposal ?? proposedGrid)!.rows,
-                    )}
-                    {" · landscape preferred"}
-                  </div>
-                  <div
-                    className="osebe-plan__grid"
-                    style={{
-                      gridTemplateColumns: `repeat(${(gridProposal ?? proposedGrid)!.cols}, minmax(0, 1fr))`,
-                    }}
-                  >
-                    {Array.from({
-                      length:
-                        (gridProposal ?? proposedGrid)!.cols *
-                        (gridProposal ?? proposedGrid)!.rows,
-                    }).map((_, index) => {
-                      const item = items[index];
-                      return (
-                        <div key={index} className="osebe-plan__cell">
-                          {item ? (
-                            <img
-                              src={item.processedPreviewUrl ?? item.thumbUrl}
-                              alt={item.sourceName}
-                            />
-                          ) : (
-                            <span className="osebe-plan__empty">Empty</span>
-                          )}
-                          <span className="osebe-plan__idx">{index + 1}</span>
+                <p className="osebe-status__copy" style={{ marginBottom: "0.75rem" }}>
+                  {items.length} images · pick a tiling. Default is landscape
+                  ({defaultGrid ? `${defaultGrid.cols} × ${defaultGrid.rows}` : ""}
+                  ).
+                </p>
+                <div className="osebe-plan-options">
+                  {gridOptions.map((grid) => {
+                    const selected = gridsEqual(grid, activeGrid);
+                    const recommended =
+                      defaultGrid != null && gridsEqual(grid, defaultGrid);
+                    return (
+                      <button
+                        key={`${grid.cols}x${grid.rows}`}
+                        type="button"
+                        className={`osebe-plan-option${selected ? " osebe-plan-option--on" : ""}`}
+                        disabled={busy}
+                        onClick={() => setSelectedGrid(grid)}
+                      >
+                        <div className="osebe-plan-option__label">
+                          {grid.cols} × {grid.rows}
+                          {recommended ? (
+                            <span className="osebe-plan-option__tag">Landscape</span>
+                          ) : null}
                         </div>
-                      );
-                    })}
-                  </div>
+                        <div className="osebe-plan-option__orient">
+                          {grid.cols > grid.rows
+                            ? "landscape"
+                            : grid.cols < grid.rows
+                              ? "portrait"
+                              : "square"}{" "}
+                          · {grid.cols} across, {grid.rows} down
+                        </div>
+                        <div
+                          className="osebe-plan__grid osebe-plan__grid--mini"
+                          style={{
+                            gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`,
+                          }}
+                        >
+                          {items.map((item, index) => (
+                            <div key={item.localId} className="osebe-plan__cell">
+                              <img
+                                src={item.processedPreviewUrl ?? item.thumbUrl}
+                                alt=""
+                              />
+                              <span className="osebe-plan__idx">{index + 1}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </>
             )}

@@ -29,7 +29,7 @@ export const COLLAGE_LAYOUTS: ReadonlyArray<{
     id: "collage",
     label: "Collage",
     description:
-      "Propose a landscape grid (more columns than rows), then fill it in order.",
+      "Choose an exact grid (for 12 images: 12×1, 6×2, 4×3, 3×4…). Landscape is the default.",
   },
 ];
 
@@ -191,43 +191,51 @@ export function sortCollageFiles(files: File[]): File[] {
   return [...files].sort((a, b) => compareFilenamesNatural(a.name, b.name));
 }
 
-/** Landscape-first grid: cols ≥ rows, few empty cells. */
-export function proposeLandscapeGrid(count: number): {
-  cols: number;
-  rows: number;
-} {
+export type CollageGrid = { cols: number; rows: number };
+
+/** Every exact tiling of `count` images (no empty cells). */
+export function listExactGrids(count: number): CollageGrid[] {
   const n = Math.max(1, Math.floor(count));
-  if (n === 1) return { cols: 1, rows: 1 };
-
-  let best = { cols: n, rows: 1 };
-  let bestScore = -Infinity;
-
+  const grids: CollageGrid[] = [];
   for (let rows = 1; rows <= n; rows++) {
-    const cols = Math.ceil(n / rows);
-    // Always prefer landscape (or square): skip taller-than-wide grids.
-    if (cols < rows) continue;
-    const cells = cols * rows;
-    const empty = cells - n;
-    const landscape = cols / rows;
-    // Prefer fewer empty cells, then wider landscape, then nearer to ~16:9.
-    const score =
-      -empty * 40 +
-      landscape * 8 -
-      Math.abs(landscape - 16 / 9) * 3 -
-      (cols + rows) * 0.1;
+    if (n % rows !== 0) continue;
+    grids.push({ cols: n / rows, rows });
+  }
+  // Landscape first (more columns), then square, then portrait.
+  return grids.sort((a, b) => {
+    const aLand = a.cols >= a.rows ? 0 : 1;
+    const bLand = b.cols >= b.rows ? 0 : 1;
+    if (aLand !== bLand) return aLand - bLand;
+    return b.cols - a.cols;
+  });
+}
+
+/** Landscape-first exact grid (no empty cells). */
+export function proposeLandscapeGrid(count: number): CollageGrid {
+  const grids = listExactGrids(count);
+  const landscape = grids.filter((g) => g.cols >= g.rows);
+  const pool = landscape.length > 0 ? landscape : grids;
+  let best = pool[0];
+  let bestScore = -Infinity;
+  for (const g of pool) {
+    const ratio = g.cols / g.rows;
+    const score = -Math.abs(ratio - 16 / 9) * 3 + ratio * 2;
     if (score > bestScore) {
       bestScore = score;
-      best = { cols, rows };
+      best = g;
     }
   }
-
   return best;
 }
 
 export function describeGridProposal(cols: number, rows: number): string {
   const orient =
     cols > rows ? "landscape" : cols < rows ? "portrait" : "square";
-  return `${cols} × ${rows} ${orient} grid`;
+  return `${cols} × ${rows} ${orient}`;
+}
+
+export function gridsEqual(a: CollageGrid, b: CollageGrid): boolean {
+  return a.cols === b.cols && a.rows === b.rows;
 }
 
 export function createCollageItems(files: File[]): CollageItem[] {
