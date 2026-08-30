@@ -52,6 +52,7 @@ function CloudIcon() {
 
 export default function CollagesMode() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<CollageItem[]>([]);
   const [layout, setLayout] = useState<CollageLayout>(DEFAULT_COLLAGE_LAYOUT);
   const [stripWhitespace, setStripWhitespace] = useState(true);
@@ -64,6 +65,7 @@ export default function CollagesMode() {
   );
   const [gap, setGap] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [readingUpload, setReadingUpload] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
@@ -143,7 +145,10 @@ export default function CollagesMode() {
   };
 
   const addFiles = async (fileList: FileList | File[]) => {
-    if (busy) return;
+    if (busy || readingUpload) return;
+    setReadingUpload(true);
+    setLiveNote("Reading files…");
+    setError(null);
     try {
       const sources = await collectCollageSourceFiles(fileList);
       const incoming = createCollageItems(sources);
@@ -151,18 +156,24 @@ export default function CollagesMode() {
         setError(
           "No images found. Upload JPG/PNG/WEBP files or a ZIP of images.",
         );
+        setLiveNote("");
         return;
       }
-      setError(null);
       clearResult();
       setItems((prev) => {
         for (const item of prev) URL.revokeObjectURL(item.thumbUrl);
         return incoming;
       });
+      setLiveNote(`${incoming.length} image${incoming.length === 1 ? "" : "s"} loaded.`);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to read ZIP or image files",
       );
+      setLiveNote("");
+    } finally {
+      setReadingUpload(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (zipInputRef.current) zipInputRef.current.value = "";
     }
   };
 
@@ -369,7 +380,9 @@ export default function CollagesMode() {
 
           <div
             className={`osebe-drop ${isDragOver ? "osebe-drop--over" : ""}`}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              if (!busy && !readingUpload) fileInputRef.current?.click();
+            }}
             onDragOver={(e) => {
               e.preventDefault();
               setIsDragOver(true);
@@ -378,29 +391,52 @@ export default function CollagesMode() {
             onDrop={(e) => {
               e.preventDefault();
               setIsDragOver(false);
-              addFiles(e.dataTransfer.files);
+              void addFiles(e.dataTransfer.files);
             }}
           >
             <CloudIcon />
-            <strong>Click to upload or drag and drop</strong>
-            <span>JPG, PNG, WEBP, or a ZIP of images · sorted by filename (2 before 12)</span>
+            <strong>
+              {readingUpload
+                ? "Reading ZIP / images…"
+                : "Click to upload or drag and drop"}
+            </strong>
+            <span>
+              JPG, PNG, WEBP, or ZIP · sorted by filename (2 before 12)
+            </span>
           </div>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".jpg,.jpeg,.png,.webp,.zip,image/jpeg,image/png,image/webp,application/zip"
+            accept=".zip,.jpg,.jpeg,.png,.webp"
             multiple
             hidden
             onChange={(e) => {
-              if (e.target.files) addFiles(e.target.files);
+              if (e.target.files) void addFiles(e.target.files);
             }}
           />
+          <input
+            ref={zipInputRef}
+            type="file"
+            accept=".zip,application/zip,application/x-zip-compressed"
+            hidden
+            onChange={(e) => {
+              if (e.target.files) void addFiles(e.target.files);
+            }}
+          />
+          <button
+            type="button"
+            className="osebe-btn osebe-btn--ghost"
+            disabled={busy || readingUpload}
+            onClick={() => zipInputRef.current?.click()}
+          >
+            Upload ZIP…
+          </button>
 
           <button
             type="button"
             className="osebe-btn osebe-btn--dark"
             onClick={() => void processAll()}
-            disabled={busy || items.length === 0}
+            disabled={busy || readingUpload || items.length === 0}
           >
             {busy ? "Building…" : "Build collage"}
           </button>
@@ -435,7 +471,9 @@ export default function CollagesMode() {
               <div className="osebe-bar__fill" style={{ width: `${percent}%` }} />
             </div>
             <p className="osebe-status__copy">
-              {items.length === 0
+              {readingUpload
+                ? liveNote || "Reading ZIP / images…"
+                : items.length === 0
                 ? "Waiting for files…"
                 : busy
                   ? `${liveNote || `Processing ${currentStep} of ${items.length}…`} (${currentStep}/${items.length})`

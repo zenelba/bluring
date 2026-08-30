@@ -91,10 +91,12 @@ export function isAcceptedCollageFile(file: File): boolean {
 }
 
 export function isZipFile(file: File): boolean {
+  if (ZIP_EXT.test(file.name)) return true;
+  const type = (file.type || "").toLowerCase();
   return (
-    file.type === "application/zip" ||
-    file.type === "application/x-zip-compressed" ||
-    ZIP_EXT.test(file.name)
+    type === "application/zip" ||
+    type === "application/x-zip-compressed" ||
+    type === "multipart/x-zip"
   );
 }
 
@@ -103,27 +105,44 @@ function basename(path: string): string {
 }
 
 function isUsableZipEntry(path: string): boolean {
-  const name = basename(path);
+  const normalized = path.replace(/\\/g, "/");
+  const name = basename(normalized);
   if (!name || name.startsWith(".")) return false;
-  if (path.includes("__MACOSX/") || path.startsWith("__MACOSX")) return false;
+  if (
+    normalized.includes("__MACOSX/") ||
+    normalized.startsWith("__MACOSX") ||
+    name === "Thumbs.db"
+  ) {
+    return false;
+  }
   return ACCEPTED_EXT.test(name);
 }
 
 export async function extractImagesFromZip(file: File): Promise<File[]> {
-  const zip = await JSZip.loadAsync(file);
+  let zip: JSZip;
+  try {
+    const buffer = await file.arrayBuffer();
+    zip = await JSZip.loadAsync(buffer);
+  } catch {
+    throw new Error(
+      `Could not open “${file.name}” as a ZIP archive. Try re-zipping the images.`,
+    );
+  }
+
   const files: File[] = [];
   const entries = Object.values(zip.files).filter(
     (entry) => !entry.dir && isUsableZipEntry(entry.name),
   );
   for (const entry of entries) {
     const blob = await entry.async("blob");
-    const name = basename(entry.name);
-    const type = name.toLowerCase().endsWith(".png")
+    const name = basename(entry.name.replace(/\\/g, "/"));
+    const lower = name.toLowerCase();
+    const type = lower.endsWith(".png")
       ? "image/png"
-      : name.toLowerCase().endsWith(".webp")
+      : lower.endsWith(".webp")
         ? "image/webp"
         : "image/jpeg";
-    files.push(new File([blob], name, { type }));
+    files.push(new File([blob], name, { type, lastModified: Date.now() }));
   }
   return files;
 }
@@ -133,13 +152,23 @@ export async function collectCollageSourceFiles(
   fileList: FileList | File[],
 ): Promise<File[]> {
   const incoming = Array.from(fileList);
+  if (incoming.length === 0) return [];
+
   const collected: File[] = [];
+  let sawZip = false;
   for (const file of incoming) {
     if (isZipFile(file)) {
+      sawZip = true;
       collected.push(...(await extractImagesFromZip(file)));
     } else if (isAcceptedCollageFile(file)) {
       collected.push(file);
     }
+  }
+
+  if (sawZip && collected.length === 0) {
+    throw new Error(
+      "ZIP opened, but no JPG/PNG/WEBP images were found inside.",
+    );
   }
   return sortCollageFiles(collected);
 }
@@ -507,7 +536,8 @@ async function prepareImage(
     );
     const cutoutRaw = await loadImageFromBlob(cutoutBlob);
     onProgress?.("Cleaning edges…");
-    const cleaned = cleanCutoutMatte(cutoutRaw);
+    // Product-safe matte: keep crumb/fuzzy edges (portrait mode shaves them off).
+    const cleaned = cleanCutoutMatte(cutoutRaw, "product");
     working = compositeOnBackground(cleaned, settings.background);
   } else {
     working = scaleToMaxEdge(working, MAX_EDGE);

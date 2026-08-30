@@ -394,12 +394,16 @@ function clampByte(n: number): number {
   return Math.max(0, Math.min(255, Math.round(n)));
 }
 
+export type MatteCleanMode = "portrait" | "product";
+
 /**
- * Harden soft mattes and remove light-background fringe/halos that otherwise
- * show up as dirty residue when compositing onto a solid color.
+ * Harden soft mattes and reduce fringe/halos when compositing onto a solid color.
+ * - portrait: aggressive (erode + island removal) — good for hair/shoulders
+ * - product: gentle — keeps crumb/fuzzy edges that portrait mode would shave off
  */
 export function cleanCutoutMatte(
   source: HTMLImageElement | HTMLCanvasElement,
+  mode: MatteCleanMode = "portrait",
 ): HTMLCanvasElement {
   const width =
     source instanceof HTMLImageElement ? source.naturalWidth : source.width;
@@ -414,6 +418,7 @@ export function cleanCutoutMatte(
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
   const pixelCount = width * height;
+  const product = mode === "product";
 
   // Estimate original background from near-transparent fringe pixels.
   let bgR = 0;
@@ -422,7 +427,7 @@ export function cleanCutoutMatte(
   let bgN = 0;
   for (let i = 0; i < data.length; i += 4) {
     const a = data[i + 3];
-    if (a > 0 && a < 48) {
+    if (a > 0 && a < (product ? 32 : 48)) {
       bgR += data[i];
       bgG += data[i + 1];
       bgB += data[i + 2];
@@ -439,8 +444,9 @@ export function cleanCutoutMatte(
     bgB /= bgN;
   }
 
-  const ALPHA_KILL = 56;
-  const ALPHA_KEEP = 168;
+  // Product mode keeps soft edge crumbs; portrait mode hardens hair mattes.
+  const ALPHA_KILL = product ? 10 : 56;
+  const ALPHA_KEEP = product ? 220 : 168;
   const alpha = new Uint8ClampedArray(pixelCount);
 
   for (let i = 0, p = 0; i < data.length; i += 4, p++) {
@@ -462,12 +468,21 @@ export function cleanCutoutMatte(
 
     if (a >= ALPHA_KEEP) {
       a = 255;
+    } else if (product) {
+      // Keep soft partial coverage — do not force a hard binary edge.
+      a = clampByte(a);
     } else {
       const t = (a - ALPHA_KILL) / (ALPHA_KEEP - ALPHA_KILL);
       a = clampByte(255 * (t * t * (3 - 2 * t)));
     }
     data[i + 3] = a;
     alpha[p] = a;
+  }
+
+  if (product) {
+    // No erode / island removal — those shave breadcrumb and herb detail.
+    ctx.putImageData(imageData, 0, 0);
+    return canvas;
   }
 
   // Slight erode kills leftover 1px halo around hair/shoulders.
