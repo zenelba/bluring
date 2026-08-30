@@ -28,12 +28,13 @@ export const COLLAGE_LAYOUTS: ReadonlyArray<{
   {
     id: "collage",
     label: "Collage",
-    description: "Pack images into rows that fill a shared target width.",
+    description:
+      "Propose a landscape grid (more columns than rows), then fill it in order.",
   },
 ];
 
 export const DEFAULT_COLLAGE_BG = "#FFFFFF";
-export const DEFAULT_COLLAGE_LAYOUT: CollageLayout = "vertical";
+export const DEFAULT_COLLAGE_LAYOUT: CollageLayout = "collage";
 
 export type CollageItemStatus =
   | "queued"
@@ -66,6 +67,9 @@ export interface CollageSettings {
   gap: number;
   /** Downscale + JPEG export sized for PowerPoint slides. */
   optimizeForPowerpoint: boolean;
+  /** Optional fixed grid for collage layout (landscape preferred). */
+  gridCols?: number;
+  gridRows?: number;
 }
 
 export const DEFAULT_COLLAGE_SETTINGS: CollageSettings = {
@@ -185,6 +189,45 @@ export function compareFilenamesNatural(a: string, b: string): number {
 
 export function sortCollageFiles(files: File[]): File[] {
   return [...files].sort((a, b) => compareFilenamesNatural(a.name, b.name));
+}
+
+/** Landscape-first grid: cols ≥ rows, few empty cells. */
+export function proposeLandscapeGrid(count: number): {
+  cols: number;
+  rows: number;
+} {
+  const n = Math.max(1, Math.floor(count));
+  if (n === 1) return { cols: 1, rows: 1 };
+
+  let best = { cols: n, rows: 1 };
+  let bestScore = -Infinity;
+
+  for (let rows = 1; rows <= n; rows++) {
+    const cols = Math.ceil(n / rows);
+    // Always prefer landscape (or square): skip taller-than-wide grids.
+    if (cols < rows) continue;
+    const cells = cols * rows;
+    const empty = cells - n;
+    const landscape = cols / rows;
+    // Prefer fewer empty cells, then wider landscape, then nearer to ~16:9.
+    const score =
+      -empty * 40 +
+      landscape * 8 -
+      Math.abs(landscape - 16 / 9) * 3 -
+      (cols + rows) * 0.1;
+    if (score > bestScore) {
+      bestScore = score;
+      best = { cols, rows };
+    }
+  }
+
+  return best;
+}
+
+export function describeGridProposal(cols: number, rows: number): string {
+  const orient =
+    cols > rows ? "landscape" : cols < rows ? "portrait" : "square";
+  return `${cols} × ${rows} ${orient} grid`;
 }
 
 export function createCollageItems(files: File[]): CollageItem[] {
@@ -467,11 +510,13 @@ function composeHorizontal(
   return canvas;
 }
 
-/** Row-pack collage: fill rows to a shared target width. */
+/** Landscape grid collage: equal cells, images contained, left-to-right then top-to-bottom. */
 function composeCollage(
   images: HTMLCanvasElement[],
   gap: number,
   targetWidth = COLLAGE_TARGET_WIDTH,
+  gridCols?: number,
+  gridRows?: number,
 ): HTMLCanvasElement {
   if (images.length === 0) {
     const empty = document.createElement("canvas");
@@ -480,58 +525,41 @@ function composeCollage(
     return empty;
   }
 
-  type RowItem = { img: HTMLCanvasElement; w: number; h: number };
-  const rows: RowItem[][] = [];
-  let current: RowItem[] = [];
-  let rowWidth = 0;
-  const baseH = Math.max(
-    120,
-    Math.round(
-      images.reduce((sum, img) => sum + img.height, 0) / images.length / 2,
-    ),
+  const proposed = proposeLandscapeGrid(images.length);
+  const cols = Math.max(1, gridCols ?? proposed.cols);
+  const rows = Math.max(1, gridRows ?? proposed.rows);
+  const cellGap = Math.max(0, gap);
+  const cellW = Math.max(
+    1,
+    Math.floor((targetWidth - cellGap * (cols - 1)) / cols),
   );
+  // Square cells + cols ≥ rows ⇒ overall landscape canvas.
+  const cellH = cellW;
+  const canvas = document.createElement("canvas");
+  canvas.width = cols * cellW + cellGap * (cols - 1);
+  canvas.height = rows * cellH + cellGap * (rows - 1);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
 
-  for (const img of images) {
-    const scale = baseH / img.height;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < images.length; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    if (row >= rows) break;
+    const img = images[i];
+    const x0 = col * (cellW + cellGap);
+    const y0 = row * (cellH + cellGap);
+    const scale = Math.min(cellW / img.width, cellH / img.height);
     const w = Math.max(1, Math.round(img.width * scale));
-    const h = baseH;
-    const nextWidth = current.length === 0 ? w : rowWidth + gap + w;
-    if (current.length > 0 && nextWidth > targetWidth) {
-      rows.push(current);
-      current = [{ img, w, h }];
-      rowWidth = w;
-    } else {
-      current.push({ img, w, h });
-      rowWidth = nextWidth;
-    }
+    const h = Math.max(1, Math.round(img.height * scale));
+    const x = x0 + Math.round((cellW - w) / 2);
+    const y = y0 + Math.round((cellH - h) / 2);
+    drawScaled(ctx, img, x, y, w, h);
   }
-  if (current.length) rows.push(current);
 
-  const rowCanvases: HTMLCanvasElement[] = rows.map((row) => {
-    const naturalW =
-      row.reduce((sum, item) => sum + item.w, 0) +
-      gap * Math.max(0, row.length - 1);
-    const scale = targetWidth / Math.max(1, naturalW);
-    const rowH = Math.max(1, Math.round(baseH * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = targetWidth;
-    canvas.height = rowH;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return canvas;
-    let x = 0;
-    for (let i = 0; i < row.length; i++) {
-      const item = row[i];
-      const isLast = i === row.length - 1;
-      const w = isLast
-        ? Math.max(1, targetWidth - x)
-        : Math.max(1, Math.round(item.w * scale));
-      drawScaled(ctx, item.img, x, 0, w, rowH);
-      x += w + gap;
-    }
-    return canvas;
-  });
-
-  return composeVertical(rowCanvases, gap);
+  return canvas;
 }
 
 async function prepareImage(
@@ -631,7 +659,13 @@ export async function buildCollage(
   } else if (settings.layout === "horizontal") {
     result = composeHorizontal(prepared, gap);
   } else {
-    result = composeCollage(prepared, gap, collageWidth);
+    result = composeCollage(
+      prepared,
+      gap,
+      collageWidth,
+      settings.gridCols,
+      settings.gridRows,
+    );
   }
 
   if (settings.optimizeForPowerpoint) {
