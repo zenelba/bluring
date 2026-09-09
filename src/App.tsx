@@ -30,6 +30,7 @@ import {
 } from "./lib/report";
 import PortraitsMode from "./PortraitsMode";
 import CollagesMode from "./CollagesMode";
+import AudioVideoMode from "./AudioVideoMode";
 import "./App.css";
 
 type AppMode =
@@ -38,7 +39,8 @@ type AppMode =
   | "saliency"
   | "report"
   | "portraits"
-  | "collages";
+  | "collages"
+  | "av";
 
 const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
   { id: "blur", label: "Logo blur" },
@@ -47,9 +49,13 @@ const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
   { id: "report", label: "PowerPoint" },
   { id: "portraits", label: "Faces" },
   { id: "collages", label: "Collages" },
+  { id: "av", label: "Audio / Video" },
 ];
 
 function modeSubtitle(mode: AppMode): string {
+  if (mode === "av") {
+    return "Download YouTube or Facebook media, transcribe, and extract slides";
+  }
   if (mode === "collages") {
     return "Compose vertical or horizontal ribbons and packed collages";
   }
@@ -644,7 +650,10 @@ export default function App() {
           <p className="app-top__sub">{modeSubtitle(mode)}</p>
         </div>
         <div className="app-top__actions">
-          {image && mode !== "portraits" && mode !== "collages" && (
+          {image &&
+            mode !== "portraits" &&
+            mode !== "collages" &&
+            mode !== "av" && (
             <button type="button" className="btn btn--ghost" onClick={reset}>
               New image
             </button>
@@ -657,6 +666,8 @@ export default function App() {
         <PortraitsMode />
       ) : mode === "collages" ? (
         <CollagesMode />
+      ) : mode === "av" ? (
+        <AudioVideoMode />
       ) : (
       <div className="main">
         <aside className="sidebar">

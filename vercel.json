@@ -9,6 +9,23 @@
     "api/saliency.ts": {
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"
+    },
+    "api/av-probe.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
+    "api/av-download.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
+    "api/av-fetch.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
+    "api/av-transcribe.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**",
+      "memory": 1024
     }
   }
 }
