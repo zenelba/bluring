@@ -200,8 +200,8 @@ export function centerCropRect(
 }
 
 /**
- * Uniform headshot crop: face occupies a consistent fraction of the frame,
- * with extra headroom above and a bit of shoulders below.
+ * Uniform headshot crop: keep the full head (hair/crown), not just the detector box.
+ * MediaPipe boxes sit low on the skull, so we extend upward before framing.
  */
 export function faceCropRect(
   imgW: number,
@@ -212,24 +212,53 @@ export function faceCropRect(
 ): FaceBox {
   const aspect = outW / outH;
   const cx = face.x + face.width / 2;
-  const cy = face.y + face.height * 0.38;
-  const cropH = Math.max(face.height / 0.42, 1);
-  const cropW = cropH * aspect;
 
+  // Space for hair above the detector top; boxes often end at the forehead.
+  const hairAbove = face.height * 0.48;
+  const headTop = face.y - hairAbove;
+  const headBottom = face.y + face.height * 1.1;
+
+  // Head band uses ~50% of crop height; rest is margin + shoulders.
+  const headFrame = 0.5;
+  const topMargin = 0.1;
+
+  let cropH = Math.max((headBottom - headTop) / headFrame, face.height * 2.35);
+  let cropW = cropH * aspect;
+
+  if (cropW > imgW || cropH > imgH) {
+    const scale = Math.min(imgW / cropW, imgH / cropH, 1);
+    cropW *= scale;
+    cropH *= scale;
+  }
+
+  let y = headTop - cropH * topMargin;
   let x = cx - cropW / 2;
-  let y = cy - cropH * 0.42;
   x = clamp(x, 0, Math.max(0, imgW - cropW));
-  y = clamp(y, 0, Math.max(0, imgH - cropH));
+
+  if (y < 0) y = 0;
+
+  // Prefer trimming shoulders (shrink from bottom) over sliding down and clipping hair.
+  if (y + cropH > imgH) {
+    cropH = Math.max(1, imgH - y);
+    cropW = cropH * aspect;
+    x = clamp(cx - cropW / 2, 0, Math.max(0, imgW - cropW));
+    if (cropW > imgW) {
+      cropW = imgW;
+      cropH = cropW / aspect;
+      y = clamp(headTop - cropH * topMargin, 0, Math.max(0, imgH - cropH));
+      x = clamp(cx - cropW / 2, 0, Math.max(0, imgW - cropW));
+    }
+  }
 
   let width = Math.min(cropW, imgW);
   let height = width / aspect;
   if (y + height > imgH) {
-    height = imgH - y;
+    height = Math.max(1, imgH - y);
     width = height * aspect;
     x = clamp(cx - width / 2, 0, Math.max(0, imgW - width));
   }
   if (x + width > imgW) {
-    width = imgW - x;
+    width = Math.max(1, imgW - x);
     height = width / aspect;
   }
 
@@ -281,7 +310,7 @@ async function getFaceDetector(): Promise<FaceDetector | null> {
         return (await withTimeout(
           faceDetection.createDetector(
             faceDetection.SupportedModels.MediaPipeFaceDetector,
-            { runtime: "tfjs", modelType: "short", maxFaces: 1 },
+            { runtime: "tfjs", modelType: "full", maxFaces: 1 },
           ) as Promise<FaceDetector>,
           FACE_LOAD_MS,
           "Face detector",
@@ -506,18 +535,46 @@ export function cleanCutoutMatte(
   let qh = 0;
   let qt = 0;
   let seed = -1;
-  let seedScore = -1;
+  let minX = width;
+  let minY = height;
+  let maxX = 0;
+  let maxY = 0;
   for (let p = 0; p < pixelCount; p++) {
-    if (eroded[p] < 200) continue;
+    if (eroded[p] < 120) continue;
     const x = p % width;
     const y = (p / width) | 0;
-    // Prefer a solid pixel near the image center (the face/torso).
-    const score =
-      eroded[p] -
-      Math.hypot(x - width / 2, y - height / 2) * 0.15;
-    if (score > seedScore) {
-      seedScore = score;
-      seed = p;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  if (maxX >= minX && maxY >= minY) {
+    const sx = Math.round((minX + maxX) / 2);
+    const sy = Math.round((minY + maxY) / 2);
+    seed = sy * width + sx;
+    if (eroded[seed] < 120) {
+      seed = -1;
+      let best = -1;
+      let bestA = 0;
+      for (let p = 0; p < pixelCount; p++) {
+        if (eroded[p] <= bestA) continue;
+        bestA = eroded[p];
+        best = p;
+      }
+      seed = best;
+    }
+  } else {
+    let seedScore = -1;
+    for (let p = 0; p < pixelCount; p++) {
+      if (eroded[p] < 200) continue;
+      const x = p % width;
+      const y = (p / width) | 0;
+      const score =
+        eroded[p] - Math.hypot(x - width / 2, y - height / 2) * 0.15;
+      if (score > seedScore) {
+        seedScore = score;
+        seed = p;
+      }
     }
   }
   if (seed >= 0) {
@@ -636,7 +693,16 @@ export async function processPortrait(
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(cutout, 0, 0, canvas.width, canvas.height);
+    // Contain + center so a slightly tall cutout is not stretched and clipped at the top.
+    const scale = Math.min(
+      canvas.width / cutout.width,
+      canvas.height / cutout.height,
+    );
+    const dw = Math.max(1, Math.round(cutout.width * scale));
+    const dh = Math.max(1, Math.round(cutout.height * scale));
+    const dx = Math.round((canvas.width - dw) / 2);
+    const dy = Math.round((canvas.height - dh) / 2);
+    ctx.drawImage(cutout, dx, dy, dw, dh);
 
     const blob = await canvasToPng(canvas);
     const previewUrl = URL.createObjectURL(blob);
