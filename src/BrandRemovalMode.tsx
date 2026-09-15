@@ -90,6 +90,24 @@ export default function BrandRemovalMode() {
     );
   };
 
+  const runProcessQueue = async (queue: BrandRemovalItem[]) => {
+    const work = queue.filter((i) => i.status === "queued" && !i.parseError);
+    if (work.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      for (let i = 0; i < work.length; i++) {
+        setLiveNote(`Processing ${i + 1} / ${work.length}…`);
+        await processBrandRemovalItem(work[i], settings, patchItem);
+      }
+      setLiveNote("Batch finished.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Processing failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const addFiles = async (fileList: FileList | File[]) => {
     if (busy || readingUpload) return;
     setReadingUpload(true);
@@ -102,6 +120,7 @@ export default function BrandRemovalMode() {
         setError("No JPG, PNG, or WEBP images found.");
         return;
       }
+      let merged: BrandRemovalItem[] = [];
       setItems((prev) => {
         const next = [...prev];
         for (const item of incoming) {
@@ -118,9 +137,17 @@ export default function BrandRemovalMode() {
             next.push(item);
           }
         }
+        merged = next;
         return next;
       });
-      setLiveNote(`${incoming.length} image(s) loaded.`);
+      const toRun = merged.filter((i) => i.status === "queued" && !i.parseError);
+      setReadingUpload(false);
+      if (toRun.length > 0) {
+        setLiveNote(`Starting ${toRun.length} image(s)…`);
+        await runProcessQueue(toRun);
+      } else {
+        setLiveNote(`${incoming.length} image(s) loaded.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -130,23 +157,8 @@ export default function BrandRemovalMode() {
   };
 
   const processAll = async () => {
-    if (busy) return;
-    const queue = items.filter((i) => i.status === "queued" && !i.parseError);
-    if (queue.length === 0) return;
-    setBusy(true);
-    setError(null);
-    try {
-      for (let i = 0; i < queue.length; i++) {
-        const item = queue[i];
-        setLiveNote(`Processing ${i + 1} / ${queue.length}…`);
-        await processBrandRemovalItem(item, settings, patchItem);
-      }
-      setLiveNote("Batch finished.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Processing failed");
-    } finally {
-      setBusy(false);
-    }
+    if (busy || readingUpload) return;
+    await runProcessQueue(items);
   };
 
   const handleDownload = async () => {
@@ -281,7 +293,9 @@ export default function BrandRemovalMode() {
                   ? "Waiting for files…"
                   : busy
                     ? liveNote || "Working…"
-                    : `${doneCount} done · ${queuedCount} queued · ${errorCount} failed`}
+                    : queuedCount > 0
+                      ? `${doneCount} done · ${queuedCount} queued — click Remove brands to start`
+                      : `${doneCount} done · ${errorCount} failed`}
             </p>
           </div>
 

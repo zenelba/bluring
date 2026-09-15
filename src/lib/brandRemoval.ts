@@ -46,6 +46,11 @@ export interface BrandRemovalItem {
 const MAX_API_EDGE = 1536;
 const MAX_BODY_BYTES = 3.5 * 1024 * 1024;
 
+/** Strip leading "1. " / "2) " style enumeration from a target segment. */
+function stripLeadingEnumeration(segment: string): string {
+  return segment.replace(/^\d+[.)]\s*/, "").trim();
+}
+
 /** Basename segments separated by commas → removal targets. */
 export function parseBrandRemovalFilename(filename: string): {
   targets: string[];
@@ -54,7 +59,7 @@ export function parseBrandRemovalFilename(filename: string): {
   const base = filename.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
   const targets = base
     .split(",")
-    .map((part) => part.trim())
+    .map((part) => stripLeadingEnumeration(part.trim()))
     .filter(Boolean);
   if (targets.length === 0) {
     return {
