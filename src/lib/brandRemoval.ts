@@ -70,6 +70,28 @@ export function parseBrandRemovalFilename(filename: string): {
   return { targets, error: null };
 }
 
+const BEAR_TARGET_RE =
+  /\b(medved|medo|bear)\b|maskot[a]?\s*(medved|medveda)|medveda\s*maskot/i;
+
+function describeTargetForPrompt(raw: string): string {
+  const trimmed = raw.trim();
+  const quoted = `“${trimmed.replace(/"/g, "'")}”`;
+  if (BEAR_TARGET_RE.test(trimmed)) {
+    return `${quoted} (remove the brand’s white polar bear mascot — the full cartoon bear character on the packaging, including bow tie and pose; do not remove unrelated people or animals)`;
+  }
+  return quoted;
+}
+
+const PRODUCT_FRAMING = [
+  "Composition: keep the exact same camera angle, scale, perspective, and crop as the source image.",
+  "The complete packaging must remain fully visible — all corners, edges, lid, base, and sides of the box, tub, or wrap in frame with comfortable margin. Never zoom in, reframe, rotate, or trim off any part of the product.",
+].join(" ");
+
+const PRODUCT_BACKGROUND = [
+  "Background: keep a clean pure white studio seamless background (#FFFFFF), matching the original packshot.",
+  "Never replace the background with black, dark gray, or colored backdrops.",
+].join(" ");
+
 export function buildBrandEditPrompt(
   targets: string[],
   scene: BrandScene,
@@ -77,11 +99,16 @@ export function buildBrandEditPrompt(
   const list = targets
     .map((t) => t.trim())
     .filter(Boolean)
-    .map((t) => `“${t.replace(/"/g, "'")}”`)
+    .map(describeTargetForPrompt)
     .join(", ");
 
   if (!list) {
-    return "Remove all visible brand logos, wordmarks, and promotional text from this image. Do not add new text or logos.";
+    return [
+      "Remove all visible brand logos, wordmarks, and promotional text from this image.",
+      PRODUCT_FRAMING,
+      PRODUCT_BACKGROUND,
+      "Do not add new text or logos.",
+    ].join(" ");
   }
 
   if (scene === "product_3d") {
@@ -89,9 +116,11 @@ export function buildBrandEditPrompt(
       "Edit this product or packaging photograph.",
       `Remove every instance of the following brands, text, logos, mascots, and graphic marks: ${list}.`,
       "Search the entire frame including edges, side panels, top and bottom flaps, shrink wrap, stickers, embossed or printed labels on curved surfaces, and partial text at the image border.",
-      "Preserve the product shape, materials, lighting, shadows, and perspective.",
-      "Fill removed areas with realistically continued packaging or background.",
-      "Do not add any new text, logos, or watermarks.",
+      PRODUCT_FRAMING,
+      "Preserve the product shape, materials, lighting, soft shadows on white, and perspective.",
+      "Fill removed areas with realistically continued packaging artwork or seamless white background — no empty brown or gray placeholder blocks.",
+      PRODUCT_BACKGROUND,
+      "Do not add any new text, logos, mascots, or watermarks.",
     ].join(" ");
   }
 
@@ -264,6 +293,74 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType });
 }
 
+/** Flood-fill near-black backdrop from image edges (fixes spurious black studio BG). */
+function clearDarkBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const img = ctx.getImageData(0, 0, w, h);
+  const data = img.data;
+  const visited = new Uint8Array(w * h);
+  const maxCh = 48;
+  const isDark = (idx: number) => {
+    const r = data[idx];
+    const g = data[idx + 1];
+    const b = data[idx + 2];
+    return r <= maxCh && g <= maxCh && b <= maxCh;
+  };
+  const queue: number[] = [];
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    const p = y * w + x;
+    if (visited[p] || !isDark(p * 4)) return;
+    visited[p] = 1;
+    queue.push(p);
+  };
+  for (let x = 0; x < w; x++) {
+    push(x, 0);
+    push(x, h - 1);
+  }
+  for (let y = 0; y < h; y++) {
+    push(0, y);
+    push(w - 1, y);
+  }
+  while (queue.length) {
+    const p = queue.pop()!;
+    const x = p % w;
+    const y = (p - x) / w;
+    const i = p * 4;
+    data[i] = 255;
+    data[i + 1] = 255;
+    data[i + 2] = 255;
+    push(x - 1, y);
+    push(x + 1, y);
+    push(x, y - 1);
+    push(x, y + 1);
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+/** Match API output to input packshot framing on pure white. */
+async function normalizePackshotResult(
+  editedBlob: Blob,
+  targetW: number,
+  targetH: number,
+): Promise<Blob> {
+  const img = await loadImageFromBlob(editedBlob);
+  const canvas = document.createElement("canvas");
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas unavailable");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, targetW, targetH);
+  const scale = Math.min(targetW / img.naturalWidth, targetH / img.naturalHeight);
+  const dw = Math.round(img.naturalWidth * scale);
+  const dh = Math.round(img.naturalHeight * scale);
+  const dx = Math.round((targetW - dw) / 2);
+  const dy = Math.round((targetH - dh) / 2);
+  ctx.drawImage(img, dx, dy, dw, dh);
+  clearDarkBackdrop(ctx, targetW, targetH);
+  return canvasToBlob(canvas, "image/png");
+}
+
 export function outputBrandFilename(sourceName: string): string {
   const base = sourceName.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
   const safe = base
@@ -315,7 +412,14 @@ export async function processBrandRemovalItem(
       scene: analysis.scene,
     });
 
-    const resultBlob = base64ToBlob(edited.imageBase64, edited.mimeType);
+    let resultBlob = base64ToBlob(edited.imageBase64, edited.mimeType);
+    if (analysis.scene === "product_3d") {
+      resultBlob = await normalizePackshotResult(
+        resultBlob,
+        prepared.width,
+        prepared.height,
+      );
+    }
     const resultUrl = URL.createObjectURL(resultBlob);
 
     const next: BrandRemovalItem = {

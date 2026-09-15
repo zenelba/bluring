@@ -234,7 +234,11 @@ export default function BrandRemovalMode() {
             </p>
             <p className="osebe-hint" style={{ marginTop: "0.35rem" }}>
               V imenu datoteke z vejico ločite, kaj odstraniti — npr.{" "}
-              <code>slika, ledo logo, medo maskota.jpg</code>
+              <code>slika, ledo logo, maskota medveda.jpg</code>
+              <span className="osebe-hint">
+                {" "}
+                (medved / maskota medveda → bel medved Ledo)
+              </span>
             </p>
           </div>
           <input
