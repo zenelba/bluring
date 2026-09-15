@@ -755,6 +755,26 @@
   overflow: auto;
 }
 
+.osebe-brand-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin: 0.35rem 0 0.4rem;
+}
+
+.osebe-brand-chip {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 900px) {
   .osebe-shell {
     grid-template-columns: 1fr;

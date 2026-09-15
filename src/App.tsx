@@ -31,6 +31,7 @@ import {
 import PortraitsMode from "./PortraitsMode";
 import CollagesMode from "./CollagesMode";
 import AudioVideoMode from "./AudioVideoMode";
+import BrandRemovalMode from "./BrandRemovalMode";
 import "./App.css";
 
 type AppMode =
@@ -40,7 +41,8 @@ type AppMode =
   | "report"
   | "portraits"
   | "collages"
-  | "av";
+  | "av"
+  | "brandRemoval";
 
 const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
   { id: "blur", label: "Logo blur" },
@@ -50,9 +52,13 @@ const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
   { id: "portraits", label: "Faces" },
   { id: "collages", label: "Collages" },
   { id: "av", label: "Audio / Video" },
+  { id: "brandRemoval", label: "Brand removal" },
 ];
 
 function modeSubtitle(mode: AppMode): string {
+  if (mode === "brandRemoval") {
+    return "Remove logos and brand text from images using AI (filename lists targets)";
+  }
   if (mode === "av") {
     return "Download YouTube or Facebook media, transcribe, and extract slides";
   }
@@ -653,7 +659,8 @@ export default function App() {
           {image &&
             mode !== "portraits" &&
             mode !== "collages" &&
-            mode !== "av" && (
+            mode !== "av" &&
+            mode !== "brandRemoval" && (
             <button type="button" className="btn btn--ghost" onClick={reset}>
               New image
             </button>
@@ -668,6 +675,8 @@ export default function App() {
         <CollagesMode />
       ) : mode === "av" ? (
         <AudioVideoMode />
+      ) : mode === "brandRemoval" ? (
+        <BrandRemovalMode />
       ) : (
       <div className="main">
         <aside className="sidebar">

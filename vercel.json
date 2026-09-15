@@ -26,6 +26,15 @@
       "maxDuration": 60,
       "includeFiles": "api/helpers/**",
       "memory": 1024
+    },
+    "api/brand-analyze.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
+    "api/brand-edit.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**",
+      "memory": 1024
     }
   }
 }

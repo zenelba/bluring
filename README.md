@@ -4,7 +4,7 @@ Web app for image processing, collage layout, portrait pipelines, and audio/vide
 
 **Live:** [bluring-xi.vercel.app](https://bluring-xi.vercel.app)
 
-Access is gated behind an access code (session cookie). Server-side features (Attention saliency, Audio/Video download & transcription) require a valid session and the env vars below.
+Access is gated behind an access code (session cookie). Server-side features (Attention saliency, Audio/Video, Brand removal) require a valid session and the env vars below.
 
 ---
 
@@ -19,6 +19,17 @@ Access is gated behind an access code (session cookie). Server-side features (At
 | **Faces** | Batch portrait pipeline: face crop, optional BG removal, ZIP export |
 | **Collages** | Sort images by filename, strip whitespace, optional BG fill, ribbons or packed grids |
 | **Audio / Video** | Download YouTube/Facebook media, pick quality, transcribe, extract slides |
+| **Brand removal** | AI removes logos/text named in comma-separated filenames (2D vs 3D packaging prompts) |
+
+### Brand removal
+
+- Upload images or ZIP (JPG, PNG, WEBP)
+- **Filename rule:** comma-separated removal targets, e.g. `packshot, ledo logo, medo maskota.jpg`
+- **Auto** classifies flat 2D graphic vs 3D product/packaging (OpenAI Vision); override in sidebar
+- **3D** prompts emphasize edge labels, side panels, and wrap-around packaging text
+- OpenAI **gpt-image-1** edit per image; download ZIP of results
+- Requires `OPENAI_API_KEY`; optional `OPENAI_BRAND_VISION_MODEL`, `OPENAI_BRAND_IMAGE_MODEL`
+- Images are resized client-side before API calls (~1536px max edge). Processing is sequential (cost/latency).
 
 ### Collages
 
@@ -57,7 +68,7 @@ npm run dev
 Open [http://localhost:5173](http://localhost:5173).
 
 - **UI only:** `npm run dev` is enough for Logo blur, Foveal, Faces, and Collages.
-- **API routes** (`/api/access`, `/api/saliency`, `/api/av-*`): use [Vercel CLI](https://vercel.com/docs/cli) locally:
+- **API routes** (`/api/access`, `/api/saliency`, `/api/av-*`, `/api/brand-*`): use [Vercel CLI](https://vercel.com/docs/cli) locally:
 
 ```bash
 cp .env.example .env.local
@@ -78,8 +89,10 @@ Copy `.env.example` → `.env.local` and fill in values as needed.
 | `HF_SALIENCY_SPACE_URL` | Optional | Gradio Space URL (default: alexanderkroner/saliency) |
 | `COBALT_API_URL` | Audio/Video downloads | Base URL of your Cobalt instance (no trailing path required) |
 | `COBALT_API_KEY` | Optional | `Api-Key` if Cobalt auth is enabled |
-| `OPENAI_API_KEY` | Transcription | Whisper API |
+| `OPENAI_API_KEY` | Transcription, Brand removal | Whisper + Vision + image edits |
 | `OPENAI_BASE_URL` | Optional | OpenAI-compatible API base |
+| `OPENAI_BRAND_VISION_MODEL` | Optional | 2D/3D classify (default `gpt-4o-mini`) |
+| `OPENAI_BRAND_IMAGE_MODEL` | Optional | Brand edit model (default `gpt-image-1`) |
 
 See [`.env.example`](.env.example) for a template.
 
@@ -133,6 +146,8 @@ Point `COBALT_API_URL` at that URL. Docs: [run an instance](https://github.com/i
 | `POST /api/av-download` | Start download for chosen quality |
 | `GET /api/av-fetch` | Proxy media bytes to the browser |
 | `POST /api/av-transcribe` | Whisper transcription |
+| `POST /api/brand-analyze` | Classify 2D graphic vs 3D packaging |
+| `POST /api/brand-edit` | OpenAI image edit — remove listed brands |
 
 All except `/api/access` require a valid access cookie.
 
@@ -143,7 +158,7 @@ All except `/api/access` require a valid access cookie.
 - **Frontend:** React 19, Vite, TypeScript
 - **Image ML (browser):** TensorFlow.js face detection, `@imgly/background-removal`, ONNX Runtime Web
 - **Export:** `pptxgenjs`, `jszip`, `file-saver`, `jspdf`
-- **Backend:** Vercel serverless (Node), Hugging Face Gradio, Cobalt, OpenAI Whisper
+- **Backend:** Vercel serverless (Node), Hugging Face Gradio, Cobalt, OpenAI (Whisper, Vision, gpt-image-1)
 
 ---
 
