@@ -4,9 +4,14 @@
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
-
-const COBALT_API_URL = (process.env.COBALT_API_URL ?? "").replace(/\/$/, "");
-const COBALT_API_KEY = process.env.COBALT_API_KEY ?? "";
+import {
+  assertCobaltConfigured,
+  getCobaltApiKey,
+} from "./helpers/cobaltEnv.js";
+import {
+  lookupMixcloudCloudcast,
+  parseMixcloudShowUrl,
+} from "./helpers/mixcloud.js";
 
 type CobaltPickerItem = {
   type?: string;
@@ -35,7 +40,8 @@ const QUALITIES = [
   { id: "audio-mp3", label: "Audio only · MP3", kind: "audio", downloadMode: "audio" },
 ] as const;
 
-function detectPlatform(url: string): "youtube" | "facebook" | "other" | "unknown" {
+function detectPlatform(url: string): "youtube" | "facebook" | "mixcloud" | "other" | "unknown" {
+  if (parseMixcloudShowUrl(url)) return "mixcloud";
   try {
     const host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
     if (
@@ -65,19 +71,16 @@ function cobaltHeaders(): Record<string, string> {
     Accept: "application/json",
     "Content-Type": "application/json",
   };
-  if (COBALT_API_KEY) {
-    headers.Authorization = `Api-Key ${COBALT_API_KEY}`;
+  const apiKey = getCobaltApiKey();
+  if (apiKey) {
+    headers.Authorization = `Api-Key ${apiKey}`;
   }
   return headers;
 }
 
 async function cobaltPost(body: Record<string, unknown>): Promise<CobaltResponse> {
-  if (!COBALT_API_URL) {
-    throw new Error(
-      "Media download is not configured. Set COBALT_API_URL to a self-hosted Cobalt instance.",
-    );
-  }
-  const res = await fetch(`${COBALT_API_URL}/`, {
+  const cobaltApiUrl = assertCobaltConfigured();
+  const res = await fetch(`${cobaltApiUrl}/`, {
     method: "POST",
     headers: cobaltHeaders(),
     body: JSON.stringify(body),
@@ -130,6 +133,32 @@ export default async function handler(
   }
 
   const platform = detectPlatform(url);
+
+  const mix = parseMixcloudShowUrl(url);
+  if (mix) {
+    try {
+      const show = await lookupMixcloudCloudcast(mix.username, mix.slug);
+      res.status(200).json({
+        platform: "mixcloud",
+        sourceUrl: url,
+        title: show.title,
+        qualities: [
+          {
+            id: "mixcloud-audio",
+            label: "Audio stream · full show",
+            kind: "audio",
+            downloadMode: "audio",
+          },
+        ],
+        note: "Mixcloud show — audio stream (no Cobalt needed).",
+      });
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Mixcloud probe failed";
+      res.status(400).json({ error: message });
+      return;
+    }
+  }
 
   try {
     // Lightweight reachability check — Cobalt does not enumerate qualities,

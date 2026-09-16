@@ -3,16 +3,15 @@
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
-
-const COBALT_API_URL = (process.env.COBALT_API_URL ?? "").replace(/\/$/, "");
-const COBALT_API_KEY = process.env.COBALT_API_KEY ?? "";
+import { getCobaltApiKey, getCobaltApiUrl } from "./helpers/cobaltEnv.js";
 
 function isAllowedFetchUrl(raw: string): boolean {
   try {
     const u = new URL(raw);
     if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-    if (!COBALT_API_URL) return false;
-    const cobaltHost = new URL(COBALT_API_URL).hostname;
+    const cobaltApiUrl = getCobaltApiUrl();
+    if (!cobaltApiUrl) return false;
+    const cobaltHost = new URL(cobaltApiUrl).hostname;
     // Allow Cobalt host and common CDN hosts Cobalt redirects to.
     if (u.hostname === cobaltHost) return true;
     if (u.hostname.endsWith(`.${cobaltHost}`)) return true;
@@ -69,11 +68,13 @@ export default async function handler(
 
   try {
     const headers: Record<string, string> = {};
-    if (COBALT_API_KEY && COBALT_API_URL) {
+    const cobaltApiUrl = getCobaltApiUrl();
+    const cobaltApiKey = getCobaltApiKey();
+    if (cobaltApiKey && cobaltApiUrl) {
       try {
-        const cobaltHost = new URL(COBALT_API_URL).hostname;
+        const cobaltHost = new URL(cobaltApiUrl).hostname;
         if (new URL(target).hostname === cobaltHost) {
-          headers.Authorization = `Api-Key ${COBALT_API_KEY}`;
+          headers.Authorization = `Api-Key ${cobaltApiKey}`;
         }
       } catch {
         /* ignore */

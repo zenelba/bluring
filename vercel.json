@@ -23,7 +23,7 @@
       "includeFiles": "api/helpers/**"
     },
     "api/av-transcribe.ts": {
-      "maxDuration": 60,
+      "maxDuration": 300,
       "includeFiles": "api/helpers/**",
       "memory": 1024
     },

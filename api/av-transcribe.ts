@@ -1,16 +1,20 @@
 /**
- * Transcribe audio/video with OpenAI Whisper.
- * Body: JSON { fileBase64, filename?, mimeType? } (keep under ~4MB for Vercel).
+ * Transcribe audio/video via Soniox (async STT).
+ * Body: { downloadUrl } from /api/av-download, or { fileBase64, filename } for small local uploads.
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
+import {
+  fetchMediaTargetBuffer,
+  parseAvFetchTarget,
+} from "./helpers/mediaFetch.js";
+import {
+  getSonioxLanguageHint,
+  getSonioxSpeakerDiarizationDefault,
+} from "./helpers/sonioxEnv.js";
+import { transcribeWithSoniox } from "./helpers/sonioxTranscribe.js";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const OPENAI_BASE = (
-  process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"
-).replace(/\/$/, "");
-
-const MAX_BYTES = 4 * 1024 * 1024;
+const MAX_INLINE_BYTES = 4 * 1024 * 1024;
 
 export default async function handler(
   req: {
@@ -20,6 +24,9 @@ export default async function handler(
       fileBase64?: string;
       filename?: string;
       mimeType?: string;
+      downloadUrl?: string;
+      language?: string;
+      speakerDiarization?: boolean;
     };
   },
   res: {
@@ -41,74 +48,76 @@ export default async function handler(
     res.status(401).json({ error: "Access code required" });
     return;
   }
-  if (!OPENAI_API_KEY) {
-    res.status(503).json({
-      error:
-        "Transcription is not configured. Set OPENAI_API_KEY in the environment.",
-    });
-    return;
-  }
 
-  const fileBase64 = req.body?.fileBase64;
-  if (!fileBase64 || typeof fileBase64 !== "string") {
-    res.status(400).json({ error: "Missing fileBase64" });
-    return;
-  }
+  const language =
+    typeof req.body?.language === "string" && req.body.language.trim()
+      ? req.body.language.trim()
+      : getSonioxLanguageHint();
+  const speakerDiarization =
+    typeof req.body?.speakerDiarization === "boolean"
+      ? req.body.speakerDiarization
+      : getSonioxSpeakerDiarizationDefault();
 
   try {
-    const buffer = Buffer.from(fileBase64, "base64");
-    if (buffer.byteLength === 0) {
-      res.status(400).json({ error: "Empty file" });
-      return;
+    let buffer: Buffer;
+    let filename = "media.mp3";
+
+    const downloadUrl =
+      typeof req.body?.downloadUrl === "string"
+        ? req.body.downloadUrl.trim()
+        : "";
+    if (downloadUrl) {
+      const target = parseAvFetchTarget(downloadUrl);
+      if (!target) {
+        res.status(400).json({ error: "Invalid downloadUrl" });
+        return;
+      }
+      buffer = await fetchMediaTargetBuffer(target);
+      const nameParam = (() => {
+        try {
+          return new URL(downloadUrl, "http://localhost").searchParams.get(
+            "name",
+          );
+        } catch {
+          return null;
+        }
+      })();
+      if (nameParam) filename = nameParam;
+    } else {
+      const fileBase64 = req.body?.fileBase64;
+      if (!fileBase64 || typeof fileBase64 !== "string") {
+        res.status(400).json({
+          error: "Missing downloadUrl or fileBase64",
+        });
+        return;
+      }
+      buffer = Buffer.from(fileBase64, "base64");
+      if (buffer.byteLength === 0) {
+        res.status(400).json({ error: "Empty file" });
+        return;
+      }
+      if (buffer.byteLength > MAX_INLINE_BYTES) {
+        res.status(413).json({
+          error:
+            "File too large for inline upload (max 4MB). Use a YouTube/Facebook link so the server can fetch audio.",
+        });
+        return;
+      }
+      filename =
+        typeof req.body?.filename === "string" && req.body.filename.trim()
+          ? req.body.filename.trim()
+          : filename;
     }
-    if (buffer.byteLength > MAX_BYTES) {
-      res.status(413).json({
-        error:
-          "File too large for transcription on this host (max 4MB). Choose Audio only, or upload a shorter clip.",
-      });
-      return;
-    }
 
-    const filename =
-      typeof req.body?.filename === "string" && req.body.filename.trim()
-        ? req.body.filename.trim()
-        : "media.mp3";
-    const mimeType =
-      typeof req.body?.mimeType === "string" && req.body.mimeType.trim()
-        ? req.body.mimeType.trim()
-        : "application/octet-stream";
-
-    const form = new FormData();
-    form.append(
-      "file",
-      new Blob([new Uint8Array(buffer)], { type: mimeType }),
-      filename,
-    );
-    form.append("model", "whisper-1");
-    form.append("response_format", "verbose_json");
-
-    const upstream = await fetch(`${OPENAI_BASE}/audio/transcriptions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: form,
+    const result = await transcribeWithSoniox(buffer, filename, {
+      language,
+      speakerDiarization,
     });
-    const data = (await upstream.json().catch(() => ({}))) as {
-      text?: string;
-      language?: string;
-      error?: { message?: string };
-    };
-    if (!upstream.ok) {
-      res.status(502).json({
-        error: data.error?.message ?? `Whisper failed (${upstream.status})`,
-      });
-      return;
-    }
-    res.status(200).json({
-      text: data.text ?? "",
-      language: data.language,
-    });
+
+    res.status(200).json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Transcription failed";
-    res.status(500).json({ error: message });
+    const status = message.includes("not configured") ? 503 : 500;
+    res.status(status).json({ error: message });
   }
 }

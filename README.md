@@ -18,7 +18,7 @@ Access is gated behind an access code (session cookie). Server-side features (At
 | **PowerPoint** | Build a `.pptx` deck from blur, attention, and foveal analyses |
 | **Faces** | Batch portrait pipeline: face crop, optional BG removal, ZIP export |
 | **Collages** | Sort images by filename, strip whitespace, optional BG fill, ribbons or packed grids |
-| **Audio / Video** | Download YouTube/Facebook media, pick quality, transcribe, extract slides |
+| **Audio / Video** | Download YouTube/Facebook (Cobalt) or Mixcloud shows, transcribe, extract slides |
 | **Brand removal** | AI removes logos/text named in comma-separated filenames (2D vs 3D packaging prompts) |
 
 ### Brand removal
@@ -49,12 +49,13 @@ Access is gated behind an access code (session cookie). Server-side features (At
 ### Audio / Video
 
 - Paste a **YouTube** or **Facebook** URL → choose quality (1080p, 720p, audio-only, …)
+- Paste a **Mixcloud show** URL (`mixcloud.com/user/show-slug`) → audio stream (no Cobalt; resolved via Mixcloud GraphQL)
 - Multi-item links show a picker when Cobalt returns several assets
-- **Transcription** (OpenAI Whisper, on by default)
-- **Slide detection** on video: export changed frames as images + PDF (both on by default)
+- **Transcription** (Soniox async STT, on by default; Slovenian hint + optional speaker labels)
+- **Slide detection** on video: export changed frames as images + PDF (both on by default). The first detected slide locks the bright projection screen; later frames are perspective-corrected to a 16∶9 rectangle (room / speaker cropped out when detection succeeds).
 - Or upload a local video/audio file for analysis only
 
-Requires a **self-hosted [Cobalt](https://github.com/imputnet/cobalt)** instance (`COBALT_API_URL`). Public `cobalt.tools` is not intended for third-party apps. For production on Vercel, Cobalt must be reachable over **public HTTPS** (Synology reverse proxy, Cloudflare Tunnel, etc.).
+Requires a **self-hosted [Cobalt](https://github.com/imputnet/cobalt)** instance (`COBALT_API_URL`) for YouTube/Facebook. Mixcloud shows work without Cobalt. Public `cobalt.tools` is not intended for third-party apps. For production on Vercel, Cobalt must be reachable over **public HTTPS** (Synology reverse proxy, Cloudflare Tunnel, etc.).
 
 ---
 
@@ -67,8 +68,8 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173).
 
-- **UI only:** `npm run dev` is enough for Logo blur, Foveal, Faces, and Collages.
-- **API routes** (`/api/access`, `/api/saliency`, `/api/av-*`, `/api/brand-*`): use [Vercel CLI](https://vercel.com/docs/cli) locally:
+- **UI only:** `npm run dev` is enough for Logo blur, Foveal, Faces, and Collages (only `/api/access` is emulated in Vite).
+- **Audio/Video, Attention, Brand removal:** plain `npm run dev` returns **404/503** on `/api/av-*` etc. Use [Vercel CLI](https://vercel.com/docs/cli) instead:
 
 ```bash
 cp .env.example .env.local
@@ -89,7 +90,11 @@ Copy `.env.example` → `.env.local` and fill in values as needed.
 | `HF_SALIENCY_SPACE_URL` | Optional | Gradio Space URL (default: alexanderkroner/saliency) |
 | `COBALT_API_URL` | Audio/Video downloads | Base URL of your Cobalt instance (no trailing path required) |
 | `COBALT_API_KEY` | Optional | `Api-Key` if Cobalt auth is enabled |
-| `OPENAI_API_KEY` | Transcription, Brand removal | Whisper + Vision + image edits |
+| `SONIOX_API_KEY` | Audio/Video transcription | [Soniox](https://soniox.com) API key |
+| `SONIOX_LANGUAGE` | Optional | Language hint (default `sl`) |
+| `SONIOX_SPEAKER_DIARIZATION` | Optional | `true` / `false` (default `true`) |
+| `SONIOX_API_BASE_URL` | Optional | Default `https://api.soniox.com` |
+| `OPENAI_API_KEY` | Brand removal | Vision + gpt-image-1 edits |
 | `OPENAI_BASE_URL` | Optional | OpenAI-compatible API base |
 | `OPENAI_BRAND_VISION_MODEL` | Optional | 2D/3D classify (default `gpt-4o-mini`) |
 | `OPENAI_BRAND_IMAGE_MODEL` | Optional | Brand edit model (default `gpt-image-1`) |
@@ -145,7 +150,7 @@ Point `COBALT_API_URL` at that URL. Docs: [run an instance](https://github.com/i
 | `POST /api/av-probe` | Resolve media URL and quality options (Cobalt) |
 | `POST /api/av-download` | Start download for chosen quality |
 | `GET /api/av-fetch` | Proxy media bytes to the browser |
-| `POST /api/av-transcribe` | Whisper transcription |
+| `POST /api/av-transcribe` | Soniox transcription (server fetches media via `downloadUrl`) |
 | `POST /api/brand-analyze` | Classify 2D graphic vs 3D packaging |
 | `POST /api/brand-edit` | OpenAI image edit — remove listed brands |
 
@@ -158,7 +163,7 @@ All except `/api/access` require a valid access cookie.
 - **Frontend:** React 19, Vite, TypeScript
 - **Image ML (browser):** TensorFlow.js face detection, `@imgly/background-removal`, ONNX Runtime Web
 - **Export:** `pptxgenjs`, `jszip`, `file-saver`, `jspdf`
-- **Backend:** Vercel serverless (Node), Hugging Face Gradio, Cobalt, OpenAI (Whisper, Vision, gpt-image-1)
+- **Backend:** Vercel serverless (Node), Hugging Face Gradio, Cobalt, Soniox, OpenAI (Vision, gpt-image-1)
 
 ---
 

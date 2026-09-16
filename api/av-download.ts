@@ -3,9 +3,11 @@
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
-
-const COBALT_API_URL = (process.env.COBALT_API_URL ?? "").replace(/\/$/, "");
-const COBALT_API_KEY = process.env.COBALT_API_KEY ?? "";
+import {
+  assertCobaltConfigured,
+  getCobaltApiKey,
+} from "./helpers/cobaltEnv.js";
+import { resolveMixcloudShow, parseMixcloudShowUrl } from "./helpers/mixcloud.js";
 
 type CobaltResponse = {
   status?: string;
@@ -21,19 +23,16 @@ function cobaltHeaders(): Record<string, string> {
     Accept: "application/json",
     "Content-Type": "application/json",
   };
-  if (COBALT_API_KEY) {
-    headers.Authorization = `Api-Key ${COBALT_API_KEY}`;
+  const apiKey = getCobaltApiKey();
+  if (apiKey) {
+    headers.Authorization = `Api-Key ${apiKey}`;
   }
   return headers;
 }
 
 async function cobaltPost(body: Record<string, unknown>): Promise<CobaltResponse> {
-  if (!COBALT_API_URL) {
-    throw new Error(
-      "Media download is not configured. Set COBALT_API_URL to a self-hosted Cobalt instance.",
-    );
-  }
-  const res = await fetch(`${COBALT_API_URL}/`, {
+  const cobaltApiUrl = assertCobaltConfigured();
+  const res = await fetch(`${cobaltApiUrl}/`, {
     method: "POST",
     headers: cobaltHeaders(),
     body: JSON.stringify(body),
@@ -98,6 +97,23 @@ export default async function handler(
   if (!url) {
     res.status(400).json({ error: "Missing url" });
     return;
+  }
+
+  if (parseMixcloudShowUrl(url)) {
+    try {
+      const show = await resolveMixcloudShow(url);
+      const filename = sanitizeFilename(show.filename);
+      res.status(200).json({
+        status: "redirect",
+        downloadUrl: `/api/av-fetch?u=${encodeURIComponent(show.streamUrl)}&name=${encodeURIComponent(filename)}`,
+        filename,
+      });
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Mixcloud download failed";
+      res.status(400).json({ error: message });
+      return;
+    }
   }
 
   const downloadMode = body.downloadMode ?? "auto";

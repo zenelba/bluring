@@ -1,8 +1,15 @@
 import { saveAs } from "file-saver";
 import JSZip from "jszip";
 import { jsPDF } from "jspdf";
+import {
+  canvasToDataUrl,
+  canvasToJpegBlob,
+  detectPresentationQuad,
+  type SlideQuad,
+  warpQuadToSlideCanvas,
+} from "./slideNormalize";
 
-export type AvPlatform = "youtube" | "facebook" | "other" | "unknown";
+export type AvPlatform = "youtube" | "facebook" | "mixcloud" | "other" | "unknown";
 
 export type AvQualityOption = {
   id: string;
@@ -37,18 +44,30 @@ export type AvDownloadResult = {
   blob: Blob;
   filename: string;
   mimeType: string;
+  /** Same-origin proxy URL — pass to transcription to avoid 4MB inline limits. */
+  downloadUrl?: string;
+};
+
+export type AvTranscribeOptions = {
+  language?: string;
+  speakerDiarization?: boolean;
+  downloadUrl?: string;
 };
 
 export type AvJobOptions = {
   transcribe: boolean;
   exportSlideImages: boolean;
   exportSlidePdf: boolean;
+  language: string;
+  speakerDiarization: boolean;
 };
 
 export const DEFAULT_AV_JOB_OPTIONS: AvJobOptions = {
   transcribe: true,
   exportSlideImages: true,
   exportSlidePdf: true,
+  language: "sl",
+  speakerDiarization: true,
 };
 
 /** Standard quality ladder shown when Cobalt does not return a picker. */
@@ -105,7 +124,22 @@ export const AV_QUALITY_OPTIONS: AvQualityOption[] = [
 
 export function detectAvPlatform(url: string): AvPlatform {
   try {
-    const host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    const parsed = new URL(url.trim());
+    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+    if (
+      host === "mixcloud.com" ||
+      host === "beta.mixcloud.com" ||
+      host === "m.mixcloud.com"
+    ) {
+      const path = parsed.pathname;
+      if (
+        /^\/[^/]+\/(?!stream\/?|uploads\/?|favorites\/?|listens\/?|playlists\/)[^/]+\/?$/i.test(
+          path,
+        )
+      ) {
+        return "mixcloud";
+      }
+    }
     if (
       host === "youtube.com" ||
       host === "m.youtube.com" ||
@@ -153,9 +187,15 @@ async function avFetch<T>(
     error?: string;
   };
   if (!res.ok) {
-    throw new Error(
-      typeof data.error === "string" ? data.error : `Request failed (${res.status})`,
-    );
+    if (typeof data.error === "string") {
+      throw new Error(data.error);
+    }
+    if (res.status === 404) {
+      throw new Error(
+        "API route not found. Use `npx vercel dev` locally (not plain `npm run dev`) so `/api/av-*` routes exist.",
+      );
+    }
+    throw new Error(`Request failed (${res.status})`);
   }
   return data;
 }
@@ -194,17 +234,32 @@ export async function downloadAvMedia(input: {
     blob,
     filename: meta.filename || "media.bin",
     mimeType: blob.type || "application/octet-stream",
+    downloadUrl: meta.downloadUrl,
   };
 }
 
 export async function transcribeAvBlob(
   blob: Blob,
   filename: string,
+  options: AvTranscribeOptions = {},
 ): Promise<{ text: string; language?: string }> {
+  if (options.downloadUrl) {
+    return avFetch<{ text: string; language?: string }>("/api/av-transcribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        downloadUrl: options.downloadUrl,
+        filename,
+        language: options.language,
+        speakerDiarization: options.speakerDiarization,
+      }),
+    });
+  }
+
   const maxBytes = 4 * 1024 * 1024;
   if (blob.size > maxBytes) {
     throw new Error(
-      "File too large for transcription (max 4MB). Choose Audio only quality, or a shorter clip.",
+      "File too large for inline transcription (max 4MB). Paste a media link and download first, or use Audio only.",
     );
   }
   const buffer = await blob.arrayBuffer();
@@ -216,6 +271,8 @@ export async function transcribeAvBlob(
       fileBase64,
       filename,
       mimeType: blob.type || "application/octet-stream",
+      language: options.language,
+      speakerDiarization: options.speakerDiarization,
     }),
   });
 }
@@ -306,6 +363,7 @@ export async function detectSlidesFromVideo(
 
     const slides: DetectedSlide[] = [];
     let prevHash: Float32Array | null = null;
+    let lockedQuad: SlideQuad | null = null;
     const times: number[] = [];
     for (let t = 0; t < duration; t += sampleIntervalSec) times.push(t);
     if (times[times.length - 1] < duration - 0.05) {
@@ -323,19 +381,37 @@ export async function detectSlidesFromVideo(
       canvas.width = w;
       canvas.height = h;
       ctx.drawImage(video, 0, 0, w, h);
-      const hash = frameHash(ctx, w, h);
+
+      if (lockedQuad == null) {
+        lockedQuad = detectPresentationQuad(ctx, w, h);
+        if (lockedQuad) {
+          options?.onProgress?.(
+            "Locked presentation screen from first slide — normalizing frames…",
+          );
+        }
+      }
+
+      const hashCanvas = lockedQuad
+        ? warpQuadToSlideCanvas(canvas, lockedQuad, 480)
+        : canvas;
+      const hashCtx = hashCanvas.getContext("2d", { willReadFrequently: true });
+      if (!hashCtx) continue;
+
+      const hash = frameHash(
+        hashCtx,
+        hashCanvas.width,
+        hashCanvas.height,
+      );
       const changed =
         prevHash == null || hashDistance(prevHash, hash) >= changeThreshold;
       if (!changed) continue;
 
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error("Frame encode failed"))),
-          "image/jpeg",
-          0.92,
-        );
-      });
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const slideCanvas = lockedQuad
+        ? warpQuadToSlideCanvas(canvas, lockedQuad, 1920)
+        : canvas;
+
+      const blob = await canvasToJpegBlob(slideCanvas);
+      const dataUrl = canvasToDataUrl(slideCanvas);
       slides.push({
         index: slides.length + 1,
         timeSec: t,

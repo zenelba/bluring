@@ -60,7 +60,7 @@ function modeSubtitle(mode: AppMode): string {
     return "Remove logos and brand text from images using AI (filename lists targets)";
   }
   if (mode === "av") {
-    return "Download YouTube or Facebook media, transcribe, and extract slides";
+    return "Download YouTube, Facebook, or Mixcloud media; transcribe, and extract slides";
   }
   if (mode === "collages") {
     return "Compose vertical or horizontal ribbons and packed collages";

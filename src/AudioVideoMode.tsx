@@ -130,11 +130,16 @@ export default function AudioVideoMode() {
     let foundSlides: DetectedSlide[] = [];
 
     if (options.transcribe) {
-      setLiveNote("Transcribing with Whisper…");
+      setLiveNote("Transcribing with Soniox…");
       try {
         const result = await transcribeAvBlob(
           downloaded.blob,
           downloaded.filename,
+          {
+            downloadUrl: downloaded.downloadUrl,
+            language: options.language,
+            speakerDiarization: options.speakerDiarization,
+          },
         );
         text = result.text;
         setTranscript(text);
@@ -276,7 +281,7 @@ export default function AudioVideoMode() {
             <input
               className="osebe-input"
               type="url"
-              placeholder="https://youtube.com/watch?v=… or facebook.com/…"
+              placeholder="YouTube, Facebook, Mixcloud show URL…"
               value={url}
               disabled={busy}
               onChange={(e) => setUrl(e.target.value)}
@@ -289,7 +294,9 @@ export default function AudioVideoMode() {
                 ? "YouTube link detected"
                 : platform === "facebook"
                   ? "Facebook link detected"
-                  : platform === "other"
+                  : platform === "mixcloud"
+                    ? "Mixcloud show detected (audio stream)"
+                    : platform === "other"
                     ? "Other host — Cobalt will try if supported"
                     : "Paste a public video/audio URL"}
             </span>
@@ -338,8 +345,38 @@ export default function AudioVideoMode() {
                   setOptions((o) => ({ ...o, transcribe: e.target.checked }))
                 }
               />
-              Transcription (default)
+              Transcription (Soniox)
             </label>
+            {options.transcribe && (
+              <>
+                <label className="osebe-field" style={{ marginTop: "0.5rem" }}>
+                  <span className="osebe-field__label">Language hint</span>
+                  <input
+                    className="osebe-input"
+                    value={options.language}
+                    disabled={busy}
+                    onChange={(e) =>
+                      setOptions((o) => ({ ...o, language: e.target.value }))
+                    }
+                    placeholder="sl"
+                  />
+                </label>
+                <label className="osebe-check">
+                  <input
+                    type="checkbox"
+                    checked={options.speakerDiarization}
+                    disabled={busy}
+                    onChange={(e) =>
+                      setOptions((o) => ({
+                        ...o,
+                        speakerDiarization: e.target.checked,
+                      }))
+                    }
+                  />
+                  Speaker diarization (Govorec 1, 2, …)
+                </label>
+              </>
+            )}
             <label className="osebe-check">
               <input
                 type="checkbox"

@@ -23,6 +23,23 @@ function accessApiDevPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url?.split("?")[0];
+        if (!url?.startsWith("/api/")) {
+          next();
+          return;
+        }
+        if (
+          url !== "/api/access" &&
+          !url.startsWith("/api/access/")
+        ) {
+          const payload = JSON.stringify({
+            error:
+              "This API route is not available in `npm run dev`. Stop Vite and run `npx vercel dev` (with `.env.local`) for Audio/Video, Attention, and Brand removal.",
+          });
+          res.statusCode = 503;
+          res.setHeader("Content-Type", "application/json");
+          res.end(payload);
+          return;
+        }
         if (url !== "/api/access") {
           next();
           return;

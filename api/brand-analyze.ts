@@ -3,13 +3,16 @@
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
+import {
+  assertOpenAiConfigured,
+  getOpenAiBaseUrl,
+} from "./helpers/openaiEnv.js";
+import { ensureProjectEnv } from "./helpers/loadEnv.js";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const OPENAI_BASE = (
-  process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"
-).replace(/\/$/, "");
-const VISION_MODEL =
-  process.env.OPENAI_BRAND_VISION_MODEL?.trim() || "gpt-4o-mini";
+function visionModel(): string {
+  ensureProjectEnv();
+  return process.env.OPENAI_BRAND_VISION_MODEL?.trim() || "gpt-4o-mini";
+}
 
 const VISION_CLASSIFY_PROMPT = `Classify this image for brand-removal editing.
 
@@ -61,10 +64,13 @@ export default async function handler(
     return;
   }
 
-  if (!OPENAI_API_KEY) {
-    res.status(503).json({
-      error: "Set OPENAI_API_KEY for automatic scene detection.",
-    });
+  let openAiKey: string;
+  try {
+    openAiKey = assertOpenAiConfigured("Scene detection");
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "OpenAI is not configured.";
+    res.status(503).json({ error: message });
     return;
   }
 
@@ -81,14 +87,14 @@ export default async function handler(
 
   try {
     const dataUrl = `data:${mimeType};base64,${imageBase64}`;
-    const upstream = await fetch(`${OPENAI_BASE}/chat/completions`, {
+    const upstream = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${openAiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: VISION_MODEL,
+        model: visionModel(),
         response_format: { type: "json_object" },
         messages: [
           {

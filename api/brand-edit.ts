@@ -4,13 +4,16 @@
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
 import { buildBrandEditPrompt } from "./helpers/brandPrompts.js";
+import {
+  assertOpenAiConfigured,
+  getOpenAiBaseUrl,
+} from "./helpers/openaiEnv.js";
+import { ensureProjectEnv } from "./helpers/loadEnv.js";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const OPENAI_BASE = (
-  process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"
-).replace(/\/$/, "");
-const IMAGE_MODEL =
-  process.env.OPENAI_BRAND_IMAGE_MODEL?.trim() || "gpt-image-1";
+function imageModel(): string {
+  ensureProjectEnv();
+  return process.env.OPENAI_BRAND_IMAGE_MODEL?.trim() || "gpt-image-1";
+}
 
 const MAX_BYTES = 4 * 1024 * 1024;
 
@@ -44,10 +47,13 @@ export default async function handler(
     res.status(401).json({ error: "Access code required" });
     return;
   }
-  if (!OPENAI_API_KEY) {
-    res.status(503).json({
-      error: "Brand removal is not configured. Set OPENAI_API_KEY.",
-    });
+  let openAiKey: string;
+  try {
+    openAiKey = assertOpenAiConfigured("Brand removal");
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "OpenAI is not configured.";
+    res.status(503).json({ error: message });
     return;
   }
 
@@ -95,16 +101,16 @@ export default async function handler(
       new Blob([new Uint8Array(buffer)], { type: mimeType }),
       `input.${ext}`,
     );
-    form.append("model", IMAGE_MODEL);
+    form.append("model", imageModel());
     form.append("prompt", prompt);
     form.append("size", "auto");
     form.append("quality", "high");
     form.append("output_format", "png");
     form.append("input_fidelity", "high");
 
-    const upstream = await fetch(`${OPENAI_BASE}/images/edits`, {
+    const upstream = await fetch(`${getOpenAiBaseUrl()}/images/edits`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+      headers: { Authorization: `Bearer ${openAiKey}` },
       body: form,
     });
 
