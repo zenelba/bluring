@@ -13,6 +13,11 @@ import {
   parseMixcloudShowUrl,
 } from "./helpers/mixcloud.js";
 import { normalizeMediaUrl } from "./helpers/mediaUrl.js";
+import {
+  describeEmptyTunnel,
+  inspectCobaltTunnel,
+} from "./helpers/cobaltTunnel.js";
+import { isYtdlpEnabled } from "./helpers/ytdlpEnv.js";
 
 type CobaltPickerItem = {
   type?: string;
@@ -116,7 +121,8 @@ export default async function handler(
   }
 
   const body = (req.body ?? {}) as { url?: string };
-  const url = typeof body.url === "string" ? normalizeMediaUrl(body.url) : "";
+  const rawUrl = typeof body.url === "string" ? body.url.trim() : "";
+  const url = rawUrl ? normalizeMediaUrl(rawUrl) : "";
   if (!url) {
     res.status(400).json({ error: "Missing url" });
     return;
@@ -200,13 +206,44 @@ export default async function handler(
       return;
     }
 
+    let canDownload = true;
+    let blockReason: string | undefined;
+    if (platform === "youtube" && typeof probe.url === "string" && probe.url) {
+      try {
+        const peek = await inspectCobaltTunnel(probe.url);
+        const msg = describeEmptyTunnel({
+          bytes: peek.bytes,
+          contentLength: peek.contentLength,
+          estimated: peek.estimated,
+          sourceUrl: rawUrl || url,
+        });
+        if (msg) {
+          if (isYtdlpEnabled()) {
+            canDownload = true;
+            blockReason = undefined;
+          } else {
+            canDownload = false;
+            blockReason = msg;
+          }
+        }
+      } catch {
+        /* ignore peek failures — download step will retry */
+      }
+    }
+
     res.status(200).json({
       platform,
       sourceUrl: url,
       title: probe.filename?.replace(/\.[^.]+$/, ""),
       qualities: QUALITIES,
+      canDownload,
+      blockReason,
+      usesYtdlpFallback: canDownload && platform === "youtube" && isYtdlpEnabled(),
       note:
-        "Pick a quality. Availability depends on the source; Cobalt will use the closest match.",
+        canDownload && platform === "youtube" && isYtdlpEnabled() && !blockReason
+          ? "Cobalt cannot fetch this YouTube stream as a file; download will use yt-dlp on this machine (install: pip install yt-dlp)."
+          : blockReason ??
+            "Pick a quality. Availability depends on the source; Cobalt will use the closest match.",
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Probe failed";

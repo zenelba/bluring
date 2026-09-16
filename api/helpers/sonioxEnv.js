@@ -32,3 +32,21 @@ export function assertSonioxConfigured() {
   }
   return key;
 }
+
+/** Max time to poll Soniox async jobs (ms). Long panels need several minutes. */
+export function getSonioxMaxWaitMs() {
+  ensureProjectEnv();
+  const fromEnv = Number.parseInt(
+    process.env.SONIOX_MAX_WAIT_MS ?? "",
+    10,
+  );
+  if (Number.isFinite(fromEnv) && fromEnv > 30_000) return fromEnv;
+  const vercelMaxSec = Number.parseInt(
+    process.env.VERCEL_MAX_DURATION ?? "",
+    10,
+  );
+  if (Number.isFinite(vercelMaxSec) && vercelMaxSec > 60) {
+    return (vercelMaxSec - 30) * 1000;
+  }
+  return 900_000;
+}

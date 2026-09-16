@@ -15,15 +15,16 @@
       "includeFiles": "api/helpers/**"
     },
     "api/av-download.ts": {
-      "maxDuration": 60,
-      "includeFiles": "api/helpers/**"
+      "maxDuration": 800,
+      "includeFiles": "api/helpers/**",
+      "memory": 1024
     },
     "api/av-fetch.ts": {
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"
     },
     "api/av-transcribe.ts": {
-      "maxDuration": 300,
+      "maxDuration": 800,
       "includeFiles": "api/helpers/**",
       "memory": 1024
     },

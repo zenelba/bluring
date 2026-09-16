@@ -1,42 +1,119 @@
 import {
   assertSonioxConfigured,
   getSonioxApiBaseUrl,
+  getSonioxMaxWaitMs,
 } from "./sonioxEnv.js";
+import { openAsBlob } from "node:fs";
+import { stat } from "node:fs/promises";
+import { splitMp3ForSoniox, isFfmpegConfigured } from "./ffmpegAudio.js";
 
 const POLL_MS = 2000;
-/** Match av-transcribe maxDuration on Vercel (leave headroom). */
-const MAX_WAIT_MS = 280_000;
+const STREAM_UPLOAD_THRESHOLD = 4 * 1024 * 1024;
 
 /**
- * @param {import("node:buffer").Buffer} buffer
+ * @param {unknown} data
+ */
+function sonioxErrorMessage(data, fallback) {
+  if (data && typeof data === "object") {
+    const o = data;
+    if (typeof o.error === "string" && o.error) return o.error;
+    if (o.error && typeof o.error === "object") {
+      const err = o.error;
+      if (typeof err.message === "string") return err.message;
+      if (typeof err.code === "string") return err.code;
+    }
+    if (typeof o.message === "string") return o.message;
+  }
+  return fallback;
+}
+
+/**
+ * @param {Buffer | string} media Buffer or path to audio file on disk
+ * @param {string} filename
+ * @param {{ language: string; speakerDiarization: boolean; allowChunked?: boolean }} options
+ */
+export async function transcribeWithSoniox(media, filename, options) {
+  if (typeof media === "string") {
+    if (options.allowChunked !== false && isFfmpegConfigured()) {
+      const { chunkPaths, cleanup: cleanupChunks } =
+        await splitMp3ForSoniox(media);
+      if (chunkPaths.length > 1) {
+        try {
+          const parts = [];
+          for (let i = 0; i < chunkPaths.length; i++) {
+            const part = await transcribeSingleFilePath(
+              chunkPaths[i],
+              `chunk_${i}.mp3`,
+              options,
+            );
+            parts.push(part.text);
+          }
+          return {
+            text: parts.join(" ").trim(),
+            language: options.language,
+          };
+        } finally {
+          await cleanupChunks();
+        }
+      }
+      if (chunkPaths[0] !== media) {
+        await cleanupChunks();
+      }
+      return transcribeSingleFilePath(media, filename, options);
+    }
+    return transcribeSingleFilePath(media, filename, options);
+  }
+
+  if (media.byteLength < 512) {
+    throw new Error("Audio is empty or too small");
+  }
+  if (media.byteLength > STREAM_UPLOAD_THRESHOLD) {
+    throw new Error(
+      "Internal error: large audio must be passed as a file path for streaming upload",
+    );
+  }
+  return transcribeSingleFilePath(media, filename, options);
+}
+
+/**
+ * @param {Buffer | string} media
  * @param {string} filename
  * @param {{ language: string; speakerDiarization: boolean }} options
  */
-export async function transcribeWithSoniox(buffer, filename, options) {
+async function transcribeSingleFilePath(media, filename, options) {
   const apiKey = assertSonioxConfigured();
   const base = getSonioxApiBaseUrl();
   const auth = { Authorization: `Bearer ${apiKey}` };
 
+  const safeName =
+    String(filename || "media.mp3")
+      .replace(/[\r\n\u0000-\u001f]/g, "")
+      .slice(0, 200) || "media.mp3";
+
+  /** @type {Blob} */
+  let fileBlob;
+  if (typeof media === "string") {
+    const info = await stat(media);
+    if (!info.isFile() || info.size < 512) {
+      throw new Error("Audio file is empty or missing");
+    }
+    fileBlob = await openAsBlob(media);
+  } else {
+    fileBlob = new Blob([new Uint8Array(media)]);
+  }
+
   const uploadForm = new FormData();
-  uploadForm.append(
-    "file",
-    new Blob([new Uint8Array(buffer)]),
-    filename || "media.mp3",
-  );
+  uploadForm.append("file", fileBlob, safeName);
 
   const uploadRes = await fetch(`${base}/v1/files`, {
     method: "POST",
     headers: auth,
     body: uploadForm,
   });
-  const uploadData = (await uploadRes.json().catch(() => ({}))) as {
-    id?: string;
-    error?: string;
-  };
-  if (!uploadRes.ok || !uploadData.id) {
+  const uploadData = await uploadRes.json().catch(() => ({}));
+  if (!uploadRes.ok || !uploadData?.id) {
     throw new Error(
-      uploadData.error ??
-        `Soniox file upload failed (${uploadRes.status})`,
+      sonioxErrorMessage(uploadData, `Soniox file upload failed (${uploadRes.status})`),
     );
   }
   const fileId = uploadData.id;
@@ -56,54 +133,51 @@ export async function transcribeWithSoniox(buffer, filename, options) {
     headers: { ...auth, "Content-Type": "application/json" },
     body: JSON.stringify(jobBody),
   });
-  const jobData = (await jobRes.json().catch(() => ({}))) as {
-    id?: string;
-    error?: string;
-  };
-  if (!jobRes.ok || !jobData.id) {
+  const jobData = await jobRes.json().catch(() => ({}));
+  if (!jobRes.ok || !jobData?.id) {
     await safeDelete(`${base}/v1/files/${fileId}`, auth);
     throw new Error(
-      jobData.error ??
+      sonioxErrorMessage(
+        jobData,
         `Soniox transcription create failed (${jobRes.status})`,
+      ),
     );
   }
   const transcriptionId = jobData.id;
 
   try {
-    const deadline = Date.now() + MAX_WAIT_MS;
+    const deadline = Date.now() + getSonioxMaxWaitMs();
+    let completed = false;
     while (Date.now() < deadline) {
       const statusRes = await fetch(
         `${base}/v1/transcriptions/${transcriptionId}`,
         { headers: auth },
       );
-      const statusData = (await statusRes.json().catch(() => ({}))) as {
-        status?: string;
-        error_message?: string;
-      };
+      const statusData = await statusRes.json().catch(() => ({}));
       if (!statusRes.ok) {
         throw new Error(
-          `Soniox status failed (${statusRes.status})`,
+          sonioxErrorMessage(
+            statusData,
+            `Soniox status failed (${statusRes.status})`,
+          ),
         );
       }
-      if (statusData.status === "completed") break;
-      if (statusData.status === "error") {
+      if (statusData?.status === "completed") {
+        completed = true;
+        break;
+      }
+      if (statusData?.status === "error") {
         throw new Error(
-          statusData.error_message ?? "Soniox transcription error",
+          statusData?.error_message ??
+            sonioxErrorMessage(statusData, "Soniox transcription error"),
         );
       }
       await sleep(POLL_MS);
     }
 
-    const finalRes = await fetch(
-      `${base}/v1/transcriptions/${transcriptionId}`,
-      { headers: auth },
-    );
-    const finalData = (await finalRes.json().catch(() => ({}))) as {
-      status?: string;
-    };
-    if (finalData.status !== "completed") {
+    if (!completed) {
       throw new Error(
-        "Transcription still processing — try Audio only or a shorter clip, or raise av-transcribe maxDuration on Vercel.",
+        "Transcription timed out — try Audio only, a shorter clip, or increase av-transcribe maxDuration on Vercel Pro.",
       );
     }
 
@@ -111,15 +185,18 @@ export async function transcribeWithSoniox(buffer, filename, options) {
       `${base}/v1/transcriptions/${transcriptionId}/transcript`,
       { headers: auth },
     );
-    const transcriptData = (await transcriptRes.json().catch(() => ({}))) as {
-      tokens?: Array<{ text?: string; speaker?: string | number }>;
-    };
+    const transcriptData = await transcriptRes.json().catch(() => ({}));
     if (!transcriptRes.ok) {
-      throw new Error(`Soniox transcript failed (${transcriptRes.status})`);
+      throw new Error(
+        sonioxErrorMessage(
+          transcriptData,
+          `Soniox transcript failed (${transcriptRes.status})`,
+        ),
+      );
     }
 
     const text = formatSonioxTokens(
-      transcriptData.tokens ?? [],
+      transcriptData?.tokens ?? [],
       options.speakerDiarization,
     );
 

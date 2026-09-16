@@ -1,4 +1,6 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import { ensureProjectEnv } from "./loadEnv.js";
+
 
 /** Accepted access codes (case-insensitive). Vision / perception themed. */
 export const ACCESS_CODES = [
@@ -18,6 +20,7 @@ export const ACCESS_COOKIE = "vi_access";
 export const ACCESS_MAX_AGE_SEC = 60 * 60 * 24 * 7; // 7 days
 
 function accessSecret() {
+  ensureProjectEnv();
   return (
     process.env.ACCESS_SECRET?.trim() ||
     process.env.HF_TOKEN?.trim() ||

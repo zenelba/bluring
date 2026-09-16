@@ -38,21 +38,29 @@ export type AvProbeResult = {
   audioUrl?: string;
   audioFilename?: string;
   note?: string;
+  /** False when Cobalt tunnel is empty (e.g. YouTube live / HLS). */
+  canDownload?: boolean;
+  blockReason?: string;
+  /** YouTube + empty Cobalt tunnel but yt-dlp available locally. */
+  usesYtdlpFallback?: boolean;
 };
 
 export type AvDownloadResult = {
   blob: Blob;
   filename: string;
   mimeType: string;
-  /** Same-origin proxy URL — pass to transcription to avoid 4MB inline limits. */
-  downloadUrl?: string;
 };
 
 export type AvTranscribeOptions = {
   language?: string;
   speakerDiarization?: boolean;
-  downloadUrl?: string;
+  /** When set, server fetches audio (avoids uploading large video from the browser). */
+  sourceUrl?: string;
+  videoQuality?: string;
+  downloadMode?: "auto" | "audio" | "mute";
 };
+
+const MAX_CLIENT_TRANSCRIBE_BYTES = 512 * 1024 * 1024;
 
 export type AvJobOptions = {
   transcribe: boolean;
@@ -187,7 +195,7 @@ async function avFetch<T>(
     error?: string;
   };
   if (!res.ok) {
-    if (typeof data.error === "string") {
+    if (typeof data.error === "string" && data.error) {
       throw new Error(data.error);
     }
     if (res.status === 404) {
@@ -208,24 +216,87 @@ export async function probeAvUrl(url: string): Promise<AvProbeResult> {
   });
 }
 
-export async function downloadAvMedia(input: {
-  url: string;
-  qualityId?: string;
-  videoQuality?: string;
-  downloadMode?: "auto" | "audio" | "mute";
-  pickerUrl?: string;
-}): Promise<AvDownloadResult> {
-  const meta = await avFetch<{
-    downloadUrl: string;
-    filename: string;
-    status: string;
-  }>("/api/av-download", {
+export type AvDownloadProgress = {
+  loaded: number;
+  total: number | null;
+  percent: number | null;
+};
+
+function decodeMediaFilenameHeader(value: string | null): string | null {
+  if (!value?.trim()) return null;
+  try {
+    const b64 = value.trim();
+    const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+    const std = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(std);
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+async function readDownloadResponse(
+  res: Response,
+  onProgress?: (progress: AvDownloadProgress) => void,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const totalHeader = res.headers.get("Content-Length");
+  const totalParsed = totalHeader ? Number.parseInt(totalHeader, 10) : NaN;
+  const total = Number.isFinite(totalParsed) ? totalParsed : null;
+  const mimeType = res.headers.get("Content-Type") ?? "application/octet-stream";
+  const filename = decodeMediaFilenameHeader(
+    res.headers.get("X-Media-Filename"),
+  );
+
+  if (!res.body) {
+    const blob = await res.blob();
+    onProgress?.({
+      loaded: blob.size,
+      total: blob.size,
+      percent: 100,
+    });
+    return { blob, filename };
+  }
+
+  const reader = res.body.getReader();
+  const parts: BlobPart[] = [];
+  let loaded = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value?.byteLength) continue;
+    parts.push(value);
+    loaded += value.byteLength;
+    const percent =
+      total && total > 0
+        ? Math.min(100, Math.round((loaded / total) * 100))
+        : null;
+    onProgress?.({ loaded, total, percent });
+  }
+
+  return { blob: new Blob(parts, { type: mimeType }), filename };
+}
+
+export async function downloadAvMedia(
+  input: {
+    url: string;
+    qualityId?: string;
+    videoQuality?: string;
+    downloadMode?: "auto" | "audio" | "mute";
+    pickerUrl?: string;
+  },
+  options?: {
+    onProgress?: (progress: AvDownloadProgress) => void;
+  },
+): Promise<AvDownloadResult> {
+  const fileRes = await fetch("/api/av-download", {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, deliver: "file" }),
   });
 
-  const fileRes = await fetch(meta.downloadUrl, { credentials: "include" });
+  const contentType = fileRes.headers.get("content-type") ?? "";
   if (!fileRes.ok) {
     const errBody = (await fileRes.json().catch(() => ({}))) as {
       error?: string;
@@ -236,12 +307,45 @@ export async function downloadAvMedia(input: {
         : `Download failed (${fileRes.status})`,
     );
   }
-  const blob = await fileRes.blob();
+  if (contentType.includes("application/json")) {
+    const errBody = (await fileRes.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    throw new Error(
+      typeof errBody.error === "string" && errBody.error
+        ? errBody.error
+        : "Download failed — server returned an error instead of media.",
+    );
+  }
+
+  options?.onProgress?.({ loaded: 0, total: null, percent: 0 });
+
+  const { blob, filename: headerName } = await readDownloadResponse(
+    fileRes,
+    options?.onProgress,
+  );
+
+  if (blob.size < 512) {
+    throw new Error(
+      `Download failed or incomplete (${blob.size} bytes). Try Audio only · MP3 or retry.`,
+    );
+  }
+
+  const filename =
+    headerName ||
+    fileRes.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ||
+    "media.bin";
+
+  options?.onProgress?.({
+    loaded: blob.size,
+    total: blob.size,
+    percent: 100,
+  });
+
   return {
     blob,
-    filename: meta.filename || "media.bin",
-    mimeType: blob.type || "application/octet-stream",
-    downloadUrl: meta.downloadUrl,
+    filename,
+    mimeType: blob.type || contentType || "application/octet-stream",
   };
 }
 
@@ -250,48 +354,68 @@ export async function transcribeAvBlob(
   filename: string,
   options: AvTranscribeOptions = {},
 ): Promise<{ text: string; language?: string }> {
-  if (options.downloadUrl) {
-    return avFetch<{ text: string; language?: string }>("/api/av-transcribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        downloadUrl: options.downloadUrl,
-        filename,
-        language: options.language,
-        speakerDiarization: options.speakerDiarization,
-      }),
-    });
-  }
-
-  const maxBytes = 4 * 1024 * 1024;
-  if (blob.size > maxBytes) {
+  if (blob.size < 512 && !options.sourceUrl?.trim()) {
     throw new Error(
-      "File too large for inline transcription (max 4MB). Paste a media link and download first, or use Audio only.",
+      "Downloaded file is empty or too small — try Audio only quality or another link.",
     );
   }
-  const buffer = await blob.arrayBuffer();
-  const fileBase64 = bufferToBase64(buffer);
-  return avFetch<{ text: string; language?: string }>("/api/av-transcribe", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      fileBase64,
-      filename,
-      mimeType: blob.type || "application/octet-stream",
-      language: options.language,
-      speakerDiarization: options.speakerDiarization,
-    }),
-  });
-}
 
-function bufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  const chunk = 0x8000;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  const useServerAudio =
+    Boolean(options.sourceUrl?.trim()) &&
+    (blob.size > MAX_CLIENT_TRANSCRIBE_BYTES ||
+      blob.type.startsWith("video/") ||
+      /\.(webm|mp4|mkv|mov|avi)(\?|$)/i.test(filename));
+
+  const parseTranscribeResponse = async (res: Response) => {
+    const raw = await res.text();
+    let data: { text?: string; language?: string; error?: string } = {};
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      /* non-JSON (e.g. gateway error page) */
+    }
+    if (!res.ok) {
+      throw new Error(
+        typeof data.error === "string" && data.error
+          ? data.error
+          : raw.trim().slice(0, 240) || `Request failed (${res.status})`,
+      );
+    }
+    return { text: data.text ?? "", language: data.language };
+  };
+
+  if (useServerAudio) {
+    const res = await fetch("/api/av-transcribe", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceUrl: options.sourceUrl!.trim(),
+        language: options.language?.trim() || undefined,
+        speakerDiarization: options.speakerDiarization,
+        videoQuality: options.videoQuality,
+        downloadMode: options.downloadMode ?? "audio",
+      }),
+    });
+    return parseTranscribeResponse(res);
   }
-  return btoa(binary);
+
+  const form = new FormData();
+  form.append("file", blob, sanitizeFilename(filename) || "media.bin");
+  if (options.language?.trim()) {
+    form.append("language", options.language.trim());
+  }
+  form.append(
+    "speakerDiarization",
+    options.speakerDiarization === false ? "false" : "true",
+  );
+
+  const res = await fetch("/api/av-transcribe", {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  return parseTranscribeResponse(res);
 }
 
 function frameHash(
@@ -563,10 +687,12 @@ export async function downloadSlidesPackage(
 export function sanitizeFilename(name: string): string {
   return (
     name
+      .normalize("NFKC")
+      .replace(/[\u201C\u201D\u201E\u00AB\u00BB\u2039\u203A\u2018\u2019]/g, "")
       .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "")
       .replace(/\s+/g, "-")
       .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "")
+      .replace(/^-+|-+$/g, "")
       .slice(0, 80) || "media"
   );
 }

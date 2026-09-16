@@ -7,6 +7,7 @@ import {
   downloadMediaFile,
   downloadSlidesPackage,
   downloadTextFile,
+  type AvDownloadProgress,
   isLikelyMediaUrl,
   probeAvUrl,
   sanitizeFilename,
@@ -48,6 +49,7 @@ export default function AudioVideoMode() {
   const [transcript, setTranscript] = useState<string | null>(null);
   const [slides, setSlides] = useState<DetectedSlide[]>([]);
   const [title, setTitle] = useState("media");
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
 
   const platform = useMemo(
     () => (url.trim() ? detectAvPlatform(url.trim()) : "unknown"),
@@ -109,10 +111,19 @@ export default function AudioVideoMode() {
       }
       setStep("choose");
       setLiveNote(
-        result.picker?.length
-          ? "Multiple items found — pick one and a quality."
-          : "Choose a quality, then run analysis.",
+        result.canDownload === false && result.blockReason
+          ? "Download not available for this link yet."
+          : result.usesYtdlpFallback
+            ? "YouTube stream — download will use yt-dlp (may take several minutes)."
+            : result.picker?.length
+              ? "Multiple items found — pick one and a quality."
+              : "Choose a quality, then run analysis.",
       );
+      if (result.canDownload === false && result.blockReason) {
+        setError(result.blockReason);
+      } else {
+        setError(null);
+      }
     } catch (err) {
       setStep("error");
       setError(err instanceof Error ? err.message : "Could not resolve link");
@@ -136,9 +147,11 @@ export default function AudioVideoMode() {
           downloaded.blob,
           downloaded.filename,
           {
-            downloadUrl: downloaded.downloadUrl,
             language: options.language,
             speakerDiarization: options.speakerDiarization,
+            sourceUrl: probe?.sourceUrl,
+            videoQuality: selectedQuality?.videoQuality,
+            downloadMode: "audio",
           },
         );
         text = result.text;
@@ -213,19 +226,45 @@ export default function AudioVideoMode() {
 
     setError(null);
     setStep("downloading");
-    setLiveNote("Downloading media…");
+    setDownloadProgress(null);
+    setLiveNote(
+      "Contacting Cobalt and downloading… long videos can take 1–2 minutes before the bar moves.",
+    );
     try {
+      const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+      const onProgress = (p: AvDownloadProgress) => {
+        if (p.percent != null) {
+          setDownloadProgress(p.percent);
+          if (p.total && p.total > 0) {
+            setLiveNote(
+              `Downloading… ${p.percent}% (${mb(p.loaded)} / ${mb(p.total)} MB)`,
+            );
+          } else {
+            setLiveNote(`Downloading… ${mb(p.loaded)} MB`);
+          }
+        } else if (p.loaded > 0) {
+          setDownloadProgress(null);
+          setLiveNote(`Downloading… ${mb(p.loaded)} MB`);
+        }
+      };
       const downloaded = selectedPicker
-        ? await downloadAvMedia({
-            url: probe.sourceUrl,
-            pickerUrl: selectedPicker.url,
-          })
-        : await downloadAvMedia({
-            url: probe.sourceUrl,
-            qualityId: selectedQuality?.id,
-            videoQuality: selectedQuality?.videoQuality,
-            downloadMode: selectedQuality?.downloadMode ?? "auto",
-          });
+        ? await downloadAvMedia(
+            {
+              url: probe.sourceUrl,
+              pickerUrl: selectedPicker.url,
+            },
+            { onProgress },
+          )
+        : await downloadAvMedia(
+            {
+              url: probe.sourceUrl,
+              qualityId: selectedQuality?.id,
+              videoQuality: selectedQuality?.videoQuality,
+              downloadMode: selectedQuality?.downloadMode ?? "auto",
+            },
+            { onProgress },
+          );
+      setDownloadProgress(100);
       const jobTitle =
         probe.title ||
         downloaded.filename.replace(/\.[^.]+$/, "") ||
@@ -236,6 +275,7 @@ export default function AudioVideoMode() {
       setStep("error");
       setError(err instanceof Error ? err.message : "Processing failed");
       setLiveNote("");
+      setDownloadProgress(null);
     }
   };
 
@@ -419,6 +459,7 @@ export default function AudioVideoMode() {
               className="osebe-btn osebe-btn--green"
               disabled={
                 busy ||
+                probe.canDownload === false ||
                 (!selectedQuality && !selectedPicker) ||
                 Boolean(probe.picker?.length && !selectedPicker)
               }
@@ -456,6 +497,23 @@ export default function AudioVideoMode() {
               {liveNote ||
                 "Paste a YouTube or Facebook link, pick a quality, then run."}
             </p>
+            {step === "downloading" && (
+              <div className="osebe-bar" style={{ marginTop: "0.65rem" }}>
+                <div
+                  className="osebe-bar__fill"
+                  style={{
+                    width:
+                      downloadProgress != null
+                        ? `${Math.max(4, downloadProgress)}%`
+                        : "35%",
+                    animation:
+                      downloadProgress == null
+                        ? "osebe-indeterminate 1.2s ease-in-out infinite alternate"
+                        : undefined,
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {probe && (
@@ -464,7 +522,14 @@ export default function AudioVideoMode() {
                 <span className="osebe-kicker">Quality options</span>
               </div>
               {probe.note && (
-                <p className="osebe-status__copy" style={{ marginBottom: "0.75rem" }}>
+                <p
+                  className={
+                    probe.canDownload === false
+                      ? "osebe-error"
+                      : "osebe-status__copy"
+                  }
+                  style={{ marginBottom: "0.75rem" }}
+                >
                   {probe.note}
                 </p>
               )}

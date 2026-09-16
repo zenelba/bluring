@@ -1,12 +1,29 @@
 /**
  * Proxy a Cobalt tunnel / redirect URL to the browser (access-gated).
+ * Prefer POST { target, name } — GET ?u= breaks when tunnel URLs contain &.
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
-import { getCobaltApiKey, getCobaltApiUrl } from "./helpers/cobaltEnv.js";
-import { isHlsStreamTarget } from "./helpers/mediaUrl.js";
+import { getCobaltApiUrl } from "./helpers/cobaltEnv.js";
+import {
+  decodeFetchTargetParam,
+  isHlsStreamTarget,
+  contentDispositionAttachment,
+  safeDownloadFilename,
+} from "./helpers/mediaUrl.js";
+import {
+  fetchUpstreamMediaBuffer,
+  isPrivateOrLocalHost,
+  cobaltAuthHeadersForTarget,
+} from "./helpers/upstreamFetch.js";
 
 const MAX_PROXY_BYTES = 512 * 1024 * 1024;
+
+function isVercelProduction(): boolean {
+  return (
+    process.env.VERCEL === "1" && process.env.VERCEL_ENV === "production"
+  );
+}
 
 function isAllowedFetchUrl(raw: string): boolean {
   try {
@@ -23,29 +40,46 @@ function isAllowedFetchUrl(raw: string): boolean {
   }
 }
 
-async function readUpstreamWithLimit(
-  upstream: Response,
-  maxBytes: number,
-): Promise<Buffer> {
-  if (!upstream.body) {
-    return Buffer.from(await upstream.arrayBuffer());
-  }
-  const reader = upstream.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      throw new Error(
-        `File too large for download proxy (max ${Math.round(maxBytes / (1024 * 1024))}MB). Try Audio only or a shorter clip.`,
-      );
+function cobaltAuthHeaders(target: string): Record<string, string> {
+  return cobaltAuthHeadersForTarget(target);
+}
+
+function resolveTargetFromRequest(req: {
+  method?: string;
+  url?: string;
+  body?: unknown;
+}): { target?: string; name?: string } {
+  if (req.method === "POST") {
+    const body = (req.body ?? {}) as { target?: string; u?: string; name?: string };
+    const raw =
+      (typeof body.target === "string" && body.target.trim()) ||
+      (typeof body.u === "string" && body.u.trim()) ||
+      "";
+    if (raw) {
+      return {
+        target: raw,
+        name: typeof body.name === "string" ? body.name : undefined,
+      };
     }
-    chunks.push(value);
   }
-  return Buffer.concat(chunks);
+
+  try {
+    const q = new URL(req.url ?? "", "http://localhost").searchParams;
+    const encoded = q.get("t");
+    if (encoded) {
+      return {
+        target: decodeFetchTargetParam(encoded),
+        name: q.get("name") ?? undefined,
+      };
+    }
+    const u = q.get("u");
+    if (u) {
+      return { target: u, name: q.get("name") ?? undefined };
+    }
+  } catch {
+    /* ignore */
+  }
+  return {};
 }
 
 export default async function handler(
@@ -53,18 +87,22 @@ export default async function handler(
     method?: string;
     url?: string;
     headers?: { cookie?: string | string[] };
-    query?: Record<string, string | string[] | undefined>;
+    body?: unknown;
   },
   res: {
     statusCode: number;
     setHeader: (name: string, value: string) => void;
     status: (code: number) => { json: (body: unknown) => void };
     end: (chunk?: Buffer | string) => void;
-    write?: (chunk: Buffer | string) => boolean;
   },
 ) {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
+  if (req.method === "OPTIONS") {
+    res.setHeader("Allow", "GET, POST, OPTIONS");
+    res.status(204).json({});
+    return;
+  }
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.setHeader("Allow", "GET, POST, OPTIONS");
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
@@ -73,20 +111,7 @@ export default async function handler(
     return;
   }
 
-  let target: string | undefined;
-  let name: string | undefined;
-  if (req.query?.u) {
-    target = Array.isArray(req.query.u) ? req.query.u[0] : req.query.u;
-    name = Array.isArray(req.query.name) ? req.query.name[0] : req.query.name;
-  } else if (req.url) {
-    try {
-      const q = new URL(req.url, "http://localhost").searchParams;
-      target = q.get("u") ?? undefined;
-      name = q.get("name") ?? undefined;
-    } catch {
-      /* ignore */
-    }
-  }
+  const { target, name } = resolveTargetFromRequest(req);
 
   if (!target || !isAllowedFetchUrl(target)) {
     res.status(400).json({ error: "Invalid download URL" });
@@ -102,30 +127,26 @@ export default async function handler(
   }
 
   try {
-    const headers: Record<string, string> = {};
-    const cobaltApiUrl = getCobaltApiUrl();
-    const cobaltApiKey = getCobaltApiKey();
-    if (cobaltApiKey && cobaltApiUrl) {
-      try {
-        const cobaltHost = new URL(cobaltApiUrl).hostname;
-        if (new URL(target).hostname === cobaltHost) {
-          headers.Authorization = `Api-Key ${cobaltApiKey}`;
-        }
-      } catch {
-        /* ignore */
-      }
+    let targetHost = "";
+    try {
+      targetHost = new URL(target).hostname;
+    } catch {
+      /* ignore */
     }
-
-    const upstream = await fetch(target, { headers, redirect: "follow" });
-    if (!upstream.ok) {
+    if (isVercelProduction() && targetHost && isPrivateOrLocalHost(targetHost)) {
       res.status(502).json({
-        error: `Upstream download failed (${upstream.status})`,
+        error:
+          "Download URL points to a private/LAN address. Deployed bluring cannot reach your home Cobalt instance — use a public HTTPS Cobalt URL in Vercel env, or run locally with `npx vercel dev`.",
       });
       return;
     }
 
-    const contentType =
-      upstream.headers.get("content-type") ?? "application/octet-stream";
+    const { buf, contentType } = await fetchUpstreamMediaBuffer(
+      target,
+      cobaltAuthHeaders(target),
+      { maxBytes: MAX_PROXY_BYTES, maxAttempts: 6 },
+    );
+
     if (isHlsStreamTarget(target, contentType)) {
       res.status(400).json({
         error:
@@ -134,32 +155,24 @@ export default async function handler(
       return;
     }
 
-    const contentLength = upstream.headers.get("content-length");
+    res.statusCode = 200;
     res.setHeader("Content-Type", contentType);
-    if (contentLength) {
-      const len = Number.parseInt(contentLength, 10);
-      if (Number.isFinite(len) && len > MAX_PROXY_BYTES) {
-        res.status(413).json({
-          error: `File too large (${Math.round(len / (1024 * 1024))}MB). Try Audio only quality.`,
-        });
-        return;
-      }
-      res.setHeader("Content-Length", contentLength);
-    }
+    res.setHeader("Content-Length", String(buf.byteLength));
     if (name) {
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${name.replace(/"/g, "")}"`,
-      );
+      try {
+        res.setHeader(
+          "Content-Disposition",
+          contentDispositionAttachment(safeDownloadFilename(name)),
+        );
+      } catch {
+        /* skip invalid filename in header */
+      }
     }
     res.setHeader("Cache-Control", "private, no-store");
-
-    const buf = await readUpstreamWithLimit(upstream, MAX_PROXY_BYTES);
-    res.statusCode = 200;
     res.end(buf);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Fetch failed";
-    const status = message.includes("too large") ? 413 : 500;
+    const status = message.includes("too large") ? 413 : 502;
     res.status(status).json({ error: message });
   }
 }
