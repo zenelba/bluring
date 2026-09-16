@@ -296,7 +296,9 @@ export default function AudioVideoMode() {
                   ? "Facebook link detected"
                   : platform === "mixcloud"
                     ? "Mixcloud show detected (audio stream)"
-                    : platform === "other"
+                    : /youtube\.com\/live\//i.test(url.trim())
+                      ? "YouTube live URL — converted to watch?v= for download; live broadcasts may fail until they end"
+                      : platform === "other"
                     ? "Other host — Cobalt will try if supported"
                     : "Paste a public video/audio URL"}
             </span>

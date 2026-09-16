@@ -4,6 +4,9 @@
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
 import { getCobaltApiKey, getCobaltApiUrl } from "./helpers/cobaltEnv.js";
+import { isHlsStreamTarget } from "./helpers/mediaUrl.js";
+
+const MAX_PROXY_BYTES = 512 * 1024 * 1024;
 
 function isAllowedFetchUrl(raw: string): boolean {
   try {
@@ -12,14 +15,37 @@ function isAllowedFetchUrl(raw: string): boolean {
     const cobaltApiUrl = getCobaltApiUrl();
     if (!cobaltApiUrl) return false;
     const cobaltHost = new URL(cobaltApiUrl).hostname;
-    // Allow Cobalt host and common CDN hosts Cobalt redirects to.
     if (u.hostname === cobaltHost) return true;
     if (u.hostname.endsWith(`.${cobaltHost}`)) return true;
-    // Cobalt often redirects to googlevideo / fbcdn etc.
     return true;
   } catch {
     return false;
   }
+}
+
+async function readUpstreamWithLimit(
+  upstream: Response,
+  maxBytes: number,
+): Promise<Buffer> {
+  if (!upstream.body) {
+    return Buffer.from(await upstream.arrayBuffer());
+  }
+  const reader = upstream.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      throw new Error(
+        `File too large for download proxy (max ${Math.round(maxBytes / (1024 * 1024))}MB). Try Audio only or a shorter clip.`,
+      );
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
 }
 
 export default async function handler(
@@ -34,6 +60,7 @@ export default async function handler(
     setHeader: (name: string, value: string) => void;
     status: (code: number) => { json: (body: unknown) => void };
     end: (chunk?: Buffer | string) => void;
+    write?: (chunk: Buffer | string) => boolean;
   },
 ) {
   if (req.method !== "GET") {
@@ -66,6 +93,14 @@ export default async function handler(
     return;
   }
 
+  if (isHlsStreamTarget(target, null)) {
+    res.status(400).json({
+      error:
+        "This link is an HLS live stream (.m3u8), not a downloadable file. Wait for the YouTube replay and use the watch URL, or pick a finished VOD.",
+    });
+    return;
+  }
+
   try {
     const headers: Record<string, string> = {};
     const cobaltApiUrl = getCobaltApiUrl();
@@ -91,9 +126,26 @@ export default async function handler(
 
     const contentType =
       upstream.headers.get("content-type") ?? "application/octet-stream";
+    if (isHlsStreamTarget(target, contentType)) {
+      res.status(400).json({
+        error:
+          "Live HLS stream detected — cannot save as one file. Use a finished YouTube video URL (watch?v=…) after the stream ends.",
+      });
+      return;
+    }
+
     const contentLength = upstream.headers.get("content-length");
     res.setHeader("Content-Type", contentType);
-    if (contentLength) res.setHeader("Content-Length", contentLength);
+    if (contentLength) {
+      const len = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(len) && len > MAX_PROXY_BYTES) {
+        res.status(413).json({
+          error: `File too large (${Math.round(len / (1024 * 1024))}MB). Try Audio only quality.`,
+        });
+        return;
+      }
+      res.setHeader("Content-Length", contentLength);
+    }
     if (name) {
       res.setHeader(
         "Content-Disposition",
@@ -102,11 +154,12 @@ export default async function handler(
     }
     res.setHeader("Cache-Control", "private, no-store");
 
-    const buf = Buffer.from(await upstream.arrayBuffer());
+    const buf = await readUpstreamWithLimit(upstream, MAX_PROXY_BYTES);
     res.statusCode = 200;
     res.end(buf);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Fetch failed";
-    res.status(500).json({ error: message });
+    const status = message.includes("too large") ? 413 : 500;
+    res.status(status).json({ error: message });
   }
 }

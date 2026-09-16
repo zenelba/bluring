@@ -12,6 +12,7 @@ import {
   lookupMixcloudCloudcast,
   parseMixcloudShowUrl,
 } from "./helpers/mixcloud.js";
+import { normalizeMediaUrl } from "./helpers/mediaUrl.js";
 
 type CobaltPickerItem = {
   type?: string;
@@ -115,7 +116,7 @@ export default async function handler(
   }
 
   const body = (req.body ?? {}) as { url?: string };
-  const url = typeof body.url === "string" ? body.url.trim() : "";
+  const url = typeof body.url === "string" ? normalizeMediaUrl(body.url) : "";
   if (!url) {
     res.status(400).json({ error: "Missing url" });
     return;

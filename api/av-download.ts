@@ -8,6 +8,10 @@ import {
   getCobaltApiKey,
 } from "./helpers/cobaltEnv.js";
 import { resolveMixcloudShow, parseMixcloudShowUrl } from "./helpers/mixcloud.js";
+import {
+  describeCobaltError,
+  normalizeMediaUrl,
+} from "./helpers/mediaUrl.js";
 
 type CobaltResponse = {
   status?: string;
@@ -93,7 +97,7 @@ export default async function handler(
     return;
   }
 
-  const url = typeof body.url === "string" ? body.url.trim() : "";
+  const url = typeof body.url === "string" ? normalizeMediaUrl(body.url) : "";
   if (!url) {
     res.status(400).json({ error: "Missing url" });
     return;
@@ -133,7 +137,7 @@ export default async function handler(
 
     if (result.status === "error") {
       res.status(400).json({
-        error: `Download failed (${result.error?.code ?? "unknown"})`,
+        error: describeCobaltError(result.error?.code),
       });
       return;
     }

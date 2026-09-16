@@ -227,7 +227,14 @@ export async function downloadAvMedia(input: {
 
   const fileRes = await fetch(meta.downloadUrl, { credentials: "include" });
   if (!fileRes.ok) {
-    throw new Error(`Download failed (${fileRes.status})`);
+    const errBody = (await fileRes.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    throw new Error(
+      typeof errBody.error === "string"
+        ? errBody.error
+        : `Download failed (${fileRes.status})`,
+    );
   }
   const blob = await fileRes.blob();
   return {
