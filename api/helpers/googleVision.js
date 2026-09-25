@@ -68,6 +68,24 @@ export function assertGoogleVisionConfigured(context = "Google Cloud Vision") {
 }
 
 /**
+ * @param {string} message
+ * @returns {string}
+ */
+function formatVisionUpstreamError(message) {
+  const msg = String(message || "").trim() || "Google Vision request failed";
+  if (/are blocked|API[_ ]key not valid|PERMISSION_DENIED|access not configured/i.test(msg)) {
+    return [
+      msg,
+      "Fix in Google Cloud Console → APIs & Services → Credentials → your API key:",
+      "1) API restrictions: allow \"Cloud Vision API\" (or set to Don't restrict while testing).",
+      "2) Application restrictions: use None for local `vercel dev` (HTTP referrer keys only work in browsers; IP keys must include your current IP).",
+      "3) Confirm Cloud Vision API is Enabled for this project, then wait 1–2 minutes and retry.",
+    ].join(" ");
+  }
+  return msg;
+}
+
+/**
  * @param {{ x?: number, y?: number }[]} vertices
  * @returns {{ x: number, y: number, w: number, h: number } | null}
  */
@@ -261,12 +279,12 @@ export async function detectTextLines(input) {
       data?.error?.message ||
       (typeof data?.error === "string" ? data.error : null) ||
       `Google Vision failed (${upstream.status})`;
-    throw new Error(msg);
+    throw new Error(formatVisionUpstreamError(msg));
   }
 
   const response = Array.isArray(data?.responses) ? data.responses[0] : null;
   if (response?.error?.message) {
-    throw new Error(String(response.error.message));
+    throw new Error(formatVisionUpstreamError(String(response.error.message)));
   }
 
   const annotation = response?.fullTextAnnotation;
