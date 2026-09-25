@@ -758,6 +758,8 @@ export async function detectTexts(file: File): Promise<{
     body: JSON.stringify({
       imageBase64: prepared.base64,
       mimeType: prepared.mimeType,
+      imageWidth: prepared.width,
+      imageHeight: prepared.height,
     }),
   });
   const items = enrichDetections(Array.isArray(data.items) ? data.items : []);

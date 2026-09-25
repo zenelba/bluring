@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   buildSeries,
   defaultEdits,
@@ -10,6 +10,7 @@ import {
   type DetectedText,
   type RenderedVariant,
   type SeriesSettings,
+  type TextBBox,
   type TextReplaceEdits,
 } from "./lib/textReplace";
 import "./osebe.css";
@@ -50,6 +51,220 @@ function parseLocaleNumber(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function clampBBox(b: TextBBox): TextBBox {
+  let { x, y, w, h } = b;
+  x = Math.max(0, Math.min(1, x));
+  y = Math.max(0, Math.min(1, y));
+  w = Math.max(0.008, Math.min(1 - x, w));
+  h = Math.max(0.008, Math.min(1 - y, h));
+  return { x, y, w, h };
+}
+
+type HandleCorner = "nw" | "ne" | "sw" | "se";
+type DragMode =
+  | { kind: "move"; id: string; startX: number; startY: number; orig: TextBBox }
+  | {
+      kind: "resize";
+      id: string;
+      corner: HandleCorner;
+      startX: number;
+      startY: number;
+      orig: TextBBox;
+    };
+
+function boxStroke(
+  item: DetectedText,
+  selected: boolean,
+  hovered: boolean,
+  seriesId: string | null,
+): string {
+  if (selected) return "#f59e0b";
+  if (seriesId === item.id) return "#22c55e";
+  if (hovered) return "#38bdf8";
+  if (item.container.type === "pill") return "#ec4899";
+  return "#3b82f6";
+}
+
+function TextBBoxOverlay(props: {
+  items: DetectedText[];
+  selectedId: string | null;
+  hoveredId: string | null;
+  seriesItemId: string | null;
+  disabled?: boolean;
+  onSelect: (id: string | null) => void;
+  onHover: (id: string | null) => void;
+  onBBoxChange: (id: string, bbox: TextBBox) => void;
+}) {
+  const {
+    items,
+    selectedId,
+    hoveredId,
+    seriesItemId,
+    disabled,
+    onSelect,
+    onHover,
+    onBBoxChange,
+  } = props;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<DragMode | null>(null);
+  const onBBoxChangeRef = useRef(onBBoxChange);
+  onBBoxChangeRef.current = onBBoxChange;
+
+  const clientToNorm = (clientX: number, clientY: number) => {
+    const el = rootRef.current;
+    if (!el) return { x: 0, y: 0 };
+    const r = el.getBoundingClientRect();
+    return {
+      x: r.width > 0 ? (clientX - r.left) / r.width : 0,
+      y: r.height > 0 ? (clientY - r.top) / r.height : 0,
+    };
+  };
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const cur = clientToNorm(e.clientX, e.clientY);
+      const dx = cur.x - drag.startX;
+      const dy = cur.y - drag.startY;
+      const o = drag.orig;
+      const apply = onBBoxChangeRef.current;
+
+      if (drag.kind === "move") {
+        apply(
+          drag.id,
+          clampBBox({ x: o.x + dx, y: o.y + dy, w: o.w, h: o.h }),
+        );
+        return;
+      }
+
+      let x = o.x;
+      let y = o.y;
+      let w = o.w;
+      let h = o.h;
+      if (drag.corner.includes("w")) {
+        x = o.x + dx;
+        w = o.w - dx;
+      }
+      if (drag.corner.includes("e")) {
+        w = o.w + dx;
+      }
+      if (drag.corner.includes("n")) {
+        y = o.y + dy;
+        h = o.h - dy;
+      }
+      if (drag.corner.includes("s")) {
+        h = o.h + dy;
+      }
+      if (w < 0) {
+        x += w;
+        w = Math.abs(w);
+      }
+      if (h < 0) {
+        y += h;
+        h = Math.abs(h);
+      }
+      apply(drag.id, clampBBox({ x, y, w, h }));
+    };
+
+    const onUp = () => {
+      dragRef.current = null;
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, []);
+
+  const startMove = (
+    e: ReactPointerEvent,
+    item: DetectedText,
+  ) => {
+    if (disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onSelect(item.id);
+    const p = clientToNorm(e.clientX, e.clientY);
+    dragRef.current = {
+      kind: "move",
+      id: item.id,
+      startX: p.x,
+      startY: p.y,
+      orig: { ...item.bbox },
+    };
+  };
+
+  const startResize = (
+    e: ReactPointerEvent,
+    item: DetectedText,
+    corner: HandleCorner,
+  ) => {
+    if (disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onSelect(item.id);
+    const p = clientToNorm(e.clientX, e.clientY);
+    dragRef.current = {
+      kind: "resize",
+      id: item.id,
+      corner,
+      startX: p.x,
+      startY: p.y,
+      orig: { ...item.bbox },
+    };
+  };
+
+  return (
+    <div
+      ref={rootRef}
+      className="tr-bbox-layer"
+      onPointerDown={() => {
+        if (!disabled) onSelect(null);
+      }}
+    >
+      {items.map((item) => {
+        const selected = selectedId === item.id;
+        const hovered = hoveredId === item.id;
+        const stroke = boxStroke(item, selected, hovered, seriesItemId);
+        return (
+          <div
+            key={item.id}
+            className={`tr-bbox${selected ? " tr-bbox--selected" : ""}${
+              hovered ? " tr-bbox--hovered" : ""
+            }`}
+            style={{
+              left: `${item.bbox.x * 100}%`,
+              top: `${item.bbox.y * 100}%`,
+              width: `${item.bbox.w * 100}%`,
+              height: `${item.bbox.h * 100}%`,
+              borderColor: stroke,
+            }}
+            onPointerDown={(e) => startMove(e, item)}
+            onPointerEnter={() => onHover(item.id)}
+            onPointerLeave={() => onHover(null)}
+            title={item.text}
+          >
+            {selected && !disabled && (
+              <>
+                {(["nw", "ne", "sw", "se"] as HandleCorner[]).map((c) => (
+                  <span
+                    key={c}
+                    className={`tr-bbox__handle tr-bbox__handle--${c}`}
+                    onPointerDown={(e) => startResize(e, item, c)}
+                  />
+                ))}
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function TextReplaceMode() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -62,6 +277,9 @@ export default function TextReplaceMode() {
     step: 1,
   });
   const [variants, setVariants] = useState<RenderedVariant[]>([]);
+  const [lightbox, setLightbox] = useState<RenderedVariant | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<"idle" | "detect" | "generate">("idle");
   const [isDragOver, setIsDragOver] = useState(false);
@@ -75,6 +293,19 @@ export default function TextReplaceMode() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (lightbox) {
+        setLightbox(null);
+        return;
+      }
+      setSelectedId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox]);
 
   const seriesPreview = useMemo(() => {
     if (!series.itemId) return [] as number[];
@@ -91,6 +322,9 @@ export default function TextReplaceMode() {
     setItems([]);
     setEdits({});
     setSeries({ itemId: null, steps: 4, step: 1 });
+    setLightbox(null);
+    setSelectedId(null);
+    setHoveredId(null);
     setFile(next);
     setThumbUrl(next ? URL.createObjectURL(next) : null);
     setError(null);
@@ -109,6 +343,15 @@ export default function TextReplaceMode() {
     setImageFile(image);
   };
 
+  const openLightbox = (v: RenderedVariant) => setLightbox(v);
+  const closeLightbox = () => setLightbox(null);
+
+  const patchBBox = (id: string, bbox: TextBBox) => {
+    setItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, bbox } : item)),
+    );
+  };
+
   const runDetect = async () => {
     if (!file || busy) return;
     setBusy(true);
@@ -117,6 +360,7 @@ export default function TextReplaceMode() {
     setLiveNote("Detecting text…");
     revokeVariants(variants);
     setVariants([]);
+    setSelectedId(null);
     try {
       const { items: detected } = await detectTexts(file);
       if (detected.length === 0) {
@@ -129,7 +373,9 @@ export default function TextReplaceMode() {
       setItems(detected);
       setEdits(defaultEdits(detected));
       setSeries((s) => ({ ...s, itemId: null }));
-      setLiveNote(`Found ${detected.length} text region(s).`);
+      setLiveNote(
+        `Found ${detected.length} text region(s). Drag boxes if they are misaligned.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Detect failed");
       setLiveNote("");
@@ -147,6 +393,7 @@ export default function TextReplaceMode() {
     setLiveNote("Rendering…");
     revokeVariants(variants);
     setVariants([]);
+    setLightbox(null);
     try {
       const out = await renderTextReplaceVariants({
         file,
@@ -276,12 +523,23 @@ export default function TextReplaceMode() {
               <span className="osebe-kicker osebe-kicker--section">
                 Detected text
               </span>
+              <p className="osebe-hint">
+                Drag boxes on the preview if they are misaligned. Click a row to
+                select its box.
+              </p>
               <ul className="tr-list">
                 {items.map((item) => {
                   const edit = edits[item.id];
                   const isVary = series.itemId === item.id;
+                  const isSelected = selectedId === item.id;
                   return (
-                    <li key={item.id} className="tr-item">
+                    <li
+                      key={item.id}
+                      className={`tr-item${isSelected ? " tr-item--selected" : ""}`}
+                      onMouseEnter={() => setHoveredId(item.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      onClick={() => setSelectedId(item.id)}
+                    >
                       <div className="tr-item__top">
                         <code className="tr-item__orig" title={item.text}>
                           {item.text}
@@ -297,7 +555,10 @@ export default function TextReplaceMode() {
                       </div>
 
                       {item.number ? (
-                        <label className="osebe-field">
+                        <label
+                          className="osebe-field"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <span className="osebe-field__label">
                             New value
                             {item.number.suffix || item.number.prefix
@@ -343,7 +604,10 @@ export default function TextReplaceMode() {
                           />
                         </label>
                       ) : (
-                        <label className="osebe-field">
+                        <label
+                          className="osebe-field"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <span className="osebe-field__label">Replace with</span>
                           <input
                             className="osebe-input"
@@ -361,7 +625,10 @@ export default function TextReplaceMode() {
                       )}
 
                       {item.number && (
-                        <label className="tr-vary">
+                        <label
+                          className="tr-vary"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <input
                             type="radio"
                             name="tr-vary"
@@ -481,33 +748,24 @@ export default function TextReplaceMode() {
                 <span className="osebe-kicker">Source</span>
                 <div className="tr-preview__frame">
                   {thumbUrl && (
-                    <img src={thumbUrl} alt={file.name} className="tr-preview__img" />
+                    <img
+                      src={thumbUrl}
+                      alt={file.name}
+                      className="tr-preview__img"
+                      draggable={false}
+                    />
                   )}
-                  {items.length > 0 && thumbUrl && (
-                    <svg
-                      className="tr-preview__overlay"
-                      viewBox="0 0 1 1"
-                      preserveAspectRatio="none"
-                    >
-                      {items.map((item) => (
-                        <rect
-                          key={item.id}
-                          x={item.bbox.x}
-                          y={item.bbox.y}
-                          width={item.bbox.w}
-                          height={item.bbox.h}
-                          fill="none"
-                          stroke={
-                            series.itemId === item.id
-                              ? "#22c55e"
-                              : item.container.type === "pill"
-                                ? "#ec4899"
-                                : "#3b82f6"
-                          }
-                          strokeWidth={0.004}
-                        />
-                      ))}
-                    </svg>
+                  {items.length > 0 && (
+                    <TextBBoxOverlay
+                      items={items}
+                      selectedId={selectedId}
+                      hoveredId={hoveredId}
+                      seriesItemId={series.itemId}
+                      disabled={busy}
+                      onSelect={setSelectedId}
+                      onHover={setHoveredId}
+                      onBBoxChange={patchBBox}
+                    />
                   )}
                 </div>
                 <div className="osebe-hint">{file.name}</div>
@@ -519,9 +777,14 @@ export default function TextReplaceMode() {
                   <div className="osebe-grid">
                     {variants.map((v) => (
                       <article key={v.index} className="osebe-card">
-                        <div className="osebe-card__photo">
+                        <button
+                          type="button"
+                          className="osebe-card__photo tr-result-thumb"
+                          onClick={() => openLightbox(v)}
+                          aria-label={`Enlarge ${v.label}`}
+                        >
                           <img src={v.url} alt={v.label} />
-                        </div>
+                        </button>
                         <div className="osebe-card__meta">
                           <div className="osebe-card__name">{v.label}</div>
                           {v.offset !== 0 && (
@@ -539,6 +802,32 @@ export default function TextReplaceMode() {
           )}
         </section>
       </div>
+
+      {lightbox && (
+        <div
+          className="tr-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={lightbox.label}
+          onClick={closeLightbox}
+        >
+          <button
+            type="button"
+            className="tr-lightbox__close"
+            onClick={closeLightbox}
+            aria-label="Close"
+          >
+            ×
+          </button>
+          <img
+            className="tr-lightbox__img"
+            src={lightbox.url}
+            alt={lightbox.label}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <p className="tr-lightbox__caption">{lightbox.label}</p>
+        </div>
+      )}
     </div>
   );
 }
