@@ -36,8 +36,12 @@ function CloudIcon() {
 }
 
 function parseLocaleNumber(raw: string): number | null {
-  const t = raw.trim().replace(/\s/g, "");
-  if (!t) return null;
+  // Strip currency / letters (e.g. "28,99 €" → "28,99")
+  const t = raw
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/[^\d,.\-]/g, "");
+  if (!t || t === "-" || t === "," || t === ".") return null;
   let normalized = t;
   if (t.includes(",") && t.includes(".")) {
     normalized =
@@ -45,7 +49,17 @@ function parseLocaleNumber(raw: string): number | null {
         ? t.replace(/\./g, "").replace(",", ".")
         : t.replace(/,/g, "");
   } else if (t.includes(",")) {
-    normalized = t.replace(",", ".");
+    // Allow "1.234,56" already handled; plain "28,99" → "28.99"
+    // Also "1.234" with only dots as thousands is rare in SI inputs here
+    const parts = t.split(",");
+    if (parts.length === 2) {
+      normalized = `${parts[0].replace(/\./g, "")}.${parts[1]}`;
+    } else {
+      normalized = t.replace(",", ".");
+    }
+  } else if ((t.match(/\./g) || []).length > 1) {
+    // "1.234.567" thousands
+    normalized = t.replace(/\./g, "");
   }
   const n = Number(normalized);
   return Number.isFinite(n) ? n : null;
@@ -631,10 +645,13 @@ export default function TextReplaceMode() {
                                   n != null ? n : edit?.replaceValue ?? null,
                               });
                             }}
-                            onBlur={() => {
+                            onBlur={(e) => {
+                              // Prefer the typed text (not stale replaceValue)
+                              const raw = e.target.value;
                               const n =
+                                parseLocaleNumber(raw) ??
                                 edit?.replaceValue ??
-                                parseLocaleNumber(edit?.replaceText ?? "");
+                                null;
                               if (n != null && item.number) {
                                 patchEdit(item.id, {
                                   replaceValue: n,

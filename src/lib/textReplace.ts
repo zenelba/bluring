@@ -310,7 +310,7 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
       align:
         raw.style?.align === "left" || raw.style?.align === "right"
           ? raw.style.align
-          : "center",
+          : "left",
       fontFamily: raw.style?.fontFamily ?? "Montserrat",
       fontSizeRel: raw.style?.fontSizeRel ?? 0.04,
       scaleX: raw.style?.scaleX ?? 1,
@@ -319,10 +319,25 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
   };
 }
 
+/** Prefer left for side banners; keep center only when the box is clearly mid-frame. */
+function inferPlainAlign(item: DetectedText): "left" | "center" | "right" {
+  if (item.style.align === "right") return "right";
+  if (item.container.type === "pill") return item.style.align;
+  const cx = item.bbox.x + item.bbox.w / 2;
+  const startsLeft = item.bbox.x < 0.28;
+  const clearlyCentered = cx > 0.42 && cx < 0.58 && item.bbox.x > 0.22;
+  if (clearlyCentered && !startsLeft) return "center";
+  return "left";
+}
+
 export function enrichDetections(items: DetectedText[]): DetectedText[] {
   const normalized = items
     .map((item) => normalizeIncomingItem(item))
-    .filter((item): item is DetectedText => item != null);
+    .filter((item): item is DetectedText => item != null)
+    .map((item) => ({
+      ...item,
+      style: { ...item.style, align: inferPlainAlign(item) },
+    }));
   return assignLayoutGroups(normalized);
 }
 
@@ -606,13 +621,18 @@ function assignLayoutGroups(items: DetectedText[]): DetectedText[] {
       const ay = a.bbox.y + a.bbox.h / 2;
       const by = b.bbox.y + b.bbox.h / 2;
       const avgH = (a.bbox.h + b.bbox.h) / 2;
-      if (Math.abs(ay - by) > avgH * 0.55) continue;
+      if (Math.abs(ay - by) > avgH * 0.85) continue;
       const aRight = a.bbox.x + a.bbox.w;
       const bRight = b.bbox.x + b.bbox.w;
       const gap =
         a.bbox.x < b.bbox.x ? b.bbox.x - aRight : a.bbox.x - bRight;
-      if (gap < 0 || gap > Math.max(a.bbox.w, b.bbox.w) * 0.8) continue;
-      // Prefer existing layoutGroupId if either has one
+      // Same-row chips: allow a wider gap so adjacent pills always reflow together
+      const maxGap = Math.max(
+        Math.max(a.bbox.w, b.bbox.w) * 1.6,
+        avgH * 3,
+        0.12,
+      );
+      if (gap < 0 || gap > maxGap) continue;
       if (a.layoutGroupId && b.layoutGroupId && a.layoutGroupId !== b.layoutGroupId) {
         union(a.layoutGroupId, b.layoutGroupId);
       }
@@ -786,7 +806,7 @@ function inpaintRect(
   if (rw <= 0 || rh <= 0) return;
 
   // Read a slightly larger region so we can sample outside
-  const margin = 3;
+  const margin = 4;
   const sx0 = Math.max(0, x0 - margin);
   const sy0 = Math.max(0, y0 - margin);
   const sx1 = Math.min(imgW, x1 + margin);
@@ -799,28 +819,23 @@ function inpaintRect(
   const localX0 = x0 - sx0;
   const localY0 = y0 - sy0;
 
-  // Sample border strips just outside the region (1–3 px), median per column/row
   const T: Array<{ r: number; g: number; b: number }> = new Array(rw);
   const B: Array<{ r: number; g: number; b: number }> = new Array(rw);
   const L: Array<{ r: number; g: number; b: number }> = new Array(rh);
   const R: Array<{ r: number; g: number; b: number }> = new Array(rh);
+  const allBorder: Array<{ r: number; g: number; b: number }> = [];
 
   for (let i = 0; i < rw; i++) {
     const gx = x0 + i;
     const topSamples: Array<{ x: number; y: number }> = [];
     const botSamples: Array<{ x: number; y: number }> = [];
     for (let m = 1; m <= margin; m++) {
-      topSamples.push({ x: gx, y: y0 - m });
-      botSamples.push({ x: gx, y: y1 - 1 + m });
+      topSamples.push({ x: gx - sx0, y: y0 - m - sy0 });
+      botSamples.push({ x: gx - sx0, y: y1 - 1 + m - sy0 });
     }
-    T[i] = medianRgbAt(data, sw, sh, topSamples.map((p) => ({
-      x: p.x - sx0,
-      y: p.y - sy0,
-    })));
-    B[i] = medianRgbAt(data, sw, sh, botSamples.map((p) => ({
-      x: p.x - sx0,
-      y: p.y - sy0,
-    })));
+    T[i] = medianRgbAt(data, sw, sh, topSamples);
+    B[i] = medianRgbAt(data, sw, sh, botSamples);
+    allBorder.push(T[i]!, B[i]!);
   }
 
   for (let j = 0; j < rh; j++) {
@@ -828,24 +843,54 @@ function inpaintRect(
     const leftSamples: Array<{ x: number; y: number }> = [];
     const rightSamples: Array<{ x: number; y: number }> = [];
     for (let m = 1; m <= margin; m++) {
-      leftSamples.push({ x: x0 - m, y: gy });
-      rightSamples.push({ x: x1 - 1 + m, y: gy });
+      leftSamples.push({ x: x0 - m - sx0, y: gy - sy0 });
+      rightSamples.push({ x: x1 - 1 + m - sx0, y: gy - sy0 });
     }
-    L[j] = medianRgbAt(data, sw, sh, leftSamples.map((p) => ({
-      x: p.x - sx0,
-      y: p.y - sy0,
-    })));
-    R[j] = medianRgbAt(data, sw, sh, rightSamples.map((p) => ({
-      x: p.x - sx0,
-      y: p.y - sy0,
-    })));
+    L[j] = medianRgbAt(data, sw, sh, leftSamples);
+    R[j] = medianRgbAt(data, sw, sh, rightSamples);
+    allBorder.push(L[j]!, R[j]!);
   }
 
-  // Corner colors for bilinear subtraction
-  const TL = T[0] ?? L[0] ?? { r: 255, g: 255, b: 255 };
-  const TR = T[rw - 1] ?? R[0] ?? TL;
-  const BL = B[0] ?? L[rh - 1] ?? TL;
-  const BR = B[rw - 1] ?? R[rh - 1] ?? TL;
+  // Prefer left/right borders for field color (top often hits white rules)
+  const sideBorder = [...L, ...R];
+  const fieldSrc = sideBorder.length >= 8 ? sideBorder : allBorder;
+  const field = {
+    r: medianChannel(fieldSrc.map((c) => c.r)),
+    g: medianChannel(fieldSrc.map((c) => c.g)),
+    b: medianChannel(fieldSrc.map((c) => c.b)),
+  };
+  const scrub = (c: { r: number; g: number; b: number }) =>
+    colorDist(c, field) > 40 ? field : c;
+
+  for (let i = 0; i < rw; i++) {
+    T[i] = scrub(T[i]!);
+    B[i] = scrub(B[i]!);
+  }
+  for (let j = 0; j < rh; j++) {
+    L[j] = scrub(L[j]!);
+    R[j] = scrub(R[j]!);
+  }
+
+  const smooth1d = (arr: Array<{ r: number; g: number; b: number }>) => {
+    const out = arr.map((c) => ({ ...c }));
+    for (let i = 1; i < arr.length - 1; i++) {
+      out[i] = {
+        r: (arr[i - 1]!.r + arr[i]!.r + arr[i + 1]!.r) / 3,
+        g: (arr[i - 1]!.g + arr[i]!.g + arr[i + 1]!.g) / 3,
+        b: (arr[i - 1]!.b + arr[i]!.b + arr[i + 1]!.b) / 3,
+      };
+    }
+    return out;
+  };
+  const Ts = smooth1d(T);
+  const Bs = smooth1d(B);
+  const Ls = smooth1d(L);
+  const Rs = smooth1d(R);
+
+  const TL = Ts[0] ?? Ls[0] ?? field;
+  const TR = Ts[rw - 1] ?? Rs[0] ?? field;
+  const BL = Bs[0] ?? Ls[rh - 1] ?? field;
+  const BR = Bs[rw - 1] ?? Rs[rh - 1] ?? field;
 
   const pred = new Float32Array(rw * rh * 3);
   for (let j = 0; j < rh; j++) {
@@ -854,12 +899,11 @@ function inpaintRect(
     for (let i = 0; i < rw; i++) {
       const u = rw <= 1 ? 0 : i / (rw - 1);
       const omu = 1 - u;
-      const t = T[i]!;
-      const b = B[i]!;
-      const l = L[j]!;
-      const r = R[j]!;
+      const t = Ts[i]!;
+      const b = Bs[i]!;
+      const l = Ls[j]!;
+      const r = Rs[j]!;
       const pi = (j * rw + i) * 3;
-      // Coons: (1-v)T + vB + (1-u)L + uR − bilinear corners
       pred[pi] =
         omv * t.r +
         v * b.r +
@@ -878,10 +922,20 @@ function inpaintRect(
         omu * l.b +
         u * r.b -
         (omu * omv * TL.b + u * omv * TR.b + omu * v * BL.b + u * v * BR.b);
+
+      const dField = Math.sqrt(
+        (pred[pi] - field.r) ** 2 +
+          (pred[pi + 1] - field.g) ** 2 +
+          (pred[pi + 2] - field.b) ** 2,
+      );
+      if (dField > 55) {
+        pred[pi] = field.r;
+        pred[pi + 1] = field.g;
+        pred[pi + 2] = field.b;
+      }
     }
   }
 
-  // Ink mask: pixels that differ from predicted bg by > 25
   const ink = new Uint8Array(rw * rh);
   for (let j = 0; j < rh; j++) {
     for (let i = 0; i < rw; i++) {
@@ -892,12 +946,10 @@ function inpaintRect(
       const dr = data[di] - pred[pi];
       const dg = data[di + 1] - pred[pi + 1];
       const db = data[di + 2] - pred[pi + 2];
-      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-      if (dist > 25) ink[j * rw + i] = 1;
+      if (Math.sqrt(dr * dr + dg * dg + db * db) > 25) ink[j * rw + i] = 1;
     }
   }
 
-  // Dilate mask by 2px
   const dilated = new Uint8Array(rw * rh);
   for (let j = 0; j < rh; j++) {
     for (let i = 0; i < rw; i++) {
@@ -913,7 +965,6 @@ function inpaintRect(
     }
   }
 
-  // Write predicted bg only where mask is set
   for (let j = 0; j < rh; j++) {
     for (let i = 0; i < rw; i++) {
       if (!dilated[j * rw + i]) continue;
@@ -1208,6 +1259,49 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   );
 }
 
+function pillsOnSameRow(a: DetectedText, b: DetectedText): boolean {
+  if (a.container.type !== "pill" || b.container.type !== "pill") return false;
+  const ay = a.bbox.y + a.bbox.h / 2;
+  const by = b.bbox.y + b.bbox.h / 2;
+  const avgH = (a.bbox.h + b.bbox.h) / 2;
+  return Math.abs(ay - by) <= avgH * 0.85;
+}
+
+/** Expand changed pill ids to include same-row neighbors so chips reflow together. */
+function expandPillRowIds(
+  items: DetectedText[],
+  changedIds: Set<string>,
+): Set<string> {
+  const out = new Set(changedIds);
+  const pills = items.filter((i) => i.container.type === "pill");
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const p of pills) {
+      if (!out.has(p.id)) continue;
+      for (const q of pills) {
+        if (out.has(q.id)) continue;
+        if (!pillsOnSameRow(p, q)) continue;
+        // Only pull neighbors that are horizontally close (same chip row)
+        const gap =
+          p.bbox.x < q.bbox.x
+            ? q.bbox.x - (p.bbox.x + p.bbox.w)
+            : p.bbox.x - (q.bbox.x + q.bbox.w);
+        const maxGap = Math.max(
+          Math.max(p.bbox.w, q.bbox.w) * 1.6,
+          ((p.bbox.h + q.bbox.h) / 2) * 3,
+          0.12,
+        );
+        if (gap >= 0 && gap <= maxGap) {
+          out.add(q.id);
+          grew = true;
+        }
+      }
+    }
+  }
+  return out;
+}
+
 function collectEraseTargets(
   items: DetectedText[],
   edits: TextReplaceEdits,
@@ -1215,7 +1309,7 @@ function collectEraseTargets(
   imgW: number,
   imgH: number,
 ): PxRect[] {
-  const changedIds = new Set(
+  let changedIds = new Set(
     items
       .filter((item) => itemChanged(item, edits[item.id], seriesItemId))
       .map((item) => item.id),
@@ -1235,6 +1329,8 @@ function collectEraseTargets(
       for (const m of members) changedIds.add(m.id);
     }
   }
+
+  changedIds = expandPillRowIds(items, changedIds);
 
   const rects: PxRect[] = [];
   for (const item of items) {
@@ -1295,20 +1391,46 @@ function drawAllReplacements(
   const changed = (item: DetectedText) =>
     itemChanged(item, edits[item.id], seriesItemId);
 
-  // Pill groups: if any member changed, redraw entire group
-  const handled = new Set<string>();
-  const groups = new Map<string, DetectedText[]>();
+  let redrawIds = new Set(
+    items.filter(changed).map((item) => item.id),
+  );
+  // Include layout-group siblings
   for (const item of items) {
-    if (item.container.type === "pill" && item.layoutGroupId) {
-      const list = groups.get(item.layoutGroupId) ?? [];
-      list.push(item);
-      groups.set(item.layoutGroupId, list);
+    if (!item.layoutGroupId || !redrawIds.has(item.id)) continue;
+    for (const sib of items) {
+      if (sib.layoutGroupId === item.layoutGroupId) redrawIds.add(sib.id);
     }
   }
+  redrawIds = expandPillRowIds(items, redrawIds);
 
-  for (const [, members] of groups) {
-    if (!members.some(changed)) continue;
-    const layouts = layoutPillGroup(ctx, members, texts, imgW, imgH);
+  const handled = new Set<string>();
+
+  // Build row clusters among pills that need redraw
+  const pillRedraw = items.filter(
+    (i) => i.container.type === "pill" && redrawIds.has(i.id),
+  );
+  const clustered = new Set<string>();
+  for (const seed of pillRedraw) {
+    if (clustered.has(seed.id)) continue;
+    const members = pillRedraw.filter(
+      (p) =>
+        !clustered.has(p.id) &&
+        (p.id === seed.id ||
+          p.layoutGroupId === seed.layoutGroupId ||
+          pillsOnSameRow(p, seed)),
+    );
+    // Expand to full same-row set among redraw pills
+    const row = pillRedraw.filter((p) =>
+      members.some(
+        (m) =>
+          p.id === m.id ||
+          (p.layoutGroupId && p.layoutGroupId === m.layoutGroupId) ||
+          pillsOnSameRow(p, m),
+      ),
+    );
+    for (const m of row) clustered.add(m.id);
+    if (row.length === 0) continue;
+    const layouts = layoutPillGroup(ctx, row, texts, imgW, imgH);
     for (const layout of layouts) {
       drawPill(ctx, layout);
       handled.add(layout.item.id);
@@ -1316,7 +1438,7 @@ function drawAllReplacements(
   }
 
   for (const item of items) {
-    if (handled.has(item.id) || !changed(item)) continue;
+    if (handled.has(item.id) || !redrawIds.has(item.id)) continue;
     const text = texts.get(item.id) ?? item.text;
     if (item.container.type === "pill") {
       const layouts = layoutPillGroup(ctx, [item], texts, imgW, imgH);
@@ -1344,7 +1466,9 @@ export async function detectTexts(file: File): Promise<{
     }),
   });
   const enriched = enrichDetections(Array.isArray(data.items) ? data.items : []);
-  const items = await measureStyles(file, enriched);
+  const measured = await measureStyles(file, enriched);
+  // Re-group pills after measured container.rect improves proximity
+  const items = assignLayoutGroups(measured);
   return { items, width: prepared.width, height: prepared.height };
 }
 

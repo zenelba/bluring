@@ -81,7 +81,7 @@ Rules:
 - kind "text": everything else (headlines, labels, buttons like SKLENI, non-numeric phrases).
 - isPill: true only for text inside a rounded colored badge/chip (e.g. yellow "ENOTNA CENA", pink "2 LETI"). Not for full-width pink buttons like SKLENI.
 - layoutGroupId: SAME id for horizontally adjacent pills in one row that should reflow together. null otherwise.
-- fontWeight / align: best guess from the image.
+- fontWeight / align: best guess from the image. Prefer "left" for headlines and body on the left side of banners; use "center" only when text is clearly centered in the frame.
 - number must be null when kind is not "number".
 
 Detected lines:
@@ -132,7 +132,7 @@ function normalizeLabel(raw: unknown, fallbackText: string): Label | null {
       : "text";
   const fontWeight = o.fontWeight === "normal" ? "normal" : "bold";
   const align =
-    o.align === "left" || o.align === "right" ? o.align : "center";
+    o.align === "center" || o.align === "right" ? o.align : "left";
   const layoutGroupId =
     typeof o.layoutGroupId === "string" && o.layoutGroupId.trim()
       ? o.layoutGroupId.trim()
@@ -237,7 +237,7 @@ function mergeLineAndLabel(line: LineItem, label: Label | undefined) {
     style: {
       color: "#000000",
       fontWeight: label?.fontWeight ?? "bold",
-      align: label?.align ?? "center",
+      align: label?.align ?? "left",
     },
     number: kind === "number" ? label?.number ?? null : null,
   };
