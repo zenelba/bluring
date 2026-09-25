@@ -2,7 +2,11 @@
  * Google Cloud Vision DOCUMENT_TEXT_DETECTION -> word boxes -> grouped lines.
  */
 
-import { ensureProjectEnv, getLoadedEnvPaths } from "./loadEnv.js";
+import {
+  ensureProjectEnv,
+  getLoadedEnvPaths,
+  hasInjectedProjectEnv,
+} from "./loadEnv.js";
 
 const PLACEHOLDER_RE = /^(your|xxx|change-me|placeholder)/i;
 const ENV_NAME = "GOOGLE_CLOUD_VISION_API_KEY";
@@ -38,10 +42,13 @@ export function assertGoogleVisionConfigured(context = "Google Cloud Vision") {
   if (key) return key;
 
   const loaded = getLoadedEnvPaths();
+  const injected = hasInjectedProjectEnv();
   const loadedHint =
     loaded.length > 0
       ? `Loaded env file(s): ${loaded.join(", ")}.`
-      : "No .env.local or .env was found under the project root.";
+      : injected
+        ? "Other project env vars are present (for example OPENAI_API_KEY), so runtime env works — this specific key is missing from .env.local."
+        : "Could not locate .env.local under the project root from this process.";
 
   if (isPlaceholder) {
     throw new Error(
@@ -51,12 +58,12 @@ export function assertGoogleVisionConfigured(context = "Google Cloud Vision") {
 
   if (raw !== undefined && String(raw).trim() === "") {
     throw new Error(
-      `${context}: ${ENV_NAME} is set but empty in your env file. Paste a real API key after the equals sign, then restart \`npx vercel dev\`. ${loadedHint}`,
+      `${context}: ${ENV_NAME} is set but empty. Paste a real API key after the equals sign in .env.local, then restart \`npx vercel dev\`. ${loadedHint}`,
     );
   }
 
   throw new Error(
-    `${context}: ${ENV_NAME} was not found. Add it to .env.local in the project root (not only in the GCP console), e.g. ${ENV_NAME}=AIza..., enable the Vision API, then restart \`npx vercel dev\`. ${loadedHint}`,
+    `${context}: ${ENV_NAME} is not set. Add this exact line to .env.local next to package.json:\n${ENV_NAME}=AIza...your_key\nThen restart \`npx vercel dev\`. Enabling Vision in GCP alone is not enough. ${loadedHint}`,
   );
 }
 

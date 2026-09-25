@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const helperDir = dirname(fileURLToPath(import.meta.url));
+/** When this file lives at api/helpers/loadEnv.js → project root is ../.. */
 const projectRootFromModule = resolve(helperDir, "../..");
 
 let loaded = false;
@@ -15,8 +16,9 @@ let loadedEnvPaths = [];
  */
 function findEnvDirectory(startDir) {
   let dir = resolve(startDir);
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 16; i++) {
     if (existsSync(resolve(dir, ".env.local"))) return dir;
+    if (existsSync(resolve(dir, ".env"))) return dir;
     if (
       existsSync(resolve(dir, "package.json")) &&
       (existsSync(resolve(dir, "vercel.json")) ||
@@ -29,6 +31,33 @@ function findEnvDirectory(startDir) {
     dir = parent;
   }
   return null;
+}
+
+/**
+ * Candidate roots: cwd, INIT_CWD, module-relative, and a few vercel layouts.
+ * @returns {string[]}
+ */
+function collectSearchRoots() {
+  const roots = [];
+  const add = (p) => {
+    if (!p || typeof p !== "string") return;
+    const resolved = resolve(p);
+    if (!roots.includes(resolved)) roots.push(resolved);
+  };
+
+  add(process.cwd());
+  add(process.env.INIT_CWD);
+  add(process.env.PWD);
+  add(projectRootFromModule);
+  add(helperDir);
+  // Bundled / copied layouts under .vercel
+  add(resolve(helperDir, ".."));
+  add(resolve(helperDir, "../.."));
+  add(resolve(helperDir, "../../.."));
+  add(resolve(helperDir, "../../../.."));
+  add(resolve(process.cwd(), ".."));
+
+  return roots;
 }
 
 /**
@@ -66,6 +95,19 @@ export function getLoadedEnvPaths() {
   return [...loadedEnvPaths];
 }
 
+/**
+ * Whether process.env already has typical project secrets (e.g. injected by vercel dev).
+ * @returns {boolean}
+ */
+export function hasInjectedProjectEnv() {
+  ensureProjectEnv();
+  return Boolean(
+    (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim()) ||
+      (process.env.ACCESS_SECRET && process.env.ACCESS_SECRET.trim()) ||
+      (process.env.SONIOX_API_KEY && process.env.SONIOX_API_KEY.trim()),
+  );
+}
+
 /** Load `.env.local` / `.env` from project root (needed for some `vercel dev` setups). */
 export function ensureProjectEnv() {
   if (loaded) return;
@@ -73,12 +115,11 @@ export function ensureProjectEnv() {
   loadedEnvPaths = [];
 
   const roots = new Set();
-  const fromCwd = findEnvDirectory(process.cwd());
-  const fromModule = findEnvDirectory(projectRootFromModule);
-  if (fromCwd) roots.add(fromCwd);
-  if (fromModule) roots.add(fromModule);
-  roots.add(projectRootFromModule);
-  roots.add(process.cwd());
+  for (const start of collectSearchRoots()) {
+    const found = findEnvDirectory(start);
+    if (found) roots.add(found);
+    roots.add(start);
+  }
 
   const files = [".env.local", ".env"];
   for (const root of roots) {
