@@ -1,5 +1,12 @@
 import { saveAs } from "file-saver";
 import JSZip from "jszip";
+import {
+  calibrate,
+  fontCss,
+  loadCandidateFonts,
+  matchFont,
+  type FontWeightNum,
+} from "./fontMatch";
 
 export type TextBBox = { x: number; y: number; w: number; h: number };
 
@@ -29,6 +36,12 @@ export type TextStyle = {
   color: string;
   fontWeight: "normal" | "bold";
   align: "left" | "center" | "right";
+  /** Matched Google Font family */
+  fontFamily: string;
+  /** Font size in px relative to image height (sizePx / imgH) */
+  fontSizeRel: number;
+  /** Horizontal scale to match original glyph width */
+  scaleX: number;
 };
 
 export type DetectedText = {
@@ -67,8 +80,6 @@ export type RenderedVariant = {
 
 const MAX_API_EDGE = 1536;
 const MAX_BODY_BYTES = 3.5 * 1024 * 1024;
-const FONT_STACK =
-  '"Montserrat", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
 
 function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -300,6 +311,9 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
         raw.style?.align === "left" || raw.style?.align === "right"
           ? raw.style.align
           : "center",
+      fontFamily: raw.style?.fontFamily ?? "Montserrat",
+      fontSizeRel: raw.style?.fontSizeRel ?? 0.04,
+      scaleX: raw.style?.scaleX ?? 1,
     },
     layoutGroupId: raw.layoutGroupId ?? null,
   };
@@ -365,13 +379,14 @@ function luminance(c: { r: number; g: number; b: number }): number {
 }
 
 /**
- * Sample glyph / background colors and expand pill plates from pixels.
+ * Sample glyph / background colors, match nearest Google Font, expand pill plates.
  * Runs on the source image using normalized bboxes from OCR.
  */
 export async function measureStyles(
   file: File,
   items: DetectedText[],
 ): Promise<DetectedText[]> {
+  await loadCandidateFonts();
   const img = await loadImageFromBlob(file);
   const imgW = img.naturalWidth;
   const imgH = img.naturalHeight;
@@ -434,10 +449,28 @@ export async function measureStyles(
           ? "#111111"
           : "#FFFFFF";
 
+    const matched = matchFont(
+      imageData,
+      item.text,
+      box,
+      bg,
+      item.style.fontWeight,
+    );
+    const fontStyle = {
+      color: textColor,
+      fontWeight: (matched.weight === 700 ? "bold" : "normal") as
+        | "normal"
+        | "bold",
+      align: item.style.align,
+      fontFamily: matched.family,
+      fontSizeRel: matched.size / imgH,
+      scaleX: matched.scaleX,
+    };
+
     if (item.container.type !== "pill") {
       return {
         ...item,
-        style: { ...item.style, color: textColor },
+        style: fontStyle,
         container: { ...item.container, rect: null },
       };
     }
@@ -516,17 +549,27 @@ export async function measureStyles(
       h: rectPx.h / imgH,
     };
 
+    // Measured padding from container vs text box
+    const padXPx = Math.max(0, box.x - rectPx.x);
+    const padYPx = Math.max(0, box.y - rectPx.y);
+
     return {
       ...item,
-      style: { ...item.style, color: textColor },
+      style: fontStyle,
       container: {
         ...item.container,
         fill: fillHex,
         radiusPxHint: Math.round(rectPx.h / 2),
+        padX: textBoxHRel(box.h, padXPx),
+        padY: textBoxHRel(box.h, padYPx),
         rect,
       },
     };
   });
+}
+
+function textBoxHRel(textH: number, padPx: number): number {
+  return textH > 0 ? padPx / textH : 0.45;
 }
 
 /** Heuristic: group nearby horizontal pills that share a row. */
@@ -698,58 +741,194 @@ function pillContainerPx(
   };
 }
 
-function eraseRect(
+function medianRgbAt(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  samples: Array<{ x: number; y: number }>,
+): { r: number; g: number; b: number } {
+  const rs: number[] = [];
+  const gs: number[] = [];
+  const bs: number[] = [];
+  for (const s of samples) {
+    const x = Math.round(s.x);
+    const y = Math.round(s.y);
+    if (x < 0 || y < 0 || x >= imgW || y >= imgH) continue;
+    const i = (y * imgW + x) * 4;
+    rs.push(data[i]);
+    gs.push(data[i + 1]);
+    bs.push(data[i + 2]);
+  }
+  if (rs.length === 0) return { r: 255, g: 255, b: 255 };
+  return {
+    r: medianChannel(rs),
+    g: medianChannel(gs),
+    b: medianChannel(bs),
+  };
+}
+
+/**
+ * Coons-patch inpaint: interpolate background from border strips, then
+ * overwrite only ink pixels (distance from predicted bg > 25, dilated 2px).
+ */
+function inpaintRect(
   ctx: CanvasRenderingContext2D,
   rect: PxRect,
   imgW: number,
   imgH: number,
-  dilate = 2,
 ) {
-  const x0 = Math.max(0, Math.floor(rect.x - dilate));
-  const y0 = Math.max(0, Math.floor(rect.y - dilate));
-  const x1 = Math.min(imgW, Math.ceil(rect.x + rect.w + dilate));
-  const y1 = Math.min(imgH, Math.ceil(rect.y + rect.h + dilate));
+  const x0 = Math.max(0, Math.floor(rect.x));
+  const y0 = Math.max(0, Math.floor(rect.y));
+  const x1 = Math.min(imgW, Math.ceil(rect.x + rect.w));
+  const y1 = Math.min(imgH, Math.ceil(rect.y + rect.h));
   const rw = x1 - x0;
   const rh = y1 - y0;
   if (rw <= 0 || rh <= 0) return;
 
-  // Sample border pixels outside the rect for background color
-  const sample: number[] = [];
-  const pushSample = (sx: number, sy: number) => {
-    if (sx < 0 || sy < 0 || sx >= imgW || sy >= imgH) return;
-    const d = ctx.getImageData(sx, sy, 1, 1).data;
-    sample.push(d[0], d[1], d[2]);
-  };
+  // Read a slightly larger region so we can sample outside
+  const margin = 3;
+  const sx0 = Math.max(0, x0 - margin);
+  const sy0 = Math.max(0, y0 - margin);
+  const sx1 = Math.min(imgW, x1 + margin);
+  const sy1 = Math.min(imgH, y1 + margin);
+  const sw = sx1 - sx0;
+  const sh = sy1 - sy0;
+  const imageData = ctx.getImageData(sx0, sy0, sw, sh);
+  const data = imageData.data;
 
-  const margin = dilate + 3;
-  for (let x = x0; x < x1; x += 2) {
-    pushSample(x, Math.max(0, y0 - margin));
-    pushSample(x, Math.min(imgH - 1, y1 + margin - 1));
-  }
-  for (let y = y0; y < y1; y += 2) {
-    pushSample(Math.max(0, x0 - margin), y);
-    pushSample(Math.min(imgW - 1, x1 + margin - 1), y);
+  const localX0 = x0 - sx0;
+  const localY0 = y0 - sy0;
+
+  // Sample border strips just outside the region (1–3 px), median per column/row
+  const T: Array<{ r: number; g: number; b: number }> = new Array(rw);
+  const B: Array<{ r: number; g: number; b: number }> = new Array(rw);
+  const L: Array<{ r: number; g: number; b: number }> = new Array(rh);
+  const R: Array<{ r: number; g: number; b: number }> = new Array(rh);
+
+  for (let i = 0; i < rw; i++) {
+    const gx = x0 + i;
+    const topSamples: Array<{ x: number; y: number }> = [];
+    const botSamples: Array<{ x: number; y: number }> = [];
+    for (let m = 1; m <= margin; m++) {
+      topSamples.push({ x: gx, y: y0 - m });
+      botSamples.push({ x: gx, y: y1 - 1 + m });
+    }
+    T[i] = medianRgbAt(data, sw, sh, topSamples.map((p) => ({
+      x: p.x - sx0,
+      y: p.y - sy0,
+    })));
+    B[i] = medianRgbAt(data, sw, sh, botSamples.map((p) => ({
+      x: p.x - sx0,
+      y: p.y - sy0,
+    })));
   }
 
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  const n = sample.length / 3;
-  if (n === 0) {
-    r = g = b = 255;
-  } else {
-    // Median-ish via average of middle third after sort per channel
-    const rs = sample.filter((_, i) => i % 3 === 0).sort((a, c) => a - c);
-    const gs = sample.filter((_, i) => i % 3 === 1).sort((a, c) => a - c);
-    const bs = sample.filter((_, i) => i % 3 === 2).sort((a, c) => a - c);
-    const mid = Math.floor(rs.length / 2);
-    r = rs[mid] ?? 255;
-    g = gs[mid] ?? 255;
-    b = bs[mid] ?? 255;
+  for (let j = 0; j < rh; j++) {
+    const gy = y0 + j;
+    const leftSamples: Array<{ x: number; y: number }> = [];
+    const rightSamples: Array<{ x: number; y: number }> = [];
+    for (let m = 1; m <= margin; m++) {
+      leftSamples.push({ x: x0 - m, y: gy });
+      rightSamples.push({ x: x1 - 1 + m, y: gy });
+    }
+    L[j] = medianRgbAt(data, sw, sh, leftSamples.map((p) => ({
+      x: p.x - sx0,
+      y: p.y - sy0,
+    })));
+    R[j] = medianRgbAt(data, sw, sh, rightSamples.map((p) => ({
+      x: p.x - sx0,
+      y: p.y - sy0,
+    })));
   }
 
-  ctx.fillStyle = `rgb(${r},${g},${b})`;
-  ctx.fillRect(x0, y0, rw, rh);
+  // Corner colors for bilinear subtraction
+  const TL = T[0] ?? L[0] ?? { r: 255, g: 255, b: 255 };
+  const TR = T[rw - 1] ?? R[0] ?? TL;
+  const BL = B[0] ?? L[rh - 1] ?? TL;
+  const BR = B[rw - 1] ?? R[rh - 1] ?? TL;
+
+  const pred = new Float32Array(rw * rh * 3);
+  for (let j = 0; j < rh; j++) {
+    const v = rh <= 1 ? 0 : j / (rh - 1);
+    const omv = 1 - v;
+    for (let i = 0; i < rw; i++) {
+      const u = rw <= 1 ? 0 : i / (rw - 1);
+      const omu = 1 - u;
+      const t = T[i]!;
+      const b = B[i]!;
+      const l = L[j]!;
+      const r = R[j]!;
+      const pi = (j * rw + i) * 3;
+      // Coons: (1-v)T + vB + (1-u)L + uR − bilinear corners
+      pred[pi] =
+        omv * t.r +
+        v * b.r +
+        omu * l.r +
+        u * r.r -
+        (omu * omv * TL.r + u * omv * TR.r + omu * v * BL.r + u * v * BR.r);
+      pred[pi + 1] =
+        omv * t.g +
+        v * b.g +
+        omu * l.g +
+        u * r.g -
+        (omu * omv * TL.g + u * omv * TR.g + omu * v * BL.g + u * v * BR.g);
+      pred[pi + 2] =
+        omv * t.b +
+        v * b.b +
+        omu * l.b +
+        u * r.b -
+        (omu * omv * TL.b + u * omv * TR.b + omu * v * BL.b + u * v * BR.b);
+    }
+  }
+
+  // Ink mask: pixels that differ from predicted bg by > 25
+  const ink = new Uint8Array(rw * rh);
+  for (let j = 0; j < rh; j++) {
+    for (let i = 0; i < rw; i++) {
+      const lx = localX0 + i;
+      const ly = localY0 + j;
+      const di = (ly * sw + lx) * 4;
+      const pi = (j * rw + i) * 3;
+      const dr = data[di] - pred[pi];
+      const dg = data[di + 1] - pred[pi + 1];
+      const db = data[di + 2] - pred[pi + 2];
+      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+      if (dist > 25) ink[j * rw + i] = 1;
+    }
+  }
+
+  // Dilate mask by 2px
+  const dilated = new Uint8Array(rw * rh);
+  for (let j = 0; j < rh; j++) {
+    for (let i = 0; i < rw; i++) {
+      if (!ink[j * rw + i]) continue;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const nj = j + dy;
+          const ni = i + dx;
+          if (nj < 0 || ni < 0 || nj >= rh || ni >= rw) continue;
+          dilated[nj * rw + ni] = 1;
+        }
+      }
+    }
+  }
+
+  // Write predicted bg only where mask is set
+  for (let j = 0; j < rh; j++) {
+    for (let i = 0; i < rw; i++) {
+      if (!dilated[j * rw + i]) continue;
+      const lx = localX0 + i;
+      const ly = localY0 + j;
+      const di = (ly * sw + lx) * 4;
+      const pi = (j * rw + i) * 3;
+      data[di] = Math.max(0, Math.min(255, Math.round(pred[pi])));
+      data[di + 1] = Math.max(0, Math.min(255, Math.round(pred[pi + 1])));
+      data[di + 2] = Math.max(0, Math.min(255, Math.round(pred[pi + 2])));
+      data[di + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imageData, sx0, sy0);
 }
 
 function roundRectPath(
@@ -770,25 +949,71 @@ function roundRectPath(
   ctx.closePath();
 }
 
-function fontFor(item: DetectedText, sizePx: number): string {
-  const weight = item.style.fontWeight === "bold" ? "700" : "400";
-  return `${weight} ${Math.max(6, sizePx)}px ${FONT_STACK}`;
+function itemFontWeight(item: DetectedText): FontWeightNum {
+  return item.style.fontWeight === "bold" ? 700 : 400;
 }
 
-function fitFontSize(
+function itemFontSize(item: DetectedText, imgH: number): number {
+  return Math.max(6, (item.style.fontSizeRel || 0.04) * imgH);
+}
+
+function itemScaleX(item: DetectedText): number {
+  const s = item.style.scaleX;
+  return Number.isFinite(s) && s > 0 ? s : 1;
+}
+
+/** Available width for plain text: to next same-row item or image edge. */
+function plainMaxWidth(
+  item: DetectedText,
+  allItems: DetectedText[],
+  imgW: number,
+  imgH: number,
+): number {
+  const box = bboxToPx(item.bbox, imgW, imgH);
+  const midY = item.bbox.y + item.bbox.h / 2;
+  let rightLimit = imgW;
+  for (const other of allItems) {
+    if (other.id === item.id) continue;
+    const oMid = other.bbox.y + other.bbox.h / 2;
+    if (Math.abs(oMid - midY) > Math.max(item.bbox.h, other.bbox.h) * 0.55) {
+      continue;
+    }
+    if (other.bbox.x <= item.bbox.x) continue;
+    const ox = other.bbox.x * imgW;
+    if (ox < rightLimit) rightLimit = ox;
+  }
+  // Leave a small gap before the next element
+  return Math.max(box.w, rightLimit - box.x - 4);
+}
+
+function drawScaledText(
   ctx: CanvasRenderingContext2D,
   text: string,
   item: DetectedText,
-  maxW: number,
-  preferred: number,
+  sizePx: number,
+  scaleX: number,
+  originX: number,
+  baselineY: number,
+) {
+  ctx.font = fontCss(item.style.fontFamily || "Montserrat", itemFontWeight(item), sizePx);
+  ctx.fillStyle = item.style.color;
+  ctx.textBaseline = "alphabetic";
+  ctx.save();
+  ctx.translate(originX, baselineY);
+  ctx.scale(scaleX, 1);
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+function measureScaledWidth(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  item: DetectedText,
+  sizePx: number,
+  scaleX: number,
 ): number {
-  let size = preferred;
-  ctx.font = fontFor(item, size);
-  while (size > 6 && ctx.measureText(text).width > maxW) {
-    size -= 0.5;
-    ctx.font = fontFor(item, size);
-  }
-  return size;
+  ctx.font = fontCss(item.style.fontFamily || "Montserrat", itemFontWeight(item), sizePx);
+  return ctx.measureText(text).width * scaleX;
 }
 
 function drawPlainText(
@@ -797,23 +1022,40 @@ function drawPlainText(
   text: string,
   imgW: number,
   imgH: number,
+  allItems: DetectedText[] = [],
 ) {
   const box = bboxToPx(item.bbox, imgW, imgH);
-  const preferred = box.h * 0.92;
-  const size = fitFontSize(ctx, text, item, box.w * 1.02, preferred);
-  ctx.font = fontFor(item, size);
-  ctx.fillStyle = item.style.color;
-  ctx.textBaseline = "middle";
+  let size = itemFontSize(item, imgH);
+  let scaleX = itemScaleX(item);
+  const maxW = plainMaxWidth(item, allItems, imgW, imgH);
 
-  const metrics = ctx.measureText(text);
+  // Shrink only if text would exceed available width
+  let width = measureScaledWidth(ctx, text, item, size, scaleX);
+  while (size > 6 && width > maxW) {
+    size -= 0.5;
+    width = measureScaledWidth(ctx, text, item, size, scaleX);
+  }
+
+  ctx.font = fontCss(
+    item.style.fontFamily || "Montserrat",
+    itemFontWeight(item),
+    size,
+  );
+  ctx.textBaseline = "alphabetic";
+  const metrics = ctx.measureText(text || "Hg");
+  const ascent =
+    metrics.actualBoundingBoxAscent > 0
+      ? metrics.actualBoundingBoxAscent
+      : size * 0.8;
+
   let x = box.x;
   if (item.style.align === "center") {
-    x = box.x + box.w / 2 - metrics.width / 2;
+    x = box.x + box.w / 2 - width / 2;
   } else if (item.style.align === "right") {
-    x = box.x + box.w - metrics.width;
+    x = box.x + box.w - width;
   }
-  const y = box.y + box.h / 2;
-  ctx.fillText(text, x, y);
+  const baselineY = box.y + ascent;
+  drawScaledText(ctx, text, item, size, scaleX, x, baselineY);
 }
 
 type PillLayout = {
@@ -825,6 +1067,9 @@ type PillLayout = {
   h: number;
   radius: number;
   fontSize: number;
+  scaleX: number;
+  ascent: number;
+  padLeft: number;
 };
 
 function measurePill(
@@ -833,21 +1078,51 @@ function measurePill(
   text: string,
   imgW: number,
   imgH: number,
-): { w: number; h: number; fontSize: number; radius: number; orig: PxRect } {
+): {
+  w: number;
+  h: number;
+  fontSize: number;
+  scaleX: number;
+  ascent: number;
+  radius: number;
+  padLeft: number;
+  orig: PxRect;
+} {
   const orig = pillContainerPx(item, imgW, imgH);
   const textBox = bboxToPx(item.bbox, imgW, imgH);
-  const fontSize = textBox.h * 0.88;
-  ctx.font = fontFor(item, fontSize);
+  const fontSize = itemFontSize(item, imgH);
+  const scaleX = itemScaleX(item);
+  const family = item.style.fontFamily || "Montserrat";
+  const weight = itemFontWeight(item);
+
+  const cal = calibrate(ctx, text, family, weight, {
+    x: 0,
+    y: 0,
+    w: textBox.w,
+    h: textBox.h,
+  });
+  const ascent = (cal.ascent / cal.size) * fontSize;
+
+  ctx.font = fontCss(family, weight, fontSize);
   const textW = ctx.measureText(text).width;
-  const padX = item.container.padX * textBox.h;
-  const w = Math.max(orig.h * 0.8, textW + padX * 2);
+
+  // Measured padding from container.rect vs text box (stored as padX * textH)
+  const padLeft =
+    item.container.rect != null
+      ? Math.max(0, textBox.x - orig.x)
+      : item.container.padX * textBox.h;
+  const padRight =
+    item.container.rect != null
+      ? Math.max(0, orig.x + orig.w - (textBox.x + textBox.w))
+      : padLeft;
+
+  const w = Math.max(orig.h * 0.8, textW * scaleX + padLeft + padRight);
   const h = orig.h;
-  const scaleHint = imgW / 1000;
   const radius =
     item.container.radiusPxHint > 0
-      ? item.container.radiusPxHint * scaleHint
+      ? item.container.radiusPxHint
       : h / 2;
-  return { w, h, fontSize, radius, orig };
+  return { w, h, fontSize, scaleX, ascent, radius, padLeft, orig };
 }
 
 function layoutPillGroup(
@@ -886,6 +1161,9 @@ function layoutPillGroup(
       h: m.h,
       radius: m.radius,
       fontSize: m.fontSize,
+      scaleX: m.scaleX,
+      ascent: m.ascent,
+      padLeft: m.padLeft,
     };
     cursorX += m.w + (gaps[i] ?? 0);
     return layout;
@@ -898,13 +1176,36 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   roundRectPath(ctx, layout.x, layout.y, layout.w, layout.h, layout.radius);
   ctx.fill();
 
-  ctx.font = fontFor(layout.item, layout.fontSize);
-  ctx.fillStyle = layout.item.style.color;
-  ctx.textBaseline = "middle";
-  const tw = ctx.measureText(layout.text).width;
-  const tx = layout.x + layout.w / 2 - tw / 2;
-  const ty = layout.y + layout.h / 2;
-  ctx.fillText(layout.text, tx, ty);
+  const tw = measureScaledWidth(
+    ctx,
+    layout.text,
+    layout.item,
+    layout.fontSize,
+    layout.scaleX,
+  );
+  const tx = layout.x + (layout.w - tw) / 2;
+
+  // Baseline: original text top relative to pill + calibrated ascent
+  const textBox = layout.item.bbox;
+  const pillRect = layout.item.container.rect;
+  let by: number;
+  if (pillRect && pillRect.h > 0) {
+    const relTop = (textBox.y - pillRect.y) / pillRect.h;
+    by = layout.y + relTop * layout.h + layout.ascent;
+  } else {
+    const approxPadY = Math.max(0, (layout.h - layout.ascent * 1.25) / 2);
+    by = layout.y + approxPadY + layout.ascent;
+  }
+
+  drawScaledText(
+    ctx,
+    layout.text,
+    layout.item,
+    layout.fontSize,
+    layout.scaleX,
+    tx,
+    by,
+  );
 }
 
 function collectEraseTargets(
@@ -964,13 +1265,13 @@ function buildCleanPlate(
   const canvas = document.createElement("canvas");
   canvas.width = imgW;
   canvas.height = imgH;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) throw new Error("Canvas unavailable");
   ctx.drawImage(source, 0, 0);
 
   const rects = collectEraseTargets(items, edits, seriesItemId, imgW, imgH);
   for (const rect of rects) {
-    eraseRect(ctx, rect, imgW, imgH, 3);
+    inpaintRect(ctx, rect, imgW, imgH);
   }
   return canvas;
 }
@@ -1021,7 +1322,7 @@ function drawAllReplacements(
       const layouts = layoutPillGroup(ctx, [item], texts, imgW, imgH);
       drawPill(ctx, layouts[0]);
     } else {
-      drawPlainText(ctx, item, text, imgW, imgH);
+      drawPlainText(ctx, item, text, imgW, imgH, items);
     }
   }
 }

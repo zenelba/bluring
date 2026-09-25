@@ -829,24 +829,43 @@
 
 .tr-chips {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.25rem;
 }
 
-.tr-vary {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin-top: 0.35rem;
-  font-size: 0.8rem;
-  color: var(--osebe-muted);
-}
-
-.tr-series {
+.tr-series-inline {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding-top: 0.25rem;
-  border-top: 1px solid var(--osebe-line);
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.tr-series-btn {
+  align-self: flex-start;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.65rem;
+}
+
+.tr-series-btn--active {
+  border-color: #22c55e;
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.tr-series-inline__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  background: #f3f4f6;
+}
+
+.tr-series-inline__preview {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .tr-series__row {

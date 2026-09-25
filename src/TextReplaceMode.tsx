@@ -476,7 +476,7 @@ export default function TextReplaceMode() {
             <h2>Text replace</h2>
             <p>
               Detect text on a flat graphic, replace strings or numbers, and
-              generate a series around one number. Pills resize and reflow.
+              generate a series (Serija) around one number. Pills resize and reflow.
             </p>
           </div>
 
@@ -581,6 +581,17 @@ export default function TextReplaceMode() {
                           <span className="osebe-brand-chip">
                             {item.container.type}
                           </span>
+                          {item.style.fontFamily && (
+                            <span
+                              className="osebe-brand-chip"
+                              title={`${item.style.fontFamily} ${
+                                item.style.fontWeight === "bold" ? 700 : 400
+                              }`}
+                            >
+                              {item.style.fontFamily}{" "}
+                              {item.style.fontWeight === "bold" ? 700 : 400}
+                            </span>
+                          )}
                         </span>
                       </div>
 
@@ -655,93 +666,110 @@ export default function TextReplaceMode() {
                       )}
 
                       {item.number && (
-                        <label
-                          className="tr-vary"
+                        <div
+                          className="tr-series-inline"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <input
-                            type="radio"
-                            name="tr-vary"
-                            checked={isVary}
+                          <button
+                            type="button"
+                            className={`osebe-btn osebe-btn--ghost tr-series-btn${
+                              isVary ? " tr-series-btn--active" : ""
+                            }`}
                             disabled={busy}
-                            onChange={() =>
-                              setSeries((s) => ({ ...s, itemId: item.id }))
+                            onClick={() =>
+                              setSeries((s) =>
+                                s.itemId === item.id
+                                  ? { ...s, itemId: null }
+                                  : {
+                                      ...s,
+                                      itemId: item.id,
+                                      steps: s.steps || 4,
+                                      step: s.step || 1,
+                                    },
+                              )
                             }
-                          />
-                          <span>Vary series from this number</span>
-                        </label>
+                          >
+                            Serija
+                          </button>
+                          {isVary && (
+                            <div className="tr-series-inline__panel">
+                              <div className="tr-series__row">
+                                <label className="osebe-field">
+                                  <span className="osebe-field__label">
+                                    Koraki (±N)
+                                  </span>
+                                  <input
+                                    className="osebe-input"
+                                    type="number"
+                                    min={0}
+                                    max={20}
+                                    disabled={busy}
+                                    value={series.steps}
+                                    onChange={(e) =>
+                                      setSeries((s) => ({
+                                        ...s,
+                                        steps: Math.max(
+                                          0,
+                                          Math.min(
+                                            20,
+                                            Number(e.target.value) || 0,
+                                          ),
+                                        ),
+                                      }))
+                                    }
+                                  />
+                                </label>
+                                <label className="osebe-field">
+                                  <span className="osebe-field__label">
+                                    Korak
+                                  </span>
+                                  <input
+                                    className="osebe-input"
+                                    type="text"
+                                    inputMode="decimal"
+                                    disabled={busy}
+                                    value={String(series.step).replace(".", ",")}
+                                    onChange={(e) => {
+                                      const n = parseLocaleNumber(
+                                        e.target.value,
+                                      );
+                                      if (n != null) {
+                                        setSeries((s) => ({ ...s, step: n }));
+                                      }
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                              <p className="osebe-hint tr-series-inline__preview">
+                                {series.steps > 0
+                                  ? `${seriesPreview.length} slik`
+                                  : "1 slika"}
+                                {seriesPreview.length > 0 &&
+                                seriesPreview.length <= 11 &&
+                                item.number
+                                  ? `: ${seriesPreview
+                                      .map((v) =>
+                                        formatNumber(v, item.number!),
+                                      )
+                                      .join(" · ")}`
+                                  : seriesPreview.length > 11 && item.number
+                                    ? `: ${formatNumber(
+                                        seriesPreview[0]!,
+                                        item.number,
+                                      )} · … · ${formatNumber(
+                                        seriesPreview[seriesPreview.length - 1]!,
+                                        item.number,
+                                      )}`
+                                    : ""}
+                              </p>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </li>
                   );
                 })}
               </ul>
-
-              {series.itemId && (
-                <div className="tr-series">
-                  <span className="osebe-kicker">Series</span>
-                  <div className="tr-series__row">
-                    <label className="osebe-field">
-                      <span className="osebe-field__label">Steps (±N)</span>
-                      <input
-                        className="osebe-input"
-                        type="number"
-                        min={0}
-                        max={20}
-                        disabled={busy}
-                        value={series.steps}
-                        onChange={(e) =>
-                          setSeries((s) => ({
-                            ...s,
-                            steps: Math.max(
-                              0,
-                              Math.min(20, Number(e.target.value) || 0),
-                            ),
-                          }))
-                        }
-                      />
-                    </label>
-                    <label className="osebe-field">
-                      <span className="osebe-field__label">Step size</span>
-                      <input
-                        className="osebe-input"
-                        type="text"
-                        inputMode="decimal"
-                        disabled={busy}
-                        value={String(series.step).replace(".", ",")}
-                        onChange={(e) => {
-                          const n = parseLocaleNumber(e.target.value);
-                          if (n != null) {
-                            setSeries((s) => ({ ...s, step: n }));
-                          }
-                        }}
-                      />
-                    </label>
-                  </div>
-                  <button
-                    type="button"
-                    className="osebe-btn osebe-btn--ghost"
-                    disabled={busy}
-                    onClick={() => setSeries((s) => ({ ...s, itemId: null }))}
-                  >
-                    Clear series
-                  </button>
-                  <p className="osebe-hint">
-                    {series.steps > 0
-                      ? `${seriesPreview.length} images (center ± ${series.steps})`
-                      : "1 image (steps = 0)"}
-                    {seriesPreview.length > 0 && seriesPreview.length <= 11
-                      ? `: ${seriesPreview
-                          .map((v) => {
-                            const meta = items.find(
-                              (i) => i.id === series.itemId,
-                            )?.number;
-                            return meta ? formatNumber(v, meta) : String(v);
-                          })
-                          .join(" · ")}`
-                      : ""}
-                  </p>
-                </div>
-              )}
             </div>
           )}
         </aside>
