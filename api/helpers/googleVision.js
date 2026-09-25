@@ -138,7 +138,37 @@ function extractWord(word) {
 }
 
 /**
- * Split a horizontal run of words into segments by gap / height change.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isNumericToken(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  // Pure number: 10,99 / 28.99 / 2 / -1 500
+  return /^-?\d{1,3}(?:[.\s]\d{3})*(?:[,.]\d+)?$|^-?\d+[,.]\d+$|^-?\d+$/.test(t);
+}
+
+/**
+ * Currency / punctuation that stays glued to an adjacent number.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isCurrencyOrMark(text) {
+  const t = String(text || "").trim();
+  return /^(€|\$|£|%|\/)$/.test(t);
+}
+
+/**
+ * Treat token as "number side" for boundary splits (numbers + currency marks).
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isNumberSide(text) {
+  return isNumericToken(text) || isCurrencyOrMark(text);
+}
+
+/**
+ * Split a horizontal run of words into segments by gap / height / number boundary.
  * @param {{ text: string, bbox: { x: number, y: number, w: number, h: number } }[]} words
  * @returns {{ text: string, bbox: { x: number, y: number, w: number, h: number } }[]}
  */
@@ -157,7 +187,15 @@ function splitByGapAndHeight(words) {
       Math.max(prev.bbox.h, cur.bbox.h) /
       Math.max(1, Math.min(prev.bbox.h, cur.bbox.h));
 
-    if (gap > avgH * 0.8 || heightRatio > 1.6) {
+    const prevNum = isNumberSide(prev.text);
+    const curNum = isNumberSide(cur.text);
+    // Keep € / $ glued to a number; split number ↔ plain text
+    const numberBoundary =
+      prevNum !== curNum &&
+      !(isNumericToken(prev.text) && isCurrencyOrMark(cur.text)) &&
+      !(isCurrencyOrMark(prev.text) && isNumericToken(cur.text));
+
+    if (gap > avgH * 0.8 || heightRatio > 1.25 || numberBoundary) {
       segments.push([cur]);
     } else {
       segments[segments.length - 1].push(cur);
