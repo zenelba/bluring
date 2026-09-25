@@ -36,6 +36,10 @@
       "maxDuration": 60,
       "includeFiles": "api/helpers/**",
       "memory": 1024
+    },
+    "api/text-detect.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
     }
   }
 }

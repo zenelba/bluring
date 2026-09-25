@@ -32,6 +32,7 @@ import PortraitsMode from "./PortraitsMode";
 import CollagesMode from "./CollagesMode";
 import AudioVideoMode from "./AudioVideoMode";
 import BrandRemovalMode from "./BrandRemovalMode";
+import TextReplaceMode from "./TextReplaceMode";
 import "./App.css";
 
 type AppMode =
@@ -42,7 +43,8 @@ type AppMode =
   | "portraits"
   | "collages"
   | "av"
-  | "brandRemoval";
+  | "brandRemoval"
+  | "textReplace";
 
 const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
   { id: "blur", label: "Logo blur" },
@@ -53,9 +55,13 @@ const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
   { id: "collages", label: "Collages" },
   { id: "av", label: "Audio / Video" },
   { id: "brandRemoval", label: "Brand removal" },
+  { id: "textReplace", label: "Text replace" },
 ];
 
 function modeSubtitle(mode: AppMode): string {
+  if (mode === "textReplace") {
+    return "Detect text, replace strings or numbers, and generate stepped number variants";
+  }
   if (mode === "brandRemoval") {
     return "Remove logos and brand text from images using AI (filename lists targets)";
   }
@@ -660,7 +666,8 @@ export default function App() {
             mode !== "portraits" &&
             mode !== "collages" &&
             mode !== "av" &&
-            mode !== "brandRemoval" && (
+            mode !== "brandRemoval" &&
+            mode !== "textReplace" && (
             <button type="button" className="btn btn--ghost" onClick={reset}>
               New image
             </button>
@@ -677,6 +684,8 @@ export default function App() {
         <AudioVideoMode />
       ) : mode === "brandRemoval" ? (
         <BrandRemovalMode />
+      ) : mode === "textReplace" ? (
+        <TextReplaceMode />
       ) : (
       <div className="main">
         <aside className="sidebar">
