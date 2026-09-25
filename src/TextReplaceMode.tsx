@@ -226,38 +226,55 @@ function TextBBoxOverlay(props: {
       }}
     >
       {items.map((item) => {
+        if (item.kind === "logo") return null;
         const selected = selectedId === item.id;
         const hovered = hoveredId === item.id;
         const stroke = boxStroke(item, selected, hovered, seriesItemId);
+        const pillRect =
+          item.container.type === "pill" ? item.container.rect : null;
         return (
-          <div
-            key={item.id}
-            className={`tr-bbox${selected ? " tr-bbox--selected" : ""}${
-              hovered ? " tr-bbox--hovered" : ""
-            }`}
-            style={{
-              left: `${item.bbox.x * 100}%`,
-              top: `${item.bbox.y * 100}%`,
-              width: `${item.bbox.w * 100}%`,
-              height: `${item.bbox.h * 100}%`,
-              borderColor: stroke,
-            }}
-            onPointerDown={(e) => startMove(e, item)}
-            onPointerEnter={() => onHover(item.id)}
-            onPointerLeave={() => onHover(null)}
-            title={item.text}
-          >
-            {selected && !disabled && (
-              <>
-                {(["nw", "ne", "sw", "se"] as HandleCorner[]).map((c) => (
-                  <span
-                    key={c}
-                    className={`tr-bbox__handle tr-bbox__handle--${c}`}
-                    onPointerDown={(e) => startResize(e, item, c)}
-                  />
-                ))}
-              </>
+          <div key={item.id}>
+            {pillRect && (
+              <div
+                className="tr-bbox-pill"
+                style={{
+                  left: `${pillRect.x * 100}%`,
+                  top: `${pillRect.y * 100}%`,
+                  width: `${pillRect.w * 100}%`,
+                  height: `${pillRect.h * 100}%`,
+                  borderColor: stroke,
+                }}
+                aria-hidden
+              />
             )}
+            <div
+              className={`tr-bbox${selected ? " tr-bbox--selected" : ""}${
+                hovered ? " tr-bbox--hovered" : ""
+              }`}
+              style={{
+                left: `${item.bbox.x * 100}%`,
+                top: `${item.bbox.y * 100}%`,
+                width: `${item.bbox.w * 100}%`,
+                height: `${item.bbox.h * 100}%`,
+                borderColor: stroke,
+              }}
+              onPointerDown={(e) => startMove(e, item)}
+              onPointerEnter={() => onHover(item.id)}
+              onPointerLeave={() => onHover(null)}
+              title={item.text}
+            >
+              {selected && !disabled && (
+                <>
+                  {(["nw", "ne", "sw", "se"] as HandleCorner[]).map((c) => (
+                    <span
+                      key={c}
+                      className={`tr-bbox__handle tr-bbox__handle--${c}`}
+                      onPointerDown={(e) => startResize(e, item, c)}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
           </div>
         );
       })}
@@ -348,9 +365,22 @@ export default function TextReplaceMode() {
 
   const patchBBox = (id: string, bbox: TextBBox) => {
     setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, bbox } : item)),
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              bbox,
+              container: { ...item.container, rect: null },
+            }
+          : item,
+      ),
     );
   };
+
+  const visibleItems = useMemo(
+    () => items.filter((item) => item.kind !== "logo"),
+    [items],
+  );
 
   const runDetect = async () => {
     if (!file || busy) return;
@@ -386,7 +416,7 @@ export default function TextReplaceMode() {
   };
 
   const runGenerate = async () => {
-    if (!file || items.length === 0 || busy) return;
+    if (!file || visibleItems.length === 0 || busy) return;
     setBusy(true);
     setPhase("generate");
     setError(null);
@@ -493,7 +523,7 @@ export default function TextReplaceMode() {
           <button
             type="button"
             className="osebe-btn osebe-btn--primary"
-            disabled={!file || items.length === 0 || busy}
+            disabled={!file || visibleItems.length === 0 || busy}
             onClick={() => void runGenerate()}
           >
             {phase === "generate" ? "Generating…" : "Generate"}
@@ -518,7 +548,7 @@ export default function TextReplaceMode() {
 
           {error && <p className="osebe-error">{error}</p>}
 
-          {items.length > 0 && (
+          {visibleItems.length > 0 && (
             <div className="tr-edits">
               <span className="osebe-kicker osebe-kicker--section">
                 Detected text
@@ -528,7 +558,7 @@ export default function TextReplaceMode() {
                 select its box.
               </p>
               <ul className="tr-list">
-                {items.map((item) => {
+                {visibleItems.map((item) => {
                   const edit = edits[item.id];
                   const isVary = series.itemId === item.id;
                   const isSelected = selectedId === item.id;
@@ -723,8 +753,8 @@ export default function TextReplaceMode() {
               <span className="osebe-status__count">
                 {variants.length > 0
                   ? `${variants.length} out`
-                  : items.length > 0
-                    ? `${items.length} texts`
+                  : visibleItems.length > 0
+                    ? `${visibleItems.length} texts`
                     : "—"}
               </span>
             </div>
@@ -755,9 +785,9 @@ export default function TextReplaceMode() {
                       draggable={false}
                     />
                   )}
-                  {items.length > 0 && (
+                  {visibleItems.length > 0 && (
                     <TextBBoxOverlay
-                      items={items}
+                      items={visibleItems}
                       selectedId={selectedId}
                       hoveredId={hoveredId}
                       seriesItemId={series.itemId}

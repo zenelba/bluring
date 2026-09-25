@@ -904,6 +904,16 @@
   pointer-events: auto;
 }
 
+.tr-bbox-pill {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed #ec4899;
+  background: transparent;
+  pointer-events: none;
+  border-radius: 999px;
+  opacity: 0.9;
+}
+
 .tr-bbox--hovered {
   background: rgba(56, 189, 248, 0.16);
 }

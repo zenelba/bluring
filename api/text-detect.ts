@@ -1,6 +1,5 @@
 /**
- * Detect text regions on an image for Text replace mode.
- * Returns bounding boxes, style hints, pill containers, and number metadata.
+ * Text replace detect: Google Vision for geometry + GPT-4o for semantic labels.
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
@@ -9,41 +8,59 @@ import {
   getOpenAiBaseUrl,
 } from "./helpers/openaiEnv.js";
 import { ensureProjectEnv } from "./helpers/loadEnv.js";
+import { detectTextLines } from "./helpers/googleVision.js";
 
-function visionModel(): string {
+function semanticModel(): string {
   ensureProjectEnv();
-  // Prefer dedicated text-detect model; default gpt-4o for better spatial boxes.
-  // Do not fall back to brand mini — that model is weak at bounding boxes.
   return process.env.OPENAI_TEXT_DETECT_MODEL?.trim() || "gpt-4o";
 }
 
-function buildDetectPrompt(imageWidth: number, imageHeight: number): string {
-  return `You are an OCR + layout analyzer for promotional / flat graphic images (ads, banners, telecom offers).
+type LineItem = {
+  id: string;
+  text: string;
+  bbox: { x: number; y: number; w: number; h: number };
+};
 
-The image is exactly ${imageWidth}×${imageHeight} pixels.
+type NumberMeta = {
+  value: number;
+  decimalSep: "," | "." | null;
+  thousandSep: "." | "," | " " | null;
+  decimals: number;
+  prefix: string;
+  suffix: string;
+  rawNumeric: string;
+};
 
-Detect EVERY visible text string (titles, badges, prices, speeds, buttons, footnotes, labels).
+type Label = {
+  id: string;
+  kind: "text" | "number" | "logo";
+  isPill: boolean;
+  layoutGroupId: string | null;
+  fontWeight: "normal" | "bold";
+  align: "left" | "center" | "right";
+  number: NumberMeta | null;
+};
+
+function buildSemanticPrompt(lines: LineItem[]): string {
+  const catalog = lines.map((l) => ({
+    id: l.id,
+    text: l.text,
+    bbox: l.bbox,
+  }));
+  return `You label already-detected OCR text lines on a promotional / flat graphic image.
+
+You are given a FIXED list of detected lines (id, text, bbox). Geometry is already correct — do NOT change, invent, merge, split, or move any boxes or ids.
 
 Return JSON only:
 {
-  "items": [
+  "labels": [
     {
       "id": "t1",
-      "text": "exact visible string",
-      "bbox": { "x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0 },
-      "container": {
-        "type": "pill" | "plain",
-        "fill": "#RRGGBB or null",
-        "radiusPxHint": number,
-        "padX": number,
-        "padY": number
-      },
+      "kind": "text" | "number" | "logo",
+      "isPill": boolean,
       "layoutGroupId": "g1" | null,
-      "style": {
-        "color": "#RRGGBB",
-        "fontWeight": "normal" | "bold",
-        "align": "left" | "center" | "right"
-      },
+      "fontWeight": "normal" | "bold",
+      "align": "left" | "center" | "right",
       "number": null | {
         "value": number,
         "decimalSep": "," | "." | null,
@@ -57,120 +74,21 @@ Return JSON only:
   ]
 }
 
-Bounding box rules (critical — be precise):
-- bbox MUST use normalized 0–1 fractions of image width/height.
-- x,y = TOP-LEFT of the glyph ink; w,h = width/height of the TEXT ONLY.
-- Boxes must be TIGHT around the characters — no large empty padding, no icons, no circular icon backgrounds.
-- For buttons (e.g. "SKLENI"): bbox = the letters only, NOT the left half of the button and NOT the full pill background.
-- For pills/badges: bbox = the text inside the pill (not the whole colored chip).
-- One item = one visible text line or short token. Do not invent empty boxes.
-- Never return a box that contains no readable text.
-- Never include decorative icons (speedometer, arrows, 5G logo) as text items.
-
-Other rules:
-- container.type = "pill" for rounded badge/chip backgrounds (e.g. yellow "ENOTNA CENA", pink "2 LETI"). Otherwise "plain".
-- For pills: container.fill = pill background color; padX/padY ≈ padding as fraction of text height; radiusPxHint ≈ corner radius for a ~1000px-wide image.
+Rules:
+- Return exactly one label per provided id. Do not add or drop ids.
+- kind "logo": brand marks / network badges that are not editable copy (e.g. "5G", carrier logos). Prefer "logo" when digits are glued to letters (5G, 4K).
+- kind "number": the item has a clear primary numeric value (prices, speeds, months). Put surrounding words in prefix/suffix. European comma decimals.
+- kind "text": everything else (headlines, labels, buttons like SKLENI, non-numeric phrases).
+- isPill: true only for text inside a rounded colored badge/chip (e.g. yellow "ENOTNA CENA", pink "2 LETI"). Not for full-width pink buttons like SKLENI.
 - layoutGroupId: SAME id for horizontally adjacent pills in one row that should reflow together. null otherwise.
-- style.color = glyph color (not pill fill).
-- number: set when there is a clear primary numeric value (prices, speeds). European comma decimals. Put surrounding words in prefix/suffix.
-- Labels without a primary number (e.g. "HITROST DO UPORABNIKA") → number null.
-- Include strike-through prices as separate items if visible.
-- Do not invent text that is not on the image.
-- Order items top-to-bottom, left-to-right.`;
+- fontWeight / align: best guess from the image.
+- number must be null when kind is not "number".
+
+Detected lines:
+${JSON.stringify(catalog)}`;
 }
 
-type BBox = { x: number; y: number; w: number; h: number };
-
-function clamp01(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
-}
-
-function num(raw: unknown): number | null {
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-  if (typeof raw === "string" && raw.trim()) {
-    const n = Number(raw.trim());
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-/**
- * Accept w|width, h|height, or x2/y2; normalize 0–1, 0–100, or pixel coords.
- */
-function normalizeBBox(
-  raw: unknown,
-  imageWidth: number,
-  imageHeight: number,
-): BBox | null {
-  if (!raw || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-
-  let x = num(o.x);
-  let y = num(o.y);
-  if (x == null || y == null) return null;
-
-  let w = num(o.w) ?? num(o.width);
-  let h = num(o.h) ?? num(o.height);
-
-  const x2 = num(o.x2) ?? num(o.right);
-  const y2 = num(o.y2) ?? num(o.bottom);
-  if ((w == null || h == null) && x2 != null && y2 != null) {
-    w = x2 - x;
-    h = y2 - y;
-  }
-  if (w == null || h == null) return null;
-  if (w <= 0 || h <= 0) return null;
-
-  const vals = [x, y, w, h];
-  const maxAbs = Math.max(...vals.map((v) => Math.abs(v)));
-
-  // Percent 0–100
-  if (maxAbs > 1.5 && maxAbs <= 100) {
-    x /= 100;
-    y /= 100;
-    w /= 100;
-    h /= 100;
-  } else if (
-    maxAbs > 1.5 &&
-    imageWidth > 1 &&
-    imageHeight > 1 &&
-    maxAbs <= Math.max(imageWidth, imageHeight) * 1.05
-  ) {
-    // Absolute pixels relative to prepared image size
-    x /= imageWidth;
-    y /= imageHeight;
-    w /= imageWidth;
-    h /= imageHeight;
-  }
-
-  x = clamp01(x);
-  y = clamp01(y);
-  w = clamp01(w);
-  h = clamp01(h);
-
-  // Keep box inside frame
-  if (x + w > 1) w = 1 - x;
-  if (y + h > 1) h = 1 - y;
-  if (w < 0.002 || h < 0.002) return null;
-
-  return { x, y, w, h };
-}
-
-function normalizeHex(raw: unknown, fallback: string | null): string | null {
-  if (typeof raw !== "string") return fallback;
-  const s = raw.trim();
-  const m = s.match(/^#?([0-9a-fA-F]{6})$/);
-  if (m) return `#${m[1].toUpperCase()}`;
-  const m3 = s.match(/^#?([0-9a-fA-F]{3})$/);
-  if (m3) {
-    const [a, b, c] = m3[1];
-    return `#${a}${a}${b}${b}${c}${c}`.toUpperCase();
-  }
-  return fallback;
-}
-
-function normalizeNumberMeta(raw: unknown, text: string): unknown {
+function normalizeNumberMeta(raw: unknown, text: string): NumberMeta | null {
   if (raw == null || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const value = Number(o.value);
@@ -203,79 +121,125 @@ function normalizeNumberMeta(raw: unknown, text: string): unknown {
   };
 }
 
-function normalizeItem(
-  raw: unknown,
-  index: number,
-  imageWidth: number,
-  imageHeight: number,
-): Record<string, unknown> | null {
+function normalizeLabel(raw: unknown, fallbackText: string): Label | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
-  const text = typeof o.text === "string" ? o.text.trim() : "";
-  if (!text) return null;
-  const bbox = normalizeBBox(o.bbox, imageWidth, imageHeight);
-  if (!bbox) return null;
-
-  const containerRaw =
-    o.container && typeof o.container === "object"
-      ? (o.container as Record<string, unknown>)
-      : {};
-  const containerType = containerRaw.type === "pill" ? "pill" : "plain";
-  const padX =
-    typeof containerRaw.padX === "number" && Number.isFinite(containerRaw.padX)
-      ? Math.max(0.05, Math.min(1.5, containerRaw.padX))
-      : 0.45;
-  const padY =
-    typeof containerRaw.padY === "number" && Number.isFinite(containerRaw.padY)
-      ? Math.max(0.05, Math.min(1, containerRaw.padY))
-      : 0.28;
-  const radiusPxHint =
-    typeof containerRaw.radiusPxHint === "number" &&
-    Number.isFinite(containerRaw.radiusPxHint)
-      ? Math.max(0, containerRaw.radiusPxHint)
-      : containerType === "pill"
-        ? 12
-        : 0;
-
-  const styleRaw =
-    o.style && typeof o.style === "object"
-      ? (o.style as Record<string, unknown>)
-      : {};
-  const fontWeight = styleRaw.fontWeight === "normal" ? "normal" : "bold";
+  const id = typeof o.id === "string" ? o.id.trim() : "";
+  if (!id) return null;
+  const kind =
+    o.kind === "number" || o.kind === "logo" || o.kind === "text"
+      ? o.kind
+      : "text";
+  const fontWeight = o.fontWeight === "normal" ? "normal" : "bold";
   const align =
-    styleRaw.align === "left" || styleRaw.align === "right"
-      ? styleRaw.align
-      : "center";
-
+    o.align === "left" || o.align === "right" ? o.align : "center";
   const layoutGroupId =
     typeof o.layoutGroupId === "string" && o.layoutGroupId.trim()
       ? o.layoutGroupId.trim()
       : null;
-
   return {
-    id:
-      typeof o.id === "string" && o.id.trim()
-        ? o.id.trim()
-        : `t${index + 1}`,
-    text,
-    bbox,
-    container: {
-      type: containerType,
-      fill:
-        containerType === "pill"
-          ? normalizeHex(containerRaw.fill, "#FFD400")
-          : normalizeHex(containerRaw.fill, null),
-      radiusPxHint,
-      padX,
-      padY,
-    },
+    id,
+    kind,
+    isPill: o.isPill === true,
     layoutGroupId,
-    style: {
-      color: normalizeHex(styleRaw.color, "#000000") ?? "#000000",
-      fontWeight,
-      align,
+    fontWeight,
+    align,
+    number:
+      kind === "number" ? normalizeNumberMeta(o.number, fallbackText) : null,
+  };
+}
+
+async function labelLinesWithGpt(input: {
+  imageBase64: string;
+  mimeType: string;
+  lines: LineItem[];
+  openAiKey: string;
+}): Promise<Map<string, Label>> {
+  const map = new Map<string, Label>();
+  if (input.lines.length === 0) return map;
+
+  const dataUrl = `data:${input.mimeType};base64,${input.imageBase64}`;
+  const upstream = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.openAiKey}`,
+      "Content-Type": "application/json",
     },
-    number: normalizeNumberMeta(o.number, text),
+    body: JSON.stringify({
+      model: semanticModel(),
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: buildSemanticPrompt(input.lines) },
+            {
+              type: "image_url",
+              image_url: { url: dataUrl, detail: "high" },
+            },
+          ],
+        },
+      ],
+      max_tokens: 3000,
+    }),
+  });
+
+  const data = (await upstream.json().catch(() => ({}))) as {
+    choices?: Array<{ message?: { content?: string } }>;
+    error?: { message?: string };
+  };
+
+  if (!upstream.ok) {
+    throw new Error(
+      data.error?.message ?? `Semantic labeling failed (${upstream.status})`,
+    );
+  }
+
+  const raw = data.choices?.[0]?.message?.content ?? "{}";
+  let parsed: { labels?: unknown[] };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    parsed = {};
+  }
+
+  const byId = new Map(input.lines.map((l) => [l.id, l]));
+  const list = Array.isArray(parsed.labels) ? parsed.labels : [];
+  for (const entry of list) {
+    const text = byId.get(
+      entry && typeof entry === "object" && "id" in entry
+        ? String((entry as { id?: unknown }).id ?? "")
+        : "",
+    )?.text;
+    const label = normalizeLabel(entry, text ?? "");
+    if (label && byId.has(label.id)) map.set(label.id, label);
+  }
+  return map;
+}
+
+function mergeLineAndLabel(line: LineItem, label: Label | undefined) {
+  const kind = label?.kind ?? "text";
+  const isPill = label?.isPill === true;
+  return {
+    id: line.id,
+    text: line.text,
+    bbox: line.bbox,
+    kind,
+    container: {
+      type: isPill ? ("pill" as const) : ("plain" as const),
+      fill: null,
+      radiusPxHint: isPill ? 12 : 0,
+      padX: 0.45,
+      padY: 0.28,
+      rect: null,
+    },
+    layoutGroupId: label?.layoutGroupId ?? null,
+    style: {
+      color: "#000000",
+      fontWeight: label?.fontWeight ?? "bold",
+      align: label?.align ?? "center",
+    },
+    number: kind === "number" ? label?.number ?? null : null,
   };
 }
 
@@ -310,16 +274,6 @@ export default async function handler(
     return;
   }
 
-  let openAiKey: string;
-  try {
-    openAiKey = assertOpenAiConfigured("Text detection");
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "OpenAI is not configured.";
-    res.status(503).json({ error: message });
-    return;
-  }
-
   const imageBase64 = req.body?.imageBase64;
   if (!imageBase64 || typeof imageBase64 !== "string") {
     res.status(400).json({ error: "Missing imageBase64" });
@@ -344,65 +298,50 @@ export default async function handler(
       ? Math.round(req.body.imageHeight)
       : 0;
 
+  if (!imageWidth || !imageHeight) {
+    res.status(400).json({ error: "Missing imageWidth/imageHeight" });
+    return;
+  }
+
+  let openAiKey: string;
   try {
-    const dataUrl = `data:${mimeType};base64,${imageBase64}`;
-    const prompt = buildDetectPrompt(
-      imageWidth || 1000,
-      imageHeight || 1000,
-    );
-    const upstream = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openAiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: visionModel(),
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              {
-                type: "image_url",
-                image_url: { url: dataUrl, detail: "high" },
-              },
-            ],
-          },
-        ],
-        max_tokens: 4000,
-      }),
+    openAiKey = assertOpenAiConfigured("Text detection semantics");
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "OpenAI is not configured.";
+    res.status(503).json({ error: message });
+    return;
+  }
+
+  try {
+    const lines = await detectTextLines({
+      imageBase64,
+      imageWidth,
+      imageHeight,
     });
 
-    const data = (await upstream.json().catch(() => ({}))) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      error?: { message?: string };
-    };
-
-    if (!upstream.ok) {
-      res.status(502).json({
-        error: data.error?.message ?? `Vision failed (${upstream.status})`,
-      });
-      return;
-    }
-
-    const raw = data.choices?.[0]?.message?.content ?? "{}";
-    let parsed: { items?: unknown[] };
+    let labels = new Map<string, Label>();
     try {
-      parsed = JSON.parse(raw) as typeof parsed;
+      labels = await labelLinesWithGpt({
+        imageBase64,
+        mimeType,
+        lines,
+        openAiKey,
+      });
     } catch {
-      parsed = {};
+      // Geometry still usable without semantics
+      labels = new Map();
     }
 
-    const list = Array.isArray(parsed.items) ? parsed.items : [];
-    const items = list
-      .map((item, i) => normalizeItem(item, i, imageWidth, imageHeight))
-      .filter((item): item is Record<string, unknown> => item != null);
+    const items = lines.map((line) =>
+      mergeLineAndLabel(line, labels.get(line.id)),
+    );
 
     res.status(200).json({ items });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Detect failed";
-    res.status(500).json({ error: message });
+    const status =
+      /not configured|GOOGLE_CLOUD_VISION/i.test(message) ? 503 : 500;
+    res.status(status).json({ error: message });
   }
 }

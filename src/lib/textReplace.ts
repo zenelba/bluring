@@ -13,12 +13,16 @@ export type TextNumberMeta = {
   rawNumeric: string;
 };
 
+export type TextKind = "text" | "number" | "logo";
+
 export type TextContainer = {
   type: "pill" | "plain";
   fill: string | null;
   radiusPxHint: number;
   padX: number;
   padY: number;
+  /** Measured pill plate in normalized 0–1 coords (when known). */
+  rect: TextBBox | null;
 };
 
 export type TextStyle = {
@@ -31,6 +35,7 @@ export type DetectedText = {
   id: string;
   text: string;
   bbox: TextBBox;
+  kind: TextKind;
   container: TextContainer;
   layoutGroupId: string | null;
   style: TextStyle;
@@ -170,14 +175,22 @@ export function parseNumberFromText(text: string): TextNumberMeta | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
+  // Reject tokens like 5G / 4K where digits are glued to letters
+  if (/^\d+[A-Za-zА-Яа-яČŠŽčšž]/.test(trimmed)) return null;
+  if (/\d[A-Za-zА-Яа-яČŠŽčšž]/.test(trimmed) && !/[,.]\d/.test(trimmed)) {
+    // e.g. "5G", "WiFi6" — not a replaceable number
+    if (!/\d+[.,]\d+/.test(trimmed) && !/\s€/.test(trimmed)) return null;
+  }
+
   // Match first number-like token: optional digits with . or , separators
   const re =
-    /^(.*?)(-?\d{1,3}(?:[.\s]\d{3})*(?:[,.]\d+)?|-?\d+[,.]\d+|-?\d+)(.*)$/;
+    /^(.*?)(-?\d{1,3}(?:[.\s]\d{3})*(?:[,.]\d+)?|-?\d+[,.]\d+|-?\d+)(?![A-Za-zČŠŽčšž])(.*)$/;
   const m = trimmed.match(re);
   if (!m) return null;
   const prefix = m[1];
   const rawNumeric = m[2];
   const suffix = m[3];
+  if (/^[A-Za-zČŠŽčšž]/.test(suffix.trim())) return null;
 
   let decimalSep: "," | "." | null = null;
   let thousandSep: "." | "," | " " | null = null;
@@ -243,13 +256,277 @@ export function parseNumberFromText(text: string): TextNumberMeta | null {
   };
 }
 
+function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
+  if (!raw || typeof raw !== "object") return null;
+  const kind: TextKind =
+    raw.kind === "logo" || raw.kind === "number" || raw.kind === "text"
+      ? raw.kind
+      : raw.number
+        ? "number"
+        : "text";
+  if (kind === "logo") return null;
+
+  const container = raw.container ?? {
+    type: "plain" as const,
+    fill: null,
+    radiusPxHint: 0,
+    padX: 0.45,
+    padY: 0.28,
+    rect: null,
+  };
+
+  let number: TextNumberMeta | null =
+    kind === "number" ? raw.number ?? null : null;
+  if (!number) {
+    number = parseNumberFromText(raw.text);
+  }
+
+  return {
+    ...raw,
+    kind: number ? "number" : "text",
+    number,
+    container: {
+      type: container.type === "pill" ? "pill" : "plain",
+      fill: container.fill ?? null,
+      radiusPxHint: container.radiusPxHint ?? 0,
+      padX: container.padX ?? 0.45,
+      padY: container.padY ?? 0.28,
+      rect: container.rect ?? null,
+    },
+    style: {
+      color: raw.style?.color ?? "#000000",
+      fontWeight: raw.style?.fontWeight === "normal" ? "normal" : "bold",
+      align:
+        raw.style?.align === "left" || raw.style?.align === "right"
+          ? raw.style.align
+          : "center",
+    },
+    layoutGroupId: raw.layoutGroupId ?? null,
+  };
+}
+
 export function enrichDetections(items: DetectedText[]): DetectedText[] {
-  const withNumbers = items.map((item) => {
-    if (item.number) return item;
-    const parsed = parseNumberFromText(item.text);
-    return parsed ? { ...item, number: parsed } : item;
+  const normalized = items
+    .map((item) => normalizeIncomingItem(item))
+    .filter((item): item is DetectedText => item != null);
+  return assignLayoutGroups(normalized);
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const h = (n: number) =>
+    Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+  return `#${h(r)}${h(g)}${h(b)}`.toUpperCase();
+}
+
+function medianChannel(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+}
+
+function sampleMedianRgb(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  points: Array<{ x: number; y: number }>,
+): { r: number; g: number; b: number } | null {
+  const rs: number[] = [];
+  const gs: number[] = [];
+  const bs: number[] = [];
+  for (const p of points) {
+    const x = Math.round(p.x);
+    const y = Math.round(p.y);
+    if (x < 0 || y < 0 || x >= imgW || y >= imgH) continue;
+    const i = (y * imgW + x) * 4;
+    rs.push(data[i]);
+    gs.push(data[i + 1]);
+    bs.push(data[i + 2]);
+  }
+  if (rs.length === 0) return null;
+  return {
+    r: medianChannel(rs),
+    g: medianChannel(gs),
+    b: medianChannel(bs),
+  };
+}
+
+function colorDist(
+  a: { r: number; g: number; b: number },
+  b: { r: number; g: number; b: number },
+): number {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return Math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+function luminance(c: { r: number; g: number; b: number }): number {
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+}
+
+/**
+ * Sample glyph / background colors and expand pill plates from pixels.
+ * Runs on the source image using normalized bboxes from OCR.
+ */
+export async function measureStyles(
+  file: File,
+  items: DetectedText[],
+): Promise<DetectedText[]> {
+  const img = await loadImageFromBlob(file);
+  const imgW = img.naturalWidth;
+  const imgH = img.naturalHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = imgW;
+  canvas.height = imgH;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return items;
+  ctx.drawImage(img, 0, 0);
+  const imageData = ctx.getImageData(0, 0, imgW, imgH);
+  const data = imageData.data;
+
+  return items.map((item) => {
+    const box = bboxToPx(item.bbox, imgW, imgH);
+    const pad = Math.max(2, Math.round(box.h * 0.15));
+
+    // Background samples just outside the text box
+    const bgPoints: Array<{ x: number; y: number }> = [];
+    for (let t = 0; t <= 8; t++) {
+      const u = t / 8;
+      bgPoints.push(
+        { x: box.x + box.w * u, y: box.y - pad },
+        { x: box.x + box.w * u, y: box.y + box.h + pad },
+        { x: box.x - pad, y: box.y + box.h * u },
+        { x: box.x + box.w + pad, y: box.y + box.h * u },
+      );
+    }
+    const bg = sampleMedianRgb(data, imgW, imgH, bgPoints) ?? {
+      r: 255,
+      g: 255,
+      b: 255,
+    };
+
+    // Glyph color: most contrasting pixel cluster inside the box
+    const inkSamples: Array<{ r: number; g: number; b: number; d: number }> =
+      [];
+    const step = Math.max(1, Math.floor(Math.min(box.w, box.h) / 12));
+    for (let y = Math.floor(box.y); y < box.y + box.h; y += step) {
+      for (let x = Math.floor(box.x); x < box.x + box.w; x += step) {
+        if (x < 0 || y < 0 || x >= imgW || y >= imgH) continue;
+        const i = (y * imgW + x) * 4;
+        const c = { r: data[i], g: data[i + 1], b: data[i + 2] };
+        const d = colorDist(c, bg);
+        if (d > 28) inkSamples.push({ ...c, d });
+      }
+    }
+    inkSamples.sort((a, b) => b.d - a.d);
+    const inkTop = inkSamples.slice(
+      0,
+      Math.max(5, Math.floor(inkSamples.length * 0.2)),
+    );
+    const textColor =
+      inkTop.length > 0
+        ? rgbToHex(
+            medianChannel(inkTop.map((c) => c.r)),
+            medianChannel(inkTop.map((c) => c.g)),
+            medianChannel(inkTop.map((c) => c.b)),
+          )
+        : luminance(bg) > 140
+          ? "#111111"
+          : "#FFFFFF";
+
+    if (item.container.type !== "pill") {
+      return {
+        ...item,
+        style: { ...item.style, color: textColor },
+        container: { ...item.container, rect: null },
+      };
+    }
+
+    // Pill fill: sample just outside glyphs but still inside the chip
+    const fillPoints: Array<{ x: number; y: number }> = [];
+    const inset = Math.max(1, Math.round(box.h * 0.08));
+    for (let t = 0; t <= 6; t++) {
+      const u = t / 6;
+      fillPoints.push(
+        { x: box.x + box.w * u, y: box.y - inset },
+        { x: box.x + box.w * u, y: box.y + box.h + inset },
+        { x: box.x - inset, y: box.y + box.h * u },
+        { x: box.x + box.w + inset, y: box.y + box.h * u },
+      );
+    }
+    // Prefer samples that differ from glyph color
+    const fillCand = sampleMedianRgb(data, imgW, imgH, fillPoints);
+    const fillRgb = fillCand && colorDist(fillCand, {
+      r: parseInt(textColor.slice(1, 3), 16),
+      g: parseInt(textColor.slice(3, 5), 16),
+      b: parseInt(textColor.slice(5, 7), 16),
+    }) > 20
+      ? fillCand
+      : bg;
+    const fillHex = rgbToHex(fillRgb.r, fillRgb.g, fillRgb.b);
+    const thresh = 38;
+
+    const pixelMatches = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= imgW || y >= imgH) return false;
+      const i = (y * imgW + x) * 4;
+      return (
+        colorDist({ r: data[i], g: data[i + 1], b: data[i + 2] }, fillRgb) <
+        thresh
+      );
+    };
+
+    // Expand from text box until fill color ends
+    let left = Math.floor(box.x);
+    let right = Math.ceil(box.x + box.w);
+    let top = Math.floor(box.y);
+    let bottom = Math.ceil(box.y + box.h);
+    const maxExpand = Math.round(Math.max(box.h * 4, box.w * 0.8));
+
+    for (let i = 0; i < maxExpand; i++) {
+      const midY = Math.round((top + bottom) / 2);
+      if (pixelMatches(left - 1, midY)) left -= 1;
+      else break;
+    }
+    for (let i = 0; i < maxExpand; i++) {
+      const midY = Math.round((top + bottom) / 2);
+      if (pixelMatches(right + 1, midY)) right += 1;
+      else break;
+    }
+    for (let i = 0; i < maxExpand; i++) {
+      const midX = Math.round((left + right) / 2);
+      if (pixelMatches(midX, top - 1)) top -= 1;
+      else break;
+    }
+    for (let i = 0; i < maxExpand; i++) {
+      const midX = Math.round((left + right) / 2);
+      if (pixelMatches(midX, bottom + 1)) bottom += 1;
+      else break;
+    }
+
+    const rectPx = {
+      x: left,
+      y: top,
+      w: Math.max(1, right - left),
+      h: Math.max(1, bottom - top),
+    };
+    const rect: TextBBox = {
+      x: rectPx.x / imgW,
+      y: rectPx.y / imgH,
+      w: rectPx.w / imgW,
+      h: rectPx.h / imgH,
+    };
+
+    return {
+      ...item,
+      style: { ...item.style, color: textColor },
+      container: {
+        ...item.container,
+        fill: fillHex,
+        radiusPxHint: Math.round(rectPx.h / 2),
+        rect,
+      },
+    };
   });
-  return assignLayoutGroups(withNumbers);
 }
 
 /** Heuristic: group nearby horizontal pills that share a row. */
@@ -401,12 +678,15 @@ function bboxToPx(bbox: TextBBox, imgW: number, imgH: number): PxRect {
   };
 }
 
-/** Expand text bbox to approximate original pill using pad hints. */
+/** Prefer measured pill rect; fall back to pad expansion around text. */
 function pillContainerPx(
   item: DetectedText,
   imgW: number,
   imgH: number,
 ): PxRect {
+  if (item.container.rect) {
+    return bboxToPx(item.container.rect, imgW, imgH);
+  }
   const text = bboxToPx(item.bbox, imgW, imgH);
   const padX = item.container.padX * text.h;
   const padY = item.container.padY * text.h;
@@ -762,7 +1042,8 @@ export async function detectTexts(file: File): Promise<{
       imageHeight: prepared.height,
     }),
   });
-  const items = enrichDetections(Array.isArray(data.items) ? data.items : []);
+  const enriched = enrichDetections(Array.isArray(data.items) ? data.items : []);
+  const items = await measureStyles(file, enriched);
   return { items, width: prepared.width, height: prepared.height };
 }
 
