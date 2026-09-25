@@ -1,19 +1,32 @@
 /**
- * Google Cloud Vision DOCUMENT_TEXT_DETECTION → word boxes → grouped lines.
+ * Google Cloud Vision DOCUMENT_TEXT_DETECTION -> word boxes -> grouped lines.
  */
 
-import { ensureProjectEnv } from "./loadEnv.js";
+import { ensureProjectEnv, getLoadedEnvPaths } from "./loadEnv.js";
 
 const PLACEHOLDER_RE = /^(your|xxx|change-me|placeholder)/i;
+const ENV_NAME = "GOOGLE_CLOUD_VISION_API_KEY";
+
+/**
+ * @returns {{ key: string, raw: string | undefined, isPlaceholder: boolean }}
+ */
+function readGoogleVisionApiKey() {
+  ensureProjectEnv();
+  const raw = process.env[ENV_NAME];
+  const key = (raw ?? "").trim();
+  const isPlaceholder = key.length > 0 && PLACEHOLDER_RE.test(key);
+  return {
+    key: !key || isPlaceholder ? "" : key,
+    raw,
+    isPlaceholder,
+  };
+}
 
 /**
  * @returns {string}
  */
 export function getGoogleVisionApiKey() {
-  ensureProjectEnv();
-  const key = (process.env.GOOGLE_CLOUD_VISION_API_KEY ?? "").trim();
-  if (!key || PLACEHOLDER_RE.test(key)) return "";
-  return key;
+  return readGoogleVisionApiKey().key;
 }
 
 /**
@@ -21,13 +34,30 @@ export function getGoogleVisionApiKey() {
  * @returns {string}
  */
 export function assertGoogleVisionConfigured(context = "Google Cloud Vision") {
-  const key = getGoogleVisionApiKey();
-  if (!key) {
+  const { key, raw, isPlaceholder } = readGoogleVisionApiKey();
+  if (key) return key;
+
+  const loaded = getLoadedEnvPaths();
+  const loadedHint =
+    loaded.length > 0
+      ? `Loaded env file(s): ${loaded.join(", ")}.`
+      : "No .env.local or .env was found under the project root.";
+
+  if (isPlaceholder) {
     throw new Error(
-      `${context} is not configured. Set GOOGLE_CLOUD_VISION_API_KEY in .env.local (enable Vision API in your GCP project), then restart \`npx vercel dev\`.`,
+      `${context}: ${ENV_NAME} looks like a placeholder. Replace it with a real Google Cloud API key (APIs & Services -> Credentials), then restart \`npx vercel dev\`. ${loadedHint}`,
     );
   }
-  return key;
+
+  if (raw !== undefined && String(raw).trim() === "") {
+    throw new Error(
+      `${context}: ${ENV_NAME} is set but empty in your env file. Paste a real API key after the equals sign, then restart \`npx vercel dev\`. ${loadedHint}`,
+    );
+  }
+
+  throw new Error(
+    `${context}: ${ENV_NAME} was not found. Add it to .env.local in the project root (not only in the GCP console), e.g. ${ENV_NAME}=AIza..., enable the Vision API, then restart \`npx vercel dev\`. ${loadedHint}`,
+  );
 }
 
 /**
