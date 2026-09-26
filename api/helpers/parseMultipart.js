@@ -1,15 +1,9 @@
 /**
  * @param {import("node:http").IncomingMessage} req
  */
-function readRequestBody(req) {
-  return new Promise((resolve, reject) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-}
+import { readRequestBody } from "./requestBody.js";
+
+export { readRequestBody };
 
 /**
  * @param {Buffer} body

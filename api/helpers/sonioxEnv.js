@@ -48,5 +48,6 @@ export function getSonioxMaxWaitMs() {
   if (Number.isFinite(vercelMaxSec) && vercelMaxSec > 60) {
     return (vercelMaxSec - 30) * 1000;
   }
-  return 900_000;
+  /** Local `vercel dev` without explicit cap — long panels (2h+) need hours of polling. */
+  return 4 * 60 * 60 * 1000;
 }

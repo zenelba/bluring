@@ -184,6 +184,39 @@ export async function prepareUploadForTranscription(inputPath, originalFilename)
   };
 }
 
+/** Re-encode MP3 before Soniox upload (smaller HTTPS body, fewer Windows socket errors). */
+const SONIOX_UPLOAD_COMPRESS_BYTES = 8 * 1024 * 1024;
+
+/**
+ * @param {string} mp3Path
+ */
+export async function compressMp3ForSonioxUpload(mp3Path) {
+  assertFfmpegConfigured();
+  const info = await stat(mp3Path);
+  if (info.size <= SONIOX_UPLOAD_COMPRESS_BYTES) {
+    return { filePath: mp3Path, cleanup: async () => {} };
+  }
+  const dir = await mkdtemp(join(tmpdir(), "bluring-soniox-upload-"));
+  const out = join(dir, "upload.mp3");
+  const ffmpeg = getFfmpegPath();
+  await runProcess(ffmpeg, [
+    "-y",
+    "-i",
+    mp3Path,
+    "-acodec",
+    "libmp3lame",
+    "-b:a",
+    "128k",
+    "-ar",
+    "44100",
+    out,
+  ]);
+  return {
+    filePath: out,
+    cleanup: () => rm(dir, { recursive: true, force: true }).catch(() => {}),
+  };
+}
+
 /**
  * @param {string} mp3Path
  * @param {number} searchStartSec

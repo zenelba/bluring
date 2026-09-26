@@ -51,16 +51,278 @@ export type AvDownloadResult = {
   mimeType: string;
 };
 
+export type AvTranscribeProgress = {
+  percent: number;
+  note?: string;
+};
+
 export type AvTranscribeOptions = {
   language?: string;
   speakerDiarization?: boolean;
   /** When set, server fetches audio (avoids uploading large video from the browser). */
   sourceUrl?: string;
+  /** After POST /api/av-media-upload — large local files. */
+  storedMediaId?: string;
   videoQuality?: string;
   downloadMode?: "auto" | "audio" | "mute";
+  onProgress?: (progress: AvTranscribeProgress) => void;
+  /** Used for client-side progress estimate while the API runs (seconds). */
+  estimatedDurationSec?: number;
 };
 
 const MAX_CLIENT_TRANSCRIBE_BYTES = 512 * 1024 * 1024;
+
+/** Read duration from a local audio/video blob (for progress estimates). */
+export function getMediaDurationSec(blob: Blob): Promise<number | undefined> {
+  if (!blob.type.startsWith("video/") && !blob.type.startsWith("audio/")) {
+    return Promise.resolve(undefined);
+  }
+  return new Promise((resolve) => {
+    const el = document.createElement(
+      blob.type.startsWith("video/") ? "video" : "audio",
+    );
+    const url = URL.createObjectURL(blob);
+    el.preload = "metadata";
+    el.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(el.duration) ? el.duration : undefined);
+    };
+    el.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(undefined);
+    };
+    el.src = url;
+  });
+}
+
+function runTranscribeProgressEstimate(
+  onProgress: ((p: AvTranscribeProgress) => void) | undefined,
+  estimatedDurationSec: number | undefined,
+): () => void {
+  if (!onProgress) return () => {};
+  const started = Date.now();
+  const estSec =
+    estimatedDurationSec && estimatedDurationSec > 30
+      ? estimatedDurationSec * 0.5
+      : 900;
+  onProgress({ percent: 6, note: "Preparing transcription…" });
+  const id = window.setInterval(() => {
+    const elapsedSec = (Date.now() - started) / 1000;
+    const ratio = Math.min(0.92, elapsedSec / estSec);
+    const percent = Math.round(8 + ratio * 84);
+    let note = "Transcribing with Soniox…";
+    if (ratio < 0.08) note = "Fetching or preparing audio…";
+    else if (ratio < 0.2) note = "Uploading to Soniox…";
+    else if (ratio < 0.35) note = "Waiting for Soniox…";
+    onProgress({ percent, note });
+  }, 2000);
+  return () => window.clearInterval(id);
+}
+
+const LOCAL_UPLOAD_FOR_TRANSCRIBE_BYTES = 2 * 1024 * 1024;
+export const LOCAL_UPLOAD_TRANSCRIBE_THRESHOLD = LOCAL_UPLOAD_FOR_TRANSCRIBE_BYTES;
+
+const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** Upload a local file in chunks; transcribe via storedMediaId. */
+export async function uploadAvMediaForTranscription(
+  file: File,
+  onProgress?: (progress: AvDownloadProgress) => void,
+): Promise<{ storedMediaId: string; filename: string }> {
+  const sessionId = crypto.randomUUID();
+  const totalChunks = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_BYTES));
+  let storedMediaId: string | undefined;
+  let outFilename = file.name;
+
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * UPLOAD_CHUNK_BYTES;
+    const end = Math.min(file.size, start + UPLOAD_CHUNK_BYTES);
+    const slice = file.slice(start, end);
+
+    const res = await fetch("/api/av-media-upload", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Upload-Session": sessionId,
+        "X-Chunk-Index": String(i),
+        "X-Chunk-Total": String(totalChunks),
+        "X-Upload-Filename": encodeURIComponent(file.name || "media.bin"),
+      },
+      body: slice,
+    });
+
+    const raw = await res.text();
+    let data: {
+      storedMediaId?: string;
+      filename?: string;
+      error?: string;
+    } = {};
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      /* ignore */
+    }
+
+    if (!res.ok) {
+      const msg =
+        typeof data.error === "string" && data.error
+          ? data.error
+          : raw.slice(0, 200) || `Upload failed (${res.status})`;
+      throw new Error(msg);
+    }
+
+    onProgress?.({
+      loaded: end,
+      total: file.size,
+      percent: Math.round((end / Math.max(1, file.size)) * 100),
+    });
+
+    if (data.storedMediaId) {
+      storedMediaId = data.storedMediaId;
+      if (data.filename) outFilename = data.filename;
+    }
+
+    if (i + 1 < totalChunks) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  if (!storedMediaId) {
+    throw new Error("Upload did not finish — try again or use a media link.");
+  }
+
+  return { storedMediaId, filename: outFilename };
+}
+
+async function readTranscribeStreamResponse(
+  res: Response,
+  onProgress?: (progress: AvTranscribeProgress) => void,
+): Promise<{ text: string; language?: string }> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("Transcription stream unavailable");
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: { text: string; language?: string } | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const msg = JSON.parse(trimmed) as {
+        type?: string;
+        percent?: number;
+        note?: string;
+        text?: string;
+        language?: string;
+        error?: string;
+      };
+      if (msg.type === "progress") {
+        onProgress?.({
+          percent: msg.percent ?? 0,
+          note: msg.note,
+        });
+      } else if (msg.type === "result") {
+        result = { text: msg.text ?? "", language: msg.language };
+      } else if (msg.type === "error") {
+        throw new Error(msg.error || "Transcription failed");
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const msg = JSON.parse(buffer.trim()) as {
+      type?: string;
+      text?: string;
+      language?: string;
+      error?: string;
+    };
+    if (msg.type === "result") {
+      result = { text: msg.text ?? "", language: msg.language };
+    } else if (msg.type === "error") {
+      throw new Error(msg.error || "Transcription failed");
+    }
+  }
+
+  if (!result) {
+    throw new Error("Transcription finished without a result");
+  }
+  onProgress?.({ percent: 100, note: "Transcription complete" });
+  return result;
+}
+
+async function transcribeAvRequest(
+  init: RequestInit,
+  options: {
+    onProgress?: (progress: AvTranscribeProgress) => void;
+    estimatedDurationSec?: number;
+  } = {},
+): Promise<{ text: string; language?: string }> {
+  const headers = new Headers(init.headers);
+  headers.set("X-Stream-Progress", "1");
+
+  let body = init.body;
+  if (typeof body === "string" && headers.get("Content-Type")?.includes("json")) {
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      parsed.streamProgress = true;
+      body = JSON.stringify(parsed);
+    } catch {
+      /* keep original body */
+    }
+  }
+
+  const useStream = true;
+  const stopEstimate = useStream
+    ? () => {}
+    : runTranscribeProgressEstimate(
+        options.onProgress,
+        options.estimatedDurationSec,
+      );
+  try {
+    const res = await fetch("/api/av-transcribe", {
+      ...init,
+      headers,
+      body,
+      credentials: "include",
+    });
+
+    const contentType = res.headers.get("Content-Type") ?? "";
+    if (
+      res.ok &&
+      contentType.includes("application/x-ndjson") &&
+      res.body
+    ) {
+      return await readTranscribeStreamResponse(res, options.onProgress);
+    }
+
+    const raw = await res.text();
+    let data: { text?: string; language?: string; error?: string } = {};
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      /* non-JSON */
+    }
+    if (!res.ok) {
+      throw new Error(
+        typeof data.error === "string" && data.error
+          ? data.error
+          : raw.trim().slice(0, 240) || `Request failed (${res.status})`,
+      );
+    }
+    options.onProgress?.({ percent: 100, note: "Transcription complete" });
+    return { text: data.text ?? "", language: data.language };
+  } finally {
+    stopEstimate();
+  }
+}
 
 export type AvJobOptions = {
   transcribe: boolean;
@@ -354,6 +616,24 @@ export async function transcribeAvBlob(
   filename: string,
   options: AvTranscribeOptions = {},
 ): Promise<{ text: string; language?: string }> {
+  if (options.storedMediaId?.trim()) {
+    return transcribeAvRequest(
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storedMediaId: options.storedMediaId.trim(),
+          language: options.language?.trim() || undefined,
+          speakerDiarization: options.speakerDiarization,
+        }),
+      },
+      {
+        onProgress: options.onProgress,
+        estimatedDurationSec: options.estimatedDurationSec,
+      },
+    );
+  }
+
   if (blob.size < 512 && !options.sourceUrl?.trim()) {
     throw new Error(
       "Downloaded file is empty or too small — try Audio only quality or another link.",
@@ -366,38 +646,24 @@ export async function transcribeAvBlob(
       blob.type.startsWith("video/") ||
       /\.(webm|mp4|mkv|mov|avi)(\?|$)/i.test(filename));
 
-  const parseTranscribeResponse = async (res: Response) => {
-    const raw = await res.text();
-    let data: { text?: string; language?: string; error?: string } = {};
-    try {
-      data = JSON.parse(raw) as typeof data;
-    } catch {
-      /* non-JSON (e.g. gateway error page) */
-    }
-    if (!res.ok) {
-      throw new Error(
-        typeof data.error === "string" && data.error
-          ? data.error
-          : raw.trim().slice(0, 240) || `Request failed (${res.status})`,
-      );
-    }
-    return { text: data.text ?? "", language: data.language };
-  };
-
   if (useServerAudio) {
-    const res = await fetch("/api/av-transcribe", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sourceUrl: options.sourceUrl!.trim(),
-        language: options.language?.trim() || undefined,
-        speakerDiarization: options.speakerDiarization,
-        videoQuality: options.videoQuality,
-        downloadMode: options.downloadMode ?? "audio",
-      }),
-    });
-    return parseTranscribeResponse(res);
+    return transcribeAvRequest(
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceUrl: options.sourceUrl!.trim(),
+          language: options.language?.trim() || undefined,
+          speakerDiarization: options.speakerDiarization,
+          videoQuality: options.videoQuality,
+          downloadMode: options.downloadMode ?? "audio",
+        }),
+      },
+      {
+        onProgress: options.onProgress,
+        estimatedDurationSec: options.estimatedDurationSec,
+      },
+    );
   }
 
   const form = new FormData();
@@ -410,12 +676,16 @@ export async function transcribeAvBlob(
     options.speakerDiarization === false ? "false" : "true",
   );
 
-  const res = await fetch("/api/av-transcribe", {
-    method: "POST",
-    credentials: "include",
-    body: form,
-  });
-  return parseTranscribeResponse(res);
+  return transcribeAvRequest(
+    {
+      method: "POST",
+      body: form,
+    },
+    {
+      onProgress: options.onProgress,
+      estimatedDurationSec: options.estimatedDurationSec,
+    },
+  );
 }
 
 function frameHash(
