@@ -551,9 +551,157 @@ function luminance(c: { r: number; g: number; b: number }): number {
   return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 }
 
+function textBoxHRel(textH: number, padPx: number): number {
+  return textH > 0 ? padPx / textH : 0.45;
+}
+
+type Rgb = { r: number; g: number; b: number };
+
+/**
+ * Flood-expand a solid-color plate around a text box (pill chip detection).
+ * Returns null if no coherent fill is found.
+ */
+function measurePillPlate(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  box: PxRect,
+  textColor: string,
+  nearBg: Rgb,
+): {
+  fill: string;
+  fillRgb: Rgb;
+  rect: TextBBox;
+  rectPx: PxRect;
+  padX: number;
+  padY: number;
+  radiusPxHint: number;
+  padXPx: number;
+  padYPx: number;
+} | null {
+  const fillPoints: Array<{ x: number; y: number }> = [];
+  const inset = Math.max(1, Math.round(box.h * 0.08));
+  for (let t = 0; t <= 6; t++) {
+    const u = t / 6;
+    fillPoints.push(
+      { x: box.x + box.w * u, y: box.y - inset },
+      { x: box.x + box.w * u, y: box.y + box.h + inset },
+      { x: box.x - inset, y: box.y + box.h * u },
+      { x: box.x + box.w + inset, y: box.y + box.h * u },
+    );
+  }
+  const fillCand = sampleMedianRgb(data, imgW, imgH, fillPoints);
+  const textRgb = {
+    r: parseInt(textColor.slice(1, 3), 16),
+    g: parseInt(textColor.slice(3, 5), 16),
+    b: parseInt(textColor.slice(5, 7), 16),
+  };
+  const fillRgb =
+    fillCand && colorDist(fillCand, textRgb) > 20 ? fillCand : nearBg;
+  const fillHex = rgbToHex(fillRgb.r, fillRgb.g, fillRgb.b);
+  const thresh = 38;
+
+  const pixelMatches = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= imgW || y >= imgH) return false;
+    const i = (y * imgW + x) * 4;
+    return (
+      colorDist({ r: data[i], g: data[i + 1], b: data[i + 2] }, fillRgb) <
+      thresh
+    );
+  };
+
+  let left = Math.floor(box.x);
+  let right = Math.ceil(box.x + box.w);
+  let top = Math.floor(box.y);
+  let bottom = Math.ceil(box.y + box.h);
+  const maxExpand = Math.round(Math.max(box.h * 4, box.w * 0.8));
+
+  for (let i = 0; i < maxExpand; i++) {
+    const midY = Math.round((top + bottom) / 2);
+    if (pixelMatches(left - 1, midY)) left -= 1;
+    else break;
+  }
+  for (let i = 0; i < maxExpand; i++) {
+    const midY = Math.round((top + bottom) / 2);
+    if (pixelMatches(right + 1, midY)) right += 1;
+    else break;
+  }
+  for (let i = 0; i < maxExpand; i++) {
+    const midX = Math.round((left + right) / 2);
+    if (pixelMatches(midX, top - 1)) top -= 1;
+    else break;
+  }
+  for (let i = 0; i < maxExpand; i++) {
+    const midX = Math.round((left + right) / 2);
+    if (pixelMatches(midX, bottom + 1)) bottom += 1;
+    else break;
+  }
+
+  const rectPx: PxRect = {
+    x: left,
+    y: top,
+    w: Math.max(1, right - left),
+    h: Math.max(1, bottom - top),
+  };
+  const padXPx = Math.max(0, box.x - rectPx.x);
+  const padYPx = Math.max(0, box.y - rectPx.y);
+  return {
+    fill: fillHex,
+    fillRgb,
+    rect: {
+      x: rectPx.x / imgW,
+      y: rectPx.y / imgH,
+      w: rectPx.w / imgW,
+      h: rectPx.h / imgH,
+    },
+    rectPx,
+    padX: textBoxHRel(box.h, padXPx),
+    padY: textBoxHRel(box.h, padYPx),
+    radiusPxHint: Math.round(rectPx.h / 2),
+    padXPx,
+    padYPx,
+  };
+}
+
+/**
+ * Plain → pill when text sits on a compact colored chip (GPT often misses isPill).
+ * Rejects full-bleed bars and text on the page background.
+ */
+function shouldPromotePlainToPill(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  box: PxRect,
+  plate: NonNullable<ReturnType<typeof measurePillPlate>>,
+): boolean {
+  if (plate.padXPx < Math.max(4, box.h * 0.12)) return false;
+  if (plate.rectPx.h > box.h * 2.2) return false;
+  // Full-width buttons (e.g. SKLENI) expand far past the label
+  if (plate.rectPx.w > box.w * 3.0) return false;
+  if (plate.rectPx.w > box.w + box.h * 8) return false;
+
+  const far = Math.max(10, Math.round(box.h * 1.4));
+  const farPoints: Array<{ x: number; y: number }> = [];
+  for (let t = 0; t <= 4; t++) {
+    const u = t / 4;
+    farPoints.push(
+      { x: box.x + box.w * u, y: plate.rectPx.y - far },
+      { x: box.x + box.w * u, y: plate.rectPx.y + plate.rectPx.h + far },
+      { x: plate.rectPx.x - far, y: box.y + box.h * u },
+      { x: plate.rectPx.x + plate.rectPx.w + far, y: box.y + box.h * u },
+    );
+  }
+  const farBg = sampleMedianRgb(data, imgW, imgH, farPoints);
+  if (!farBg) return false;
+  // Chip fill must differ from the surrounding page / banner field
+  if (colorDist(plate.fillRgb, farBg) < 28) return false;
+  return true;
+}
+
 /**
  * Sample glyph / background colors, match nearest Google Font, expand pill plates.
  * Pass 1: per-item colors + font scores. Pass 2: unify font within text blocks.
+ * Also promotes plain items on solid chips to pills when GPT missed isPill.
  */
 export async function measureStyles(
   file: File,
@@ -640,89 +788,23 @@ export async function measureStyles(
     );
 
     let container: TextContainer = { ...item.container, rect: null };
-    if (item.container.type === "pill") {
-      const fillPoints: Array<{ x: number; y: number }> = [];
-      const inset = Math.max(1, Math.round(box.h * 0.08));
-      for (let t = 0; t <= 6; t++) {
-        const u = t / 6;
-        fillPoints.push(
-          { x: box.x + box.w * u, y: box.y - inset },
-          { x: box.x + box.w * u, y: box.y + box.h + inset },
-          { x: box.x - inset, y: box.y + box.h * u },
-          { x: box.x + box.w + inset, y: box.y + box.h * u },
-        );
+    const plate = measurePillPlate(data, imgW, imgH, box, textColor, bg);
+    if (plate) {
+      const asPill = item.container.type === "pill";
+      const promote =
+        !asPill &&
+        shouldPromotePlainToPill(data, imgW, imgH, box, plate);
+      if (asPill || promote) {
+        container = {
+          ...item.container,
+          type: "pill",
+          fill: plate.fill,
+          radiusPxHint: plate.radiusPxHint,
+          padX: plate.padX,
+          padY: plate.padY,
+          rect: plate.rect,
+        };
       }
-      const fillCand = sampleMedianRgb(data, imgW, imgH, fillPoints);
-      const fillRgb =
-        fillCand &&
-        colorDist(fillCand, {
-          r: parseInt(textColor.slice(1, 3), 16),
-          g: parseInt(textColor.slice(3, 5), 16),
-          b: parseInt(textColor.slice(5, 7), 16),
-        }) > 20
-          ? fillCand
-          : bg;
-      const fillHex = rgbToHex(fillRgb.r, fillRgb.g, fillRgb.b);
-      const thresh = 38;
-
-      const pixelMatches = (x: number, y: number) => {
-        if (x < 0 || y < 0 || x >= imgW || y >= imgH) return false;
-        const i = (y * imgW + x) * 4;
-        return (
-          colorDist({ r: data[i], g: data[i + 1], b: data[i + 2] }, fillRgb) <
-          thresh
-        );
-      };
-
-      let left = Math.floor(box.x);
-      let right = Math.ceil(box.x + box.w);
-      let top = Math.floor(box.y);
-      let bottom = Math.ceil(box.y + box.h);
-      const maxExpand = Math.round(Math.max(box.h * 4, box.w * 0.8));
-
-      for (let i = 0; i < maxExpand; i++) {
-        const midY = Math.round((top + bottom) / 2);
-        if (pixelMatches(left - 1, midY)) left -= 1;
-        else break;
-      }
-      for (let i = 0; i < maxExpand; i++) {
-        const midY = Math.round((top + bottom) / 2);
-        if (pixelMatches(right + 1, midY)) right += 1;
-        else break;
-      }
-      for (let i = 0; i < maxExpand; i++) {
-        const midX = Math.round((left + right) / 2);
-        if (pixelMatches(midX, top - 1)) top -= 1;
-        else break;
-      }
-      for (let i = 0; i < maxExpand; i++) {
-        const midX = Math.round((left + right) / 2);
-        if (pixelMatches(midX, bottom + 1)) bottom += 1;
-        else break;
-      }
-
-      const rectPx = {
-        x: left,
-        y: top,
-        w: Math.max(1, right - left),
-        h: Math.max(1, bottom - top),
-      };
-      const rect: TextBBox = {
-        x: rectPx.x / imgW,
-        y: rectPx.y / imgH,
-        w: rectPx.w / imgW,
-        h: rectPx.h / imgH,
-      };
-      const padXPx = Math.max(0, box.x - rectPx.x);
-      const padYPx = Math.max(0, box.y - rectPx.y);
-      container = {
-        ...item.container,
-        fill: fillHex,
-        radiusPxHint: Math.round(rectPx.h / 2),
-        padX: textBoxHRel(box.h, padXPx),
-        padY: textBoxHRel(box.h, padYPx),
-        rect,
-      };
     }
 
     return {
@@ -797,7 +879,7 @@ export async function measureStyles(
   return pass1.map((p) => {
     const blockId = p.item.textBlockId;
     const winner =
-      blockId && p.item.container.type !== "pill"
+      blockId && p.container.type !== "pill"
         ? blockWinner.get(blockId)
         : undefined;
 
@@ -833,10 +915,6 @@ export async function measureStyles(
       },
     };
   });
-}
-
-function textBoxHRel(textH: number, padPx: number): number {
-  return textH > 0 ? padPx / textH : 0.45;
 }
 
 /** Heuristic: group nearby horizontal pills that share a row. */

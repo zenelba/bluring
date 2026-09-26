@@ -79,7 +79,7 @@ Rules:
 - kind "logo": brand marks / network badges that are not editable copy (e.g. "5G", carrier logos). Prefer "logo" when digits are glued to letters (5G, 4K).
 - kind "number": the item has a clear primary numeric value (prices, speeds, months). Put surrounding words in prefix/suffix. European comma decimals.
 - kind "text": everything else (headlines, labels, buttons like SKLENI, non-numeric phrases).
-- isPill: true only for text inside a rounded colored badge/chip (e.g. yellow "ENOTNA CENA", pink "2 LETI"). Not for full-width pink buttons like SKLENI.
+- isPill: true for any text sitting inside a compact rounded colored badge/chip — especially yellow, pink, or orange price/label chips (e.g. yellow "ENOTNA CENA", pink "2 LETI", "HITROST" chips). Set isPill true even when kind is "text". Not for full-width bars/buttons like SKLENI, and not for headlines painted directly on the page/banner background.
 - layoutGroupId: SAME id for horizontally adjacent pills in one row that should reflow together. null otherwise.
 - fontWeight / align: best guess from the image. Prefer "left" for headlines and body on the left side of banners; use "center" only when text is clearly centered in the frame.
 - number must be null when kind is not "number".
