@@ -1019,21 +1019,25 @@ export default function TextReplaceMode(props: {
           aria-label={lightbox.label}
           onClick={closeLightbox}
         >
-          <button
-            type="button"
-            className="tr-lightbox__close"
-            onClick={closeLightbox}
-            aria-label="Close"
-          >
-            ×
-          </button>
-          <img
-            className="tr-lightbox__img"
-            src={lightbox.url}
-            alt={lightbox.label}
+          <div
+            className="tr-lightbox__panel"
             onClick={(e) => e.stopPropagation()}
-          />
-          <p className="tr-lightbox__caption">{lightbox.label}</p>
+          >
+            <button
+              type="button"
+              className="tr-lightbox__close"
+              onClick={closeLightbox}
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <img
+              className="tr-lightbox__img"
+              src={lightbox.url}
+              alt={lightbox.label}
+            />
+            <p className="tr-lightbox__caption">{lightbox.label}</p>
+          </div>
         </div>
       )}
     </div>
