@@ -10,7 +10,13 @@ export type FontCalibration = {
   size: number;
   scaleX: number;
   ascent: number;
+  /** IoU score per "Family|weight" candidate (for block voting). */
+  scores: Record<string, number>;
 };
+
+export function fontScoreKey(family: string, weight: FontWeightNum): string {
+  return `${family}|${weight}`;
+}
 
 export const FONT_CANDIDATES = [
   "Inter",
@@ -160,6 +166,7 @@ function iou(a: Uint8Array, b: Uint8Array): number {
 
 /**
  * Pick nearest Google Font by rendering original text and comparing ink masks.
+ * Also returns IoU scores for every candidate (used to unify fonts in a text block).
  */
 export function matchFont(
   imageData: ImageData,
@@ -168,6 +175,14 @@ export function matchFont(
   bg: { r: number; g: number; b: number },
   preferredWeight: "normal" | "bold" = "bold",
 ): FontCalibration {
+  const emptyScores = (): Record<string, number> => {
+    const s: Record<string, number> = {};
+    for (const family of FONT_CANDIDATES) {
+      for (const w of WEIGHTS) s[fontScoreKey(family, w)] = 0;
+    }
+    return s;
+  };
+
   const imgW = imageData.width;
   const x0 = Math.max(0, Math.floor(box.x));
   const y0 = Math.max(0, Math.floor(box.y));
@@ -204,7 +219,7 @@ export function matchFont(
       weight,
       { x: 0, y: 0, w: bw, h: bh },
     );
-    return { family: "Montserrat", weight, ...cal };
+    return { family: "Montserrat", weight, ...cal, scores: emptyScores() };
   }
 
   // Probe canvas for calibrate metrics
@@ -216,11 +231,13 @@ export function matchFont(
       size: bh * 0.92,
       scaleX: 1,
       ascent: bh * 0.75,
+      scores: emptyScores(),
     };
   }
 
   let best: FontCalibration | null = null;
   let bestScore = -1;
+  const scores = emptyScores();
 
   const weightOrder: FontWeightNum[] =
     preferredWeight === "bold" ? [700, 400] : [400, 700];
@@ -251,9 +268,10 @@ export function matchFont(
       const rendered = ctx.getImageData(0, 0, bw, bh);
       const rendMask = buildInkMask(rendered.data, bw, bh, bg);
       const score = iou(origMask, rendMask);
+      scores[fontScoreKey(family, weight)] = score;
       if (score > bestScore) {
         bestScore = score;
-        best = { family, weight, ...cal };
+        best = { family, weight, ...cal, scores };
       }
     }
   }
@@ -265,6 +283,7 @@ export function matchFont(
       size: bh * 0.92,
       scaleX: 1,
       ascent: bh * 0.75,
+      scores,
     }
   );
 }

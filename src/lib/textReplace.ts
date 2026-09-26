@@ -51,6 +51,8 @@ export type DetectedText = {
   kind: TextKind;
   container: TextContainer;
   layoutGroupId: string | null;
+  /** Plain lines stacked with similar height/align share a text block. */
+  textBlockId: string | null;
   style: TextStyle;
   number: TextNumberMeta | null;
 };
@@ -316,29 +318,185 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
       scaleX: raw.style?.scaleX ?? 1,
     },
     layoutGroupId: raw.layoutGroupId ?? null,
+    textBlockId: raw.textBlockId ?? null,
   };
 }
 
-/** Prefer left for side banners; keep center only when the box is clearly mid-frame. */
-function inferPlainAlign(item: DetectedText): "left" | "center" | "right" {
-  if (item.style.align === "right") return "right";
-  if (item.container.type === "pill") return item.style.align;
-  const cx = item.bbox.x + item.bbox.w / 2;
-  const startsLeft = item.bbox.x < 0.28;
-  const clearlyCentered = cx > 0.42 && cx < 0.58 && item.bbox.x > 0.22;
-  if (clearlyCentered && !startsLeft) return "center";
-  return "left";
+function makeUnionFind() {
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    const p = parent.get(id) ?? id;
+    if (p !== id) {
+      const root = find(p);
+      parent.set(id, root);
+      return root;
+    }
+    return id;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  const ensure = (id: string) => {
+    if (!parent.has(id)) parent.set(id, id);
+  };
+  return { find, union, ensure };
+}
+
+/**
+ * Group plain lines that stack vertically with similar height and shared edge.
+ * Pills are excluded (they use layoutGroupId instead).
+ */
+function assignTextBlocks(items: DetectedText[]): DetectedText[] {
+  const plains = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.container.type !== "pill")
+    .sort((a, b) => a.item.bbox.y - b.item.bbox.y || a.item.bbox.x - b.item.bbox.x);
+
+  const { find, union, ensure } = makeUnionFind();
+  for (const { item } of plains) ensure(item.id);
+
+  for (let i = 0; i < plains.length; i++) {
+    const a = plains[i].item;
+    for (let j = i + 1; j < plains.length; j++) {
+      const b = plains[j].item;
+      const avgH = (a.bbox.h + b.bbox.h) / 2;
+      const maxH = Math.max(a.bbox.h, b.bbox.h);
+
+      // Similar height so titles don't merge with fine-print under them
+      if (Math.abs(a.bbox.h - b.bbox.h) / maxH > 0.25) continue;
+
+      // Vertical gap: bottom of upper to top of lower
+      const aBottom = a.bbox.y + a.bbox.h;
+      const bBottom = b.bbox.y + b.bbox.h;
+      const gap =
+        a.bbox.y <= b.bbox.y ? b.bbox.y - aBottom : a.bbox.y - bBottom;
+      if (gap < -avgH * 0.2 || gap > avgH * 1.2) continue;
+
+      const aLeft = a.bbox.x;
+      const bLeft = b.bbox.x;
+      const aRight = a.bbox.x + a.bbox.w;
+      const bRight = b.bbox.x + b.bbox.w;
+      const aCx = a.bbox.x + a.bbox.w / 2;
+      const bCx = b.bbox.x + b.bbox.w / 2;
+      const tol = avgH * 0.6;
+
+      const overlap =
+        Math.min(aRight, bRight) - Math.max(aLeft, bLeft) > 0;
+      const sameLeft = Math.abs(aLeft - bLeft) <= tol;
+      const sameCenter = Math.abs(aCx - bCx) <= tol;
+      const sameRight = Math.abs(aRight - bRight) <= tol;
+      if (!overlap && !sameLeft && !sameCenter && !sameRight) continue;
+
+      union(a.id, b.id);
+    }
+  }
+
+  const rootToMembers = new Map<string, string[]>();
+  for (const { item } of plains) {
+    const root = find(item.id);
+    const list = rootToMembers.get(root) ?? [];
+    list.push(item.id);
+    rootToMembers.set(root, list);
+  }
+
+  // Stable short labels: blok_1, blok_2, …
+  const rootToLabel = new Map<string, string>();
+  let n = 0;
+  const sortedRoots = [...rootToMembers.entries()]
+    .filter(([, ids]) => ids.length >= 2)
+    .sort((a, b) => {
+      const ya =
+        plains.find((p) => p.item.id === a[1][0])?.item.bbox.y ?? 0;
+      const yb =
+        plains.find((p) => p.item.id === b[1][0])?.item.bbox.y ?? 0;
+      return ya - yb;
+    });
+  for (const [root] of sortedRoots) {
+    n += 1;
+    rootToLabel.set(root, `blok_${n}`);
+  }
+
+  return items.map((item) => {
+    if (item.container.type === "pill") {
+      return { ...item, textBlockId: null };
+    }
+    const root = find(item.id);
+    return { ...item, textBlockId: rootToLabel.get(root) ?? null };
+  });
+}
+
+/**
+ * Infer align from text blocks (edge spread) and solo geometry.
+ * Pills are always center.
+ */
+function inferAlignments(items: DetectedText[]): DetectedText[] {
+  const byBlock = new Map<string, DetectedText[]>();
+  for (const item of items) {
+    if (!item.textBlockId) continue;
+    const list = byBlock.get(item.textBlockId) ?? [];
+    list.push(item);
+    byBlock.set(item.textBlockId, list);
+  }
+
+  const blockAlign = new Map<string, "left" | "center" | "right">();
+  for (const [blockId, members] of byBlock) {
+    if (members.length < 2) continue;
+    const lefts = members.map((m) => m.bbox.x);
+    const centers = members.map((m) => m.bbox.x + m.bbox.w / 2);
+    const rights = members.map((m) => m.bbox.x + m.bbox.w);
+    const spread = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+    const leftSpread = spread(lefts);
+    const centerSpread = spread(centers);
+    const rightSpread = spread(rights);
+    let align: "left" | "center" | "right" = "left";
+    let best = leftSpread;
+    // Prefer left on ties
+    if (centerSpread + 1e-9 < best) {
+      best = centerSpread;
+      align = "center";
+    }
+    if (rightSpread + 1e-9 < best) {
+      align = "right";
+    }
+    blockAlign.set(blockId, align);
+  }
+
+  return items.map((item) => {
+    if (item.container.type === "pill") {
+      return {
+        ...item,
+        style: { ...item.style, align: "center" },
+      };
+    }
+    if (item.textBlockId && blockAlign.has(item.textBlockId)) {
+      return {
+        ...item,
+        style: {
+          ...item.style,
+          align: blockAlign.get(item.textBlockId)!,
+        },
+      };
+    }
+    // Solo: keep explicit right; center only if clearly mid-frame
+    if (item.style.align === "right") return item;
+    const cx = item.bbox.x + item.bbox.w / 2;
+    const nearlyFullWidth = item.bbox.w > 0.55;
+    if (Math.abs(cx - 0.5) < 0.04 && !nearlyFullWidth) {
+      return { ...item, style: { ...item.style, align: "center" } };
+    }
+    return { ...item, style: { ...item.style, align: "left" } };
+  });
 }
 
 export function enrichDetections(items: DetectedText[]): DetectedText[] {
   const normalized = items
     .map((item) => normalizeIncomingItem(item))
-    .filter((item): item is DetectedText => item != null)
-    .map((item) => ({
-      ...item,
-      style: { ...item.style, align: inferPlainAlign(item) },
-    }));
-  return assignLayoutGroups(normalized);
+    .filter((item): item is DetectedText => item != null);
+  const blocked = assignTextBlocks(normalized);
+  const aligned = inferAlignments(blocked);
+  return assignLayoutGroups(aligned);
 }
 
 function rgbToHex(r: number, g: number, b: number): string {
@@ -395,7 +553,7 @@ function luminance(c: { r: number; g: number; b: number }): number {
 
 /**
  * Sample glyph / background colors, match nearest Google Font, expand pill plates.
- * Runs on the source image using normalized bboxes from OCR.
+ * Pass 1: per-item colors + font scores. Pass 2: unify font within text blocks.
  */
 export async function measureStyles(
   file: File,
@@ -414,11 +572,21 @@ export async function measureStyles(
   const imageData = ctx.getImageData(0, 0, imgW, imgH);
   const data = imageData.data;
 
-  return items.map((item) => {
+  type Pass1 = {
+    item: DetectedText;
+    scores: Record<string, number>;
+    family: string;
+    weight: FontWeightNum;
+    size: number;
+    scaleX: number;
+    color: string;
+    container: TextContainer;
+  };
+
+  const pass1: Pass1[] = items.map((item) => {
     const box = bboxToPx(item.bbox, imgW, imgH);
     const pad = Math.max(2, Math.round(box.h * 0.15));
 
-    // Background samples just outside the text box
     const bgPoints: Array<{ x: number; y: number }> = [];
     for (let t = 0; t <= 8; t++) {
       const u = t / 8;
@@ -435,7 +603,6 @@ export async function measureStyles(
       b: 255,
     };
 
-    // Glyph color: most contrasting pixel cluster inside the box
     const inkSamples: Array<{ r: number; g: number; b: number; d: number }> =
       [];
     const step = Math.max(1, Math.floor(Math.min(box.w, box.h) / 12));
@@ -471,113 +638,198 @@ export async function measureStyles(
       bg,
       item.style.fontWeight,
     );
-    const fontStyle = {
-      color: textColor,
-      fontWeight: (matched.weight === 700 ? "bold" : "normal") as
-        | "normal"
-        | "bold",
-      align: item.style.align,
-      fontFamily: matched.family,
-      fontSizeRel: matched.size / imgH,
-      scaleX: matched.scaleX,
-    };
 
-    if (item.container.type !== "pill") {
-      return {
-        ...item,
-        style: fontStyle,
-        container: { ...item.container, rect: null },
+    let container: TextContainer = { ...item.container, rect: null };
+    if (item.container.type === "pill") {
+      const fillPoints: Array<{ x: number; y: number }> = [];
+      const inset = Math.max(1, Math.round(box.h * 0.08));
+      for (let t = 0; t <= 6; t++) {
+        const u = t / 6;
+        fillPoints.push(
+          { x: box.x + box.w * u, y: box.y - inset },
+          { x: box.x + box.w * u, y: box.y + box.h + inset },
+          { x: box.x - inset, y: box.y + box.h * u },
+          { x: box.x + box.w + inset, y: box.y + box.h * u },
+        );
+      }
+      const fillCand = sampleMedianRgb(data, imgW, imgH, fillPoints);
+      const fillRgb =
+        fillCand &&
+        colorDist(fillCand, {
+          r: parseInt(textColor.slice(1, 3), 16),
+          g: parseInt(textColor.slice(3, 5), 16),
+          b: parseInt(textColor.slice(5, 7), 16),
+        }) > 20
+          ? fillCand
+          : bg;
+      const fillHex = rgbToHex(fillRgb.r, fillRgb.g, fillRgb.b);
+      const thresh = 38;
+
+      const pixelMatches = (x: number, y: number) => {
+        if (x < 0 || y < 0 || x >= imgW || y >= imgH) return false;
+        const i = (y * imgW + x) * 4;
+        return (
+          colorDist({ r: data[i], g: data[i + 1], b: data[i + 2] }, fillRgb) <
+          thresh
+        );
       };
-    }
 
-    // Pill fill: sample just outside glyphs but still inside the chip
-    const fillPoints: Array<{ x: number; y: number }> = [];
-    const inset = Math.max(1, Math.round(box.h * 0.08));
-    for (let t = 0; t <= 6; t++) {
-      const u = t / 6;
-      fillPoints.push(
-        { x: box.x + box.w * u, y: box.y - inset },
-        { x: box.x + box.w * u, y: box.y + box.h + inset },
-        { x: box.x - inset, y: box.y + box.h * u },
-        { x: box.x + box.w + inset, y: box.y + box.h * u },
-      );
-    }
-    // Prefer samples that differ from glyph color
-    const fillCand = sampleMedianRgb(data, imgW, imgH, fillPoints);
-    const fillRgb = fillCand && colorDist(fillCand, {
-      r: parseInt(textColor.slice(1, 3), 16),
-      g: parseInt(textColor.slice(3, 5), 16),
-      b: parseInt(textColor.slice(5, 7), 16),
-    }) > 20
-      ? fillCand
-      : bg;
-    const fillHex = rgbToHex(fillRgb.r, fillRgb.g, fillRgb.b);
-    const thresh = 38;
+      let left = Math.floor(box.x);
+      let right = Math.ceil(box.x + box.w);
+      let top = Math.floor(box.y);
+      let bottom = Math.ceil(box.y + box.h);
+      const maxExpand = Math.round(Math.max(box.h * 4, box.w * 0.8));
 
-    const pixelMatches = (x: number, y: number) => {
-      if (x < 0 || y < 0 || x >= imgW || y >= imgH) return false;
-      const i = (y * imgW + x) * 4;
-      return (
-        colorDist({ r: data[i], g: data[i + 1], b: data[i + 2] }, fillRgb) <
-        thresh
-      );
-    };
+      for (let i = 0; i < maxExpand; i++) {
+        const midY = Math.round((top + bottom) / 2);
+        if (pixelMatches(left - 1, midY)) left -= 1;
+        else break;
+      }
+      for (let i = 0; i < maxExpand; i++) {
+        const midY = Math.round((top + bottom) / 2);
+        if (pixelMatches(right + 1, midY)) right += 1;
+        else break;
+      }
+      for (let i = 0; i < maxExpand; i++) {
+        const midX = Math.round((left + right) / 2);
+        if (pixelMatches(midX, top - 1)) top -= 1;
+        else break;
+      }
+      for (let i = 0; i < maxExpand; i++) {
+        const midX = Math.round((left + right) / 2);
+        if (pixelMatches(midX, bottom + 1)) bottom += 1;
+        else break;
+      }
 
-    // Expand from text box until fill color ends
-    let left = Math.floor(box.x);
-    let right = Math.ceil(box.x + box.w);
-    let top = Math.floor(box.y);
-    let bottom = Math.ceil(box.y + box.h);
-    const maxExpand = Math.round(Math.max(box.h * 4, box.w * 0.8));
-
-    for (let i = 0; i < maxExpand; i++) {
-      const midY = Math.round((top + bottom) / 2);
-      if (pixelMatches(left - 1, midY)) left -= 1;
-      else break;
-    }
-    for (let i = 0; i < maxExpand; i++) {
-      const midY = Math.round((top + bottom) / 2);
-      if (pixelMatches(right + 1, midY)) right += 1;
-      else break;
-    }
-    for (let i = 0; i < maxExpand; i++) {
-      const midX = Math.round((left + right) / 2);
-      if (pixelMatches(midX, top - 1)) top -= 1;
-      else break;
-    }
-    for (let i = 0; i < maxExpand; i++) {
-      const midX = Math.round((left + right) / 2);
-      if (pixelMatches(midX, bottom + 1)) bottom += 1;
-      else break;
-    }
-
-    const rectPx = {
-      x: left,
-      y: top,
-      w: Math.max(1, right - left),
-      h: Math.max(1, bottom - top),
-    };
-    const rect: TextBBox = {
-      x: rectPx.x / imgW,
-      y: rectPx.y / imgH,
-      w: rectPx.w / imgW,
-      h: rectPx.h / imgH,
-    };
-
-    // Measured padding from container vs text box
-    const padXPx = Math.max(0, box.x - rectPx.x);
-    const padYPx = Math.max(0, box.y - rectPx.y);
-
-    return {
-      ...item,
-      style: fontStyle,
-      container: {
+      const rectPx = {
+        x: left,
+        y: top,
+        w: Math.max(1, right - left),
+        h: Math.max(1, bottom - top),
+      };
+      const rect: TextBBox = {
+        x: rectPx.x / imgW,
+        y: rectPx.y / imgH,
+        w: rectPx.w / imgW,
+        h: rectPx.h / imgH,
+      };
+      const padXPx = Math.max(0, box.x - rectPx.x);
+      const padYPx = Math.max(0, box.y - rectPx.y);
+      container = {
         ...item.container,
         fill: fillHex,
         radiusPxHint: Math.round(rectPx.h / 2),
         padX: textBoxHRel(box.h, padXPx),
         padY: textBoxHRel(box.h, padYPx),
         rect,
+      };
+    }
+
+    return {
+      item,
+      scores: matched.scores,
+      family: matched.family,
+      weight: matched.weight,
+      size: matched.size,
+      scaleX: matched.scaleX,
+      color: textColor,
+      container,
+    };
+  });
+
+  // Pass 2: vote for shared font within each text block
+  const blockIds = [
+    ...new Set(
+      pass1
+        .map((p) => p.item.textBlockId)
+        .filter((id): id is string => id != null),
+    ),
+  ];
+  const blockWinner = new Map<
+    string,
+    { family: string; weight: FontWeightNum; sizeRel: number; scaleX: number }
+  >();
+
+  for (const blockId of blockIds) {
+    const members = pass1.filter((p) => p.item.textBlockId === blockId);
+    if (members.length < 2) continue;
+
+    const totals: Record<string, number> = {};
+    for (const m of members) {
+      for (const [key, score] of Object.entries(m.scores)) {
+        totals[key] = (totals[key] ?? 0) + score;
+      }
+    }
+    let bestKey = "";
+    let bestTotal = -1;
+    for (const [key, total] of Object.entries(totals)) {
+      if (total > bestTotal) {
+        bestTotal = total;
+        bestKey = key;
+      }
+    }
+    const pipe = bestKey.lastIndexOf("|");
+    const family = pipe >= 0 ? bestKey.slice(0, pipe) : "Montserrat";
+    const weight = (
+      pipe >= 0 && bestKey.slice(pipe + 1) === "400" ? 400 : 700
+    ) as FontWeightNum;
+
+    // Recalibrate each member with the winning font, then take medians
+    const sizeRels: number[] = [];
+    const scaleXs: number[] = [];
+    for (const m of members) {
+      const box = bboxToPx(m.item.bbox, imgW, imgH);
+      const cal = calibrate(ctx, m.item.text, family, weight, box);
+      sizeRels.push(cal.size / imgH);
+      scaleXs.push(cal.scaleX);
+    }
+    sizeRels.sort((a, b) => a - b);
+    scaleXs.sort((a, b) => a - b);
+    const mid = Math.floor(sizeRels.length / 2);
+    blockWinner.set(blockId, {
+      family,
+      weight,
+      sizeRel: sizeRels[mid] ?? 0.04,
+      scaleX: scaleXs[mid] ?? 1,
+    });
+  }
+
+  return pass1.map((p) => {
+    const blockId = p.item.textBlockId;
+    const winner =
+      blockId && p.item.container.type !== "pill"
+        ? blockWinner.get(blockId)
+        : undefined;
+
+    if (winner) {
+      return {
+        ...p.item,
+        container: p.container,
+        style: {
+          color: p.color,
+          fontWeight: (winner.weight === 700 ? "bold" : "normal") as
+            | "normal"
+            | "bold",
+          align: p.item.style.align,
+          fontFamily: winner.family,
+          fontSizeRel: winner.sizeRel,
+          scaleX: winner.scaleX,
+        },
+      };
+    }
+
+    return {
+      ...p.item,
+      container: p.container,
+      style: {
+        color: p.color,
+        fontWeight: (p.weight === 700 ? "bold" : "normal") as
+          | "normal"
+          | "bold",
+        align: p.item.style.align,
+        fontFamily: p.family,
+        fontSizeRel: p.size / imgH,
+        scaleX: p.scaleX,
       },
     };
   });
@@ -673,6 +925,64 @@ export function formatNumber(value: number, meta: TextNumberMeta): string {
   return `${meta.prefix}${sign}${numeric}${meta.suffix}`;
 }
 
+/** Parse a number from user-typed replace text ( tolerates €, spaces, EU decimals ). */
+export function parseEditNumber(raw: string): number | null {
+  const fromStructured = parseNumberFromText(raw);
+  if (fromStructured && Number.isFinite(fromStructured.value)) {
+    return fromStructured.value;
+  }
+  const cleaned = raw
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/[^\d,.\-]/g, "");
+  if (!cleaned || cleaned === "-" || cleaned === "," || cleaned === ".") {
+    return null;
+  }
+  let normalized = cleaned;
+  if (cleaned.includes(",") && cleaned.includes(".")) {
+    normalized =
+      cleaned.lastIndexOf(",") > cleaned.lastIndexOf(".")
+        ? cleaned.replace(/\./g, "").replace(",", ".")
+        : cleaned.replace(/,/g, "");
+  } else if (cleaned.includes(",")) {
+    const parts = cleaned.split(",");
+    normalized =
+      parts.length === 2
+        ? `${parts[0].replace(/\./g, "")}.${parts[1]}`
+        : cleaned.replace(",", ".");
+  } else if ((cleaned.match(/\./g) || []).length > 1) {
+    normalized = cleaned.replace(/\./g, "");
+  }
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Effective numeric value for an edit: prefer the typed text when it parses to a
+ * different number than replaceValue (avoids stale replaceValue after typing).
+ */
+export function effectiveNumberValue(
+  item: DetectedText,
+  edit: TextEdit | undefined,
+): number | null {
+  if (!item.number) return null;
+  if (!edit) return item.number.value;
+  const fromText = parseEditNumber(edit.replaceText ?? "");
+  if (
+    fromText != null &&
+    edit.replaceValue != null &&
+    Number.isFinite(edit.replaceValue) &&
+    Math.abs(fromText - edit.replaceValue) > 1e-9
+  ) {
+    return fromText;
+  }
+  if (fromText != null) return fromText;
+  if (edit.replaceValue != null && Number.isFinite(edit.replaceValue)) {
+    return edit.replaceValue;
+  }
+  return item.number.value;
+}
+
 export function buildSeries(
   center: number,
   steps: number,
@@ -711,8 +1021,9 @@ export function resolveItemText(
     return formatNumber(seriesValue, item.number);
   }
   if (!edit) return item.text;
-  if (item.number && edit.replaceValue != null && Number.isFinite(edit.replaceValue)) {
-    return formatNumber(edit.replaceValue, item.number);
+  if (item.number) {
+    const v = effectiveNumberValue(item, edit);
+    if (v != null) return formatNumber(v, item.number);
   }
   return edit.replaceText;
 }
@@ -724,8 +1035,10 @@ function itemChanged(
 ): boolean {
   if (seriesItemId === item.id) return true;
   if (!edit) return false;
-  if (item.number && edit.replaceValue != null) {
-    return Math.abs(edit.replaceValue - item.number.value) > 1e-9;
+  if (item.number) {
+    const v = effectiveNumberValue(item, edit);
+    if (v == null) return edit.replaceText !== item.text;
+    return Math.abs(v - item.number.value) > 1e-9;
   }
   return edit.replaceText !== item.text;
 }
@@ -1227,36 +1540,21 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   roundRectPath(ctx, layout.x, layout.y, layout.w, layout.h, layout.radius);
   ctx.fill();
 
-  const tw = measureScaledWidth(
-    ctx,
-    layout.text,
-    layout.item,
-    layout.fontSize,
-    layout.scaleX,
-  );
-  const tx = layout.x + (layout.w - tw) / 2;
+  const family = layout.item.style.fontFamily || "Montserrat";
+  const weight = itemFontWeight(layout.item);
+  const cx = layout.x + layout.w / 2;
+  const cy = layout.y + layout.h / 2;
 
-  // Baseline: original text top relative to pill + calibrated ascent
-  const textBox = layout.item.bbox;
-  const pillRect = layout.item.container.rect;
-  let by: number;
-  if (pillRect && pillRect.h > 0) {
-    const relTop = (textBox.y - pillRect.y) / pillRect.h;
-    by = layout.y + relTop * layout.h + layout.ascent;
-  } else {
-    const approxPadY = Math.max(0, (layout.h - layout.ascent * 1.25) / 2);
-    by = layout.y + approxPadY + layout.ascent;
-  }
-
-  drawScaledText(
-    ctx,
-    layout.text,
-    layout.item,
-    layout.fontSize,
-    layout.scaleX,
-    tx,
-    by,
-  );
+  // Center text in the pill (horizontal + vertical); scale around the center
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(layout.scaleX, 1);
+  ctx.font = fontCss(family, weight, layout.fontSize);
+  ctx.fillStyle = layout.item.style.color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(layout.text, 0, 0);
+  ctx.restore();
 }
 
 function pillsOnSameRow(a: DetectedText, b: DetectedText): boolean {
@@ -1488,9 +1786,10 @@ export async function renderTextReplaceVariants(input: {
     : null;
 
   const center =
-    seriesItem && edits[seriesItem.id]?.replaceValue != null
-      ? edits[seriesItem.id].replaceValue!
-      : seriesItem?.number?.value ?? 0;
+    seriesItem != null
+      ? effectiveNumberValue(seriesItem, edits[seriesItem.id]) ??
+        seriesItem.number!.value
+      : 0;
 
   const values =
     seriesItem && series.steps > 0

@@ -5,6 +5,7 @@ import {
   detectTexts,
   downloadTextReplaceZip,
   formatNumber,
+  parseEditNumber,
   renderTextReplaceVariants,
   revokeVariants,
   type DetectedText,
@@ -33,36 +34,6 @@ function CloudIcon() {
       />
     </svg>
   );
-}
-
-function parseLocaleNumber(raw: string): number | null {
-  // Strip currency / letters (e.g. "28,99 €" → "28,99")
-  const t = raw
-    .trim()
-    .replace(/\s/g, "")
-    .replace(/[^\d,.\-]/g, "");
-  if (!t || t === "-" || t === "," || t === ".") return null;
-  let normalized = t;
-  if (t.includes(",") && t.includes(".")) {
-    normalized =
-      t.lastIndexOf(",") > t.lastIndexOf(".")
-        ? t.replace(/\./g, "").replace(",", ".")
-        : t.replace(/,/g, "");
-  } else if (t.includes(",")) {
-    // Allow "1.234,56" already handled; plain "28,99" → "28.99"
-    // Also "1.234" with only dots as thousands is rare in SI inputs here
-    const parts = t.split(",");
-    if (parts.length === 2) {
-      normalized = `${parts[0].replace(/\./g, "")}.${parts[1]}`;
-    } else {
-      normalized = t.replace(",", ".");
-    }
-  } else if ((t.match(/\./g) || []).length > 1) {
-    // "1.234.567" thousands
-    normalized = t.replace(/\./g, "");
-  }
-  const n = Number(normalized);
-  return Number.isFinite(n) ? n : null;
 }
 
 function clampBBox(b: TextBBox): TextBBox {
@@ -342,7 +313,11 @@ export default function TextReplaceMode() {
     if (!series.itemId) return [] as number[];
     const item = items.find((i) => i.id === series.itemId);
     if (!item?.number) return [];
-    const center = edits[item.id]?.replaceValue ?? item.number.value;
+    const edit = edits[item.id];
+    const center =
+      parseEditNumber(edit?.replaceText ?? "") ??
+      edit?.replaceValue ??
+      item.number.value;
     return buildSeries(center, series.steps, series.step);
   }, [series, items, edits]);
 
@@ -439,10 +414,26 @@ export default function TextReplaceMode() {
     setVariants([]);
     setLightbox(null);
     try {
+      // Commit any in-progress number edits from typed text before render
+      const committed: TextReplaceEdits = { ...edits };
+      for (const item of items) {
+        if (!item.number) continue;
+        const edit = committed[item.id];
+        if (!edit) continue;
+        const n = parseEditNumber(edit.replaceText);
+        if (n != null) {
+          committed[item.id] = {
+            replaceText: formatNumber(n, item.number),
+            replaceValue: n,
+          };
+        }
+      }
+      setEdits(committed);
+
       const out = await renderTextReplaceVariants({
         file,
         items,
-        edits,
+        edits: committed,
         series,
       });
       setVariants(out);
@@ -595,6 +586,14 @@ export default function TextReplaceMode() {
                           <span className="osebe-brand-chip">
                             {item.container.type}
                           </span>
+                          {item.textBlockId && (
+                            <span
+                              className="osebe-brand-chip"
+                              title="Same text block — shared font and alignment"
+                            >
+                              {item.textBlockId.replace("blok_", "blok ")}
+                            </span>
+                          )}
                           {item.style.fontFamily && (
                             <span
                               className="osebe-brand-chip"
@@ -618,12 +617,16 @@ export default function TextReplaceMode() {
                             New value
                             {item.number.suffix || item.number.prefix
                               ? ` → ${
-                                  edit?.replaceValue != null
-                                    ? formatNumber(
-                                        edit.replaceValue,
-                                        item.number,
-                                      )
-                                    : item.text
+                                  (() => {
+                                    const v = parseEditNumber(
+                                      edit?.replaceText ?? "",
+                                    );
+                                    const num =
+                                      v ??
+                                      edit?.replaceValue ??
+                                      item.number.value;
+                                    return formatNumber(num, item.number);
+                                  })()
                                 }`
                               : ""}
                           </span>
@@ -634,29 +637,38 @@ export default function TextReplaceMode() {
                             disabled={busy}
                             value={
                               edit?.replaceText ??
-                              String(item.number.value).replace(".", ",")
+                              formatNumber(item.number.value, item.number)
                             }
                             onChange={(e) => {
                               const raw = e.target.value;
-                              const n = parseLocaleNumber(raw);
-                              patchEdit(item.id, {
-                                replaceText: raw,
-                                replaceValue:
-                                  n != null ? n : edit?.replaceValue ?? null,
-                              });
+                              const n = parseEditNumber(raw);
+                              setEdits((prev) => ({
+                                ...prev,
+                                [item.id]: {
+                                  replaceText: raw,
+                                  replaceValue:
+                                    n ??
+                                    prev[item.id]?.replaceValue ??
+                                    item.number!.value,
+                                },
+                              }));
                             }}
                             onBlur={(e) => {
-                              // Prefer the typed text (not stale replaceValue)
                               const raw = e.target.value;
-                              const n =
-                                parseLocaleNumber(raw) ??
-                                edit?.replaceValue ??
-                                null;
-                              if (n != null && item.number) {
-                                patchEdit(item.id, {
+                              const n = parseEditNumber(raw);
+                              if (n == null || !item.number) return;
+                              const formatted = formatNumber(n, item.number);
+                              setEdits((prev) => ({
+                                ...prev,
+                                [item.id]: {
+                                  replaceText: formatted,
                                   replaceValue: n,
-                                  replaceText: formatNumber(n, item.number),
-                                });
+                                },
+                              }));
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                (e.target as HTMLInputElement).blur();
                               }
                             }}
                           />
@@ -747,9 +759,7 @@ export default function TextReplaceMode() {
                                     disabled={busy}
                                     value={String(series.step).replace(".", ",")}
                                     onChange={(e) => {
-                                      const n = parseLocaleNumber(
-                                        e.target.value,
-                                      );
+                                      const n = parseEditNumber(e.target.value);
                                       if (n != null) {
                                         setSeries((s) => ({ ...s, step: n }));
                                       }
