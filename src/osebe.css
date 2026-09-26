@@ -1024,8 +1024,9 @@ button.tr-result-thumb:focus-visible {
 }
 
 .tr-lightbox__img {
-  max-width: min(96vw, 1100px);
-  max-height: min(82vh, 900px);
+  /* Match source preview (.tr-preview__img), not full-screen */
+  max-width: min(90vw, 720px);
+  max-height: 50vh;
   width: auto;
   height: auto;
   object-fit: contain;
