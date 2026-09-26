@@ -578,6 +578,8 @@ function measurePillPlate(
   radiusPxHint: number;
   padXPx: number;
   padYPx: number;
+  /** True if flood hit maxExpand on both left and right (likely full field). */
+  hitMaxHorizontal: boolean;
 } | null {
   const fillPoints: Array<{ x: number; y: number }> = [];
   const inset = Math.max(1, Math.round(box.h * 0.08));
@@ -616,15 +618,21 @@ function measurePillPlate(
   let bottom = Math.ceil(box.y + box.h);
   const maxExpand = Math.round(Math.max(box.h * 4, box.w * 0.8));
 
+  let leftExpand = 0;
+  let rightExpand = 0;
   for (let i = 0; i < maxExpand; i++) {
     const midY = Math.round((top + bottom) / 2);
-    if (pixelMatches(left - 1, midY)) left -= 1;
-    else break;
+    if (pixelMatches(left - 1, midY)) {
+      left -= 1;
+      leftExpand += 1;
+    } else break;
   }
   for (let i = 0; i < maxExpand; i++) {
     const midY = Math.round((top + bottom) / 2);
-    if (pixelMatches(right + 1, midY)) right += 1;
-    else break;
+    if (pixelMatches(right + 1, midY)) {
+      right += 1;
+      rightExpand += 1;
+    } else break;
   }
   for (let i = 0; i < maxExpand; i++) {
     const midX = Math.round((left + right) / 2);
@@ -660,12 +668,14 @@ function measurePillPlate(
     radiusPxHint: Math.round(rectPx.h / 2),
     padXPx,
     padYPx,
+    hitMaxHorizontal:
+      leftExpand >= maxExpand - 1 && rightExpand >= maxExpand - 1,
   };
 }
 
 /**
  * Plain → pill when text sits on a compact colored chip (GPT often misses isPill).
- * Rejects full-bleed bars and text on the page background.
+ * Allows tiny side pad (OCR box already fills the chip). Rejects full-bleed bars.
  */
 function shouldPromotePlainToPill(
   data: Uint8ClampedArray,
@@ -674,9 +684,9 @@ function shouldPromotePlainToPill(
   box: PxRect,
   plate: NonNullable<ReturnType<typeof measurePillPlate>>,
 ): boolean {
-  if (plate.padXPx < Math.max(4, box.h * 0.12)) return false;
-  if (plate.rectPx.h > box.h * 2.2) return false;
-  // Full-width buttons (e.g. SKLENI) expand far past the label
+  if (plate.rectPx.h > box.h * 2.4) return false;
+  // Full-width buttons / fields
+  if (plate.hitMaxHorizontal) return false;
   if (plate.rectPx.w > box.w * 3.0) return false;
   if (plate.rectPx.w > box.w + box.h * 8) return false;
 
@@ -695,6 +705,15 @@ function shouldPromotePlainToPill(
   if (!farBg) return false;
   // Chip fill must differ from the surrounding page / banner field
   if (colorDist(plate.fillRgb, farBg) < 28) return false;
+
+  // Meaningful chip: some expansion OR vertical pad OR fill already wraps glyphs
+  const hasPad =
+    plate.padXPx >= 2 ||
+    plate.padYPx >= 2 ||
+    plate.rectPx.w > box.w + 2 ||
+    plate.rectPx.h > box.h + 2;
+  if (!hasPad && colorDist(plate.fillRgb, farBg) < 45) return false;
+
   return true;
 }
 
@@ -1513,17 +1532,40 @@ type PillLayout = {
   ascent: number;
   padH: number;
   fontCss: string;
+  scaleX: number;
 };
 
-/** Same typeface measurePill and drawPill both use (no OCR scaleX). */
+/**
+ * Typeface used for both measure and draw.
+ * Size fits original OCR text box height; scaleX matches OCR text width.
+ */
 function pillTypeface(
+  ctx: CanvasRenderingContext2D,
   item: DetectedText,
+  imgW: number,
   imgH: number,
-): { family: string; weight: FontWeightNum; sizePx: number; css: string } {
+): {
+  family: string;
+  weight: FontWeightNum;
+  sizePx: number;
+  scaleX: number;
+  css: string;
+} {
   const family = item.style.fontFamily || "Montserrat";
   const weight = itemFontWeight(item);
-  const sizePx = itemFontSize(item, imgH);
-  return { family, weight, sizePx, css: fontCss(family, weight, sizePx) };
+  const textBox = bboxToPx(item.bbox, imgW, imgH);
+  // Prefer calibrated size/scale for the draw font over stale fontSizeRel alone
+  const cal = calibrate(ctx, item.text || "Hg", family, weight, textBox);
+  const sizePx = Math.max(6, cal.size);
+  // Horizontal scale so the draw font matches OCR text width (same for measure + draw)
+  const scaleX = cal.scaleX;
+  return {
+    family,
+    weight,
+    sizePx,
+    scaleX,
+    css: fontCss(family, weight, sizePx),
+  };
 }
 
 async function ensurePillFontsLoaded(
@@ -1536,7 +1578,10 @@ async function ensurePillFontsLoaded(
   const seen = new Set<string>();
   for (const item of items) {
     if (item.container.type !== "pill") continue;
-    const { css } = pillTypeface(item, imgH);
+    const family = item.style.fontFamily || "Montserrat";
+    const weight = itemFontWeight(item);
+    const sizePx = itemFontSize(item, imgH);
+    const css = fontCss(family, weight, sizePx);
     if (seen.has(css)) continue;
     seen.add(css);
     loads.push(document.fonts.load(css).catch(() => []));
@@ -1548,12 +1593,12 @@ async function ensurePillFontsLoaded(
 }
 
 /**
- * Width that must fit inside the pill: max of advance and ink bounds.
- * Bold / display fonts often overhang past measureText().width.
+ * Width from measureText ink bounds, multiplied by horizontal scale.
  */
 function pillTextInkWidth(
   ctx: CanvasRenderingContext2D,
   text: string,
+  scaleX: number,
 ): { width: number; ascent: number; descent: number } {
   const m = ctx.measureText(text || "Hg");
   const advance = Math.max(1, m.width);
@@ -1564,12 +1609,66 @@ function pillTextInkWidth(
     ? m.actualBoundingBoxRight
     : 0;
   const ink = left + right;
-  const width = Math.max(advance, ink > 0 ? ink : advance);
+  const width = Math.max(advance, ink > 0 ? ink : advance) * scaleX;
   const ascent =
     m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : 0;
   const descent =
     m.actualBoundingBoxDescent > 0 ? m.actualBoundingBoxDescent : 0;
   return { width, ascent, descent };
+}
+
+/**
+ * Ground-truth width: draw scaled text offscreen and scan ink pixels.
+ */
+function measureDrawnTextWidth(
+  family: string,
+  weight: FontWeightNum,
+  sizePx: number,
+  scaleX: number,
+  text: string,
+): number {
+  if (typeof document === "undefined") return 0;
+  const css = fontCss(family, weight, sizePx);
+  const probe = document.createElement("canvas");
+  const pctx = probe.getContext("2d", { willReadFrequently: true });
+  if (!pctx) return 0;
+  pctx.font = css;
+  const approx = Math.max(1, pctx.measureText(text || "Hg").width * scaleX);
+  const pad = Math.ceil(sizePx);
+  probe.width = Math.ceil(approx + pad * 2 + 8);
+  probe.height = Math.ceil(sizePx * 3 + 8);
+  pctx.clearRect(0, 0, probe.width, probe.height);
+  pctx.font = css;
+  pctx.fillStyle = "#000000";
+  pctx.textAlign = "left";
+  pctx.textBaseline = "alphabetic";
+  const baseline = Math.ceil(sizePx * 1.5);
+  const originX = pad;
+  pctx.save();
+  pctx.translate(originX, baseline);
+  pctx.scale(scaleX, 1);
+  pctx.fillText(text || "Hg", 0, 0);
+  pctx.restore();
+
+  const { data, width, height } = pctx.getImageData(
+    0,
+    0,
+    probe.width,
+    probe.height,
+  );
+  let minX = width;
+  let maxX = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const a = data[(y * width + x) * 4 + 3];
+      if (a > 8) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
+  }
+  if (maxX < minX) return approx;
+  return Math.max(1, maxX - minX + 1);
 }
 
 function measurePill(
@@ -1586,38 +1685,61 @@ function measurePill(
   radius: number;
   padH: number;
   fontCss: string;
+  scaleX: number;
   orig: PxRect;
 } {
   const orig = pillContainerPx(item, imgW, imgH);
-  const { sizePx, css } = pillTypeface(item, imgH);
+  const face = pillTypeface(ctx, item, imgW, imgH);
+  const { sizePx, css, scaleX, family, weight } = face;
 
   ctx.font = css;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
 
-  const origInk = pillTextInkWidth(ctx, item.text || "Hg").width;
   const h = orig.h;
-  // Side pad: measured plate vs OCR text, container padX, or a solid floor
+  const origMetrics = pillTextInkWidth(ctx, item.text || "Hg", scaleX);
+  const origDrawn = measureDrawnTextWidth(
+    family,
+    weight,
+    sizePx,
+    scaleX,
+    item.text || "Hg",
+  );
+  const origInk = Math.max(origMetrics.width, origDrawn);
+
   const fromPlate = (orig.w - origInk) / 2;
   const fromContainer = (item.container.padX || 0.45) * h;
-  const padH = Math.max(0.5 * h, fromContainer, fromPlate, 8);
+  const padH = Math.max(0.4 * h, fromContainer, fromPlate, 6);
 
-  const newInk = pillTextInkWidth(ctx, text || "Hg");
+  const newMetrics = pillTextInkWidth(ctx, text || "Hg", scaleX);
+  const newDrawn = measureDrawnTextWidth(
+    family,
+    weight,
+    sizePx,
+    scaleX,
+    text || "Hg",
+  );
+  const newInk = Math.max(newMetrics.width, newDrawn);
   const ascent =
-    newInk.ascent > 0 ? newInk.ascent : sizePx * 0.8;
+    newMetrics.ascent > 0 ? newMetrics.ascent : sizePx * 0.8;
 
-  // Extra slack: measureText under-reads some webfonts vs fillText
-  const slack = Math.max(6, 0.12 * h);
-  const contentW = newInk.width + 2 * padH + slack;
-  // Grow at least with text length vs original (guards bad pad when plate≈ink)
-  const grow =
-    origInk > 1 ? orig.w * (newInk.width / origInk) + slack * 0.5 : contentW;
-  const w = Math.max(h * 0.8, contentW, grow);
+  const slack = Math.max(4, 0.08 * h);
+  const w = Math.max(h * 0.8, newInk + 2 * padH + slack);
   const radius =
     item.container.radiusPxHint > 0
       ? item.container.radiusPxHint
       : h / 2;
-  return { w, h, fontSize: sizePx, ascent, radius, padH, fontCss: css, orig };
+  return {
+    w,
+    h,
+    fontSize: sizePx,
+    ascent,
+    radius,
+    padH,
+    fontCss: css,
+    scaleX,
+    orig,
+  };
 }
 
 function layoutPillGroup(
@@ -1659,6 +1781,7 @@ function layoutPillGroup(
       ascent: m.ascent,
       padH: m.padH,
       fontCss: m.fontCss,
+      scaleX: m.scaleX,
     };
     cursorX += m.w + (gaps[i] ?? 0);
     return layout;
@@ -1671,17 +1794,17 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   roundRectPath(ctx, layout.x, layout.y, layout.w, layout.h, layout.radius);
   ctx.fill();
 
-  // Same font + left/alphabetic metrics as measurePill so ink stays inside pad
+  // Same font + scaleX as measurePill
   ctx.save();
   ctx.font = layout.fontCss;
   ctx.fillStyle = layout.item.style.color;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-  const ink = pillTextInkWidth(ctx, layout.text);
+  const ink = pillTextInkWidth(ctx, layout.text, layout.scaleX);
   const m = ctx.measureText(layout.text || "Hg");
-  const leftBearing = Number.isFinite(m.actualBoundingBoxLeft)
-    ? m.actualBoundingBoxLeft
-    : 0;
+  const leftBearing =
+    (Number.isFinite(m.actualBoundingBoxLeft) ? m.actualBoundingBoxLeft : 0) *
+    layout.scaleX;
   const textX = layout.x + (layout.w - ink.width) / 2 - leftBearing;
   const midY = layout.y + layout.h / 2;
   const ascent =
@@ -1692,7 +1815,9 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
         : layout.fontSize * 0.8;
   const descent = ink.descent > 0 ? ink.descent : layout.fontSize * 0.2;
   const baselineY = midY + (ascent - descent) / 2;
-  ctx.fillText(layout.text, textX, baselineY);
+  ctx.translate(textX, baselineY);
+  ctx.scale(layout.scaleX, 1);
+  ctx.fillText(layout.text, 0, 0);
   ctx.restore();
 }
 
