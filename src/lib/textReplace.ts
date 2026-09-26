@@ -1432,10 +1432,39 @@ type PillLayout = {
   h: number;
   radius: number;
   fontSize: number;
-  scaleX: number;
   ascent: number;
   padH: number;
+  fontCss: string;
 };
+
+/** Same typeface measurePill and drawPill both use (no OCR scaleX). */
+function pillTypeface(
+  item: DetectedText,
+  imgH: number,
+): { family: string; weight: FontWeightNum; sizePx: number; css: string } {
+  const family = item.style.fontFamily || "Montserrat";
+  const weight = itemFontWeight(item);
+  const sizePx = itemFontSize(item, imgH);
+  return { family, weight, sizePx, css: fontCss(family, weight, sizePx) };
+}
+
+async function ensurePillFontsLoaded(
+  items: DetectedText[],
+  imgH: number,
+): Promise<void> {
+  await loadCandidateFonts();
+  if (typeof document === "undefined" || !document.fonts?.load) return;
+  const loads: Promise<FontFace[]>[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (item.container.type !== "pill") continue;
+    const { css } = pillTypeface(item, imgH);
+    if (seen.has(css)) continue;
+    seen.add(css);
+    loads.push(document.fonts.load(css).catch(() => []));
+  }
+  await Promise.all(loads);
+}
 
 function measurePill(
   ctx: CanvasRenderingContext2D,
@@ -1447,41 +1476,37 @@ function measurePill(
   w: number;
   h: number;
   fontSize: number;
-  scaleX: number;
   ascent: number;
   radius: number;
   padH: number;
+  fontCss: string;
   orig: PxRect;
 } {
   const orig = pillContainerPx(item, imgW, imgH);
-  const fontSize = itemFontSize(item, imgH);
-  const scaleX = itemScaleX(item);
-  const family = item.style.fontFamily || "Montserrat";
-  const weight = itemFontWeight(item);
+  const { sizePx, css } = pillTypeface(item, imgH);
 
-  ctx.font = fontCss(family, weight, fontSize);
+  ctx.font = css;
   ctx.textBaseline = "alphabetic";
 
-  // Padding from rendered original ink vs plate (not OCR text box)
-  const origMetrics = ctx.measureText(item.text || "Hg");
-  const origAdvance = Math.max(1, origMetrics.width * scaleX);
-  const minPad = orig.h * 0.22;
-  const padH = Math.max(minPad, (orig.w - origAdvance) / 2);
+  // Padding from original plate vs advance of original text at the draw font
+  const origAdvance = Math.max(1, ctx.measureText(item.text || "Hg").width);
+  const h = orig.h;
+  const padH = Math.max(0.4 * h, (orig.w - origAdvance) / 2);
 
   const newMetrics = ctx.measureText(text || "Hg");
-  const newAdvance = Math.max(1, newMetrics.width * scaleX);
+  const newAdvance = Math.max(1, newMetrics.width);
   const ascent =
     newMetrics.actualBoundingBoxAscent > 0
       ? newMetrics.actualBoundingBoxAscent
-      : fontSize * 0.8;
+      : sizePx * 0.8;
 
-  const w = Math.max(orig.h * 0.8, newAdvance + 2 * padH);
-  const h = orig.h;
+  const slack = Math.max(2, 0.04 * h);
+  const w = Math.max(h * 0.8, newAdvance + 2 * padH + slack);
   const radius =
     item.container.radiusPxHint > 0
       ? item.container.radiusPxHint
       : h / 2;
-  return { w, h, fontSize, scaleX, ascent, radius, padH, orig };
+  return { w, h, fontSize: sizePx, ascent, radius, padH, fontCss: css, orig };
 }
 
 function layoutPillGroup(
@@ -1520,9 +1545,9 @@ function layoutPillGroup(
       h: m.h,
       radius: m.radius,
       fontSize: m.fontSize,
-      scaleX: m.scaleX,
       ascent: m.ascent,
       padH: m.padH,
+      fontCss: m.fontCss,
     };
     cursorX += m.w + (gaps[i] ?? 0);
     return layout;
@@ -1535,20 +1560,16 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   roundRectPath(ctx, layout.x, layout.y, layout.w, layout.h, layout.radius);
   ctx.fill();
 
-  const family = layout.item.style.fontFamily || "Montserrat";
-  const weight = itemFontWeight(layout.item);
   const cx = layout.x + layout.w / 2;
   const cy = layout.y + layout.h / 2;
 
-  // Always center in pill — ignore style.align (pills resize to text)
+  // Same font as measurePill; no horizontal OCR scale
   ctx.save();
-  ctx.translate(cx, cy);
-  ctx.scale(layout.scaleX, 1);
-  ctx.font = fontCss(family, weight, layout.fontSize);
+  ctx.font = layout.fontCss;
   ctx.fillStyle = layout.item.style.color;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(layout.text, 0, 0);
+  ctx.fillText(layout.text, cx, cy);
   ctx.restore();
 }
 
@@ -1789,6 +1810,9 @@ export async function renderTextReplaceVariants(input: {
   const source = await loadImageFromBlob(file);
   const imgW = source.naturalWidth;
   const imgH = source.naturalHeight;
+
+  // Ensure Google Fonts used by pills are ready before measureText / draw
+  await ensurePillFontsLoaded(items, imgH);
 
   const seriesItem = series.itemId
     ? items.find((i) => i.id === series.itemId && i.number)

@@ -287,6 +287,21 @@ export default function TextReplaceMode() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
+  const editListRef = useRef<HTMLUListElement>(null);
+
+  // When a box is selected on the image, scroll/focus its row in Detected text
+  useEffect(() => {
+    if (!selectedId || !editListRef.current) return;
+    const row = editListRef.current.querySelector<HTMLElement>(
+      `[data-tr-item="${CSS.escape(selectedId)}"]`,
+    );
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const input = row.querySelector<HTMLInputElement>("input.osebe-input");
+    if (input && !input.disabled) {
+      input.focus({ preventScroll: true });
+    }
+  }, [selectedId]);
 
   useEffect(() => {
     return () => {
@@ -562,7 +577,7 @@ export default function TextReplaceMode() {
                 Drag boxes on the preview if they are misaligned. Click a row to
                 select its box.
               </p>
-              <ul className="tr-list">
+              <ul className="tr-list" ref={editListRef}>
                 {visibleItems.map((item) => {
                   const edit = edits[item.id];
                   const isVary = series.itemId === item.id;
@@ -570,6 +585,7 @@ export default function TextReplaceMode() {
                   return (
                     <li
                       key={item.id}
+                      data-tr-item={item.id}
                       className={`tr-item${isSelected ? " tr-item--selected" : ""}`}
                       onMouseEnter={() => setHoveredId(item.id)}
                       onMouseLeave={() => setHoveredId(null)}
