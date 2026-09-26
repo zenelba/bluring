@@ -109,21 +109,23 @@ export default function FeedbackModal({
           <div className="feedback-modal__done">
             <p>
               Thanks — report saved
-              {result.savedToDisk ? (
-                <>
-                  {" "}
-                  to <code>feedback/</code>
-                </>
-              ) : (
-                " (downloaded as zip)"
-              )}
+              {result.savedToDb
+                ? " to the database"
+                : result.savedToDisk
+                  ? (
+                      <>
+                        {" "}
+                        to <code>feedback/</code>
+                      </>
+                    )
+                  : " (downloaded as zip)"}
               .
             </p>
             {result.emailed ? (
               <p>Email sent to the owner.</p>
             ) : (
               <p className="feedback-modal__soft">
-                Saved locally; email not configured or send failed.
+                Email not configured or send failed.
               </p>
             )}
             <button type="button" className="btn btn--primary" onClick={onClose}>

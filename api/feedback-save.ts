@@ -1,11 +1,17 @@
 /**
- * Save feedback report to disk (local) and/or email owner via Resend.
+ * Save feedback: Postgres + Blob (Vercel), local disk when available, email via Resend.
  */
 
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
+import { randomUUID } from "crypto";
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
-import { ensureProjectEnv } from "./helpers/loadEnv.js";
+import {
+  insertFeedbackReport,
+  isFeedbackBlobConfigured,
+  isFeedbackDbConfigured,
+  uploadFeedbackScreenshot,
+} from "./helpers/feedbackDb.js";
 
 type FeedbackBody = {
   kind?: "error" | "idea";
@@ -23,7 +29,6 @@ type FeedbackBody = {
 };
 
 function canWriteDisk(): boolean {
-  // Vercel serverless FS is ephemeral/read-only for durable storage.
   if (process.env.VERCEL === "1") return false;
   return true;
 }
@@ -48,7 +53,9 @@ async function sendResendEmail(input: {
   pngBase64: string;
   filenameBase: string;
   pageUrl: string;
+  screenshotUrl?: string | null;
 }): Promise<boolean> {
+  const { ensureProjectEnv } = await import("./helpers/loadEnv.js");
   ensureProjectEnv();
   const apiKey = process.env.RESEND_API_KEY?.trim();
   if (!apiKey) return false;
@@ -65,6 +72,10 @@ async function sendResendEmail(input: {
     input.filenameBase;
   const subject = `[Bluring] ${input.kind} — ${input.toolLabel} — ${subjectFocus}`;
 
+  const shotLink = input.screenshotUrl
+    ? `<p><a href="${escapeHtml(input.screenshotUrl)}">Open screenshot</a></p>`
+    : "";
+
   const html = `
     <h2>Bluring ${input.kind}</h2>
     <p><strong>Tool:</strong> ${escapeHtml(input.toolLabel)}</p>
@@ -75,6 +86,7 @@ async function sendResendEmail(input: {
     <p>${nl2br(escapeHtml(input.wrong || "—"))}</p>
     <h3>What is expected</h3>
     <p>${nl2br(escapeHtml(input.expected || "—"))}</p>
+    ${shotLink}
     <p><em>Full markdown + screenshot attached.</em></p>
   `;
 
@@ -91,6 +103,7 @@ async function sendResendEmail(input: {
     "",
     "What is expected:",
     input.expected || "—",
+    input.screenshotUrl ? `\nScreenshot: ${input.screenshotUrl}` : "",
   ].join("\n");
 
   const res = await fetch("https://api.resend.com/emails", {
@@ -225,6 +238,45 @@ export default async function handler(
     }
   }
 
+  let screenshotUrl: string | null = null;
+  if (isFeedbackBlobConfigured()) {
+    try {
+      screenshotUrl = await uploadFeedbackScreenshot(filenameBase, pngRaw);
+    } catch (err) {
+      console.error("feedback blob upload failed", err);
+    }
+  }
+
+  let savedToDb = false;
+  let dbId: string | null = null;
+  if (isFeedbackDbConfigured()) {
+    try {
+      const inserted = await insertFeedbackReport({
+        id: randomUUID(),
+        kind,
+        toolId,
+        toolLabel,
+        focus,
+        wrong,
+        expected,
+        taskId: typeof body.taskId === "string" ? body.taskId : null,
+        taskTitle: typeof body.taskTitle === "string" ? body.taskTitle : null,
+        pageUrl: typeof body.pageUrl === "string" ? body.pageUrl : null,
+        userAgent: typeof body.userAgent === "string" ? body.userAgent : null,
+        filenameBase,
+        markdown,
+        journal: body.journal ?? null,
+        screenshotUrl,
+      });
+      if (inserted) {
+        savedToDb = true;
+        dbId = inserted.id;
+      }
+    } catch (err) {
+      console.error("feedback db insert failed", err);
+    }
+  }
+
   let emailed = false;
   try {
     emailed = await sendResendEmail({
@@ -237,6 +289,7 @@ export default async function handler(
       pngBase64: pngRaw,
       filenameBase,
       pageUrl: typeof body.pageUrl === "string" ? body.pageUrl : "",
+      screenshotUrl,
     });
   } catch (err) {
     console.error("feedback email failed", err);
@@ -246,6 +299,11 @@ export default async function handler(
     ok: true,
     emailed,
     savedToDisk,
+    savedToDb,
+    id: dbId,
+    screenshotUrl,
     filenameBase,
+    dbConfigured: isFeedbackDbConfigured(),
+    blobConfigured: isFeedbackBlobConfigured(),
   });
 }

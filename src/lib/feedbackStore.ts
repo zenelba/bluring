@@ -32,6 +32,8 @@ export type FeedbackSubmitResult = {
   ok: boolean;
   emailed: boolean;
   savedToDisk: boolean;
+  savedToDb: boolean;
+  screenshotUrl?: string | null;
   filenameBase?: string;
   error?: string;
 };
@@ -147,6 +149,8 @@ export async function submitFeedback(
 
   let emailed = false;
   let savedToDisk = false;
+  let savedToDb = false;
+  let screenshotUrl: string | null = null;
   let apiError: string | undefined;
 
   try {
@@ -173,6 +177,8 @@ export async function submitFeedback(
       error?: string;
       emailed?: boolean;
       savedToDisk?: boolean;
+      savedToDb?: boolean;
+      screenshotUrl?: string | null;
       filenameBase?: string;
     };
     if (!res.ok) {
@@ -180,12 +186,15 @@ export async function submitFeedback(
     } else {
       emailed = Boolean(data.emailed);
       savedToDisk = Boolean(data.savedToDisk);
+      savedToDb = Boolean(data.savedToDb);
+      screenshotUrl = data.screenshotUrl ?? null;
     }
   } catch (err) {
     apiError = err instanceof Error ? err.message : "Network error";
   }
 
-  if (!savedToDisk) {
+  // Zip download only if nothing durable was persisted remotely/locally on disk
+  if (!savedToDisk && !savedToDb) {
     await downloadFeedbackZip({
       filenameBase,
       markdown,
@@ -197,6 +206,8 @@ export async function submitFeedback(
     ok: true,
     emailed,
     savedToDisk,
+    savedToDb,
+    screenshotUrl,
     filenameBase,
     error: apiError,
   };
