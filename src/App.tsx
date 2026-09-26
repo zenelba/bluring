@@ -33,9 +33,10 @@ import CollagesMode from "./CollagesMode";
 import AudioVideoMode from "./AudioVideoMode";
 import BrandRemovalMode from "./BrandRemovalMode";
 import TextReplaceMode from "./TextReplaceMode";
+import HomeLanding from "./HomeLanding";
 import "./App.css";
 
-type AppMode =
+type ToolMode =
   | "blur"
   | "foveal"
   | "saliency"
@@ -46,44 +47,85 @@ type AppMode =
   | "brandRemoval"
   | "textReplace";
 
-const APP_MODES: ReadonlyArray<{ id: AppMode; label: string }> = [
-  { id: "blur", label: "Logo blur" },
-  { id: "foveal", label: "Foveal vision" },
-  { id: "saliency", label: "Attention" },
-  { id: "report", label: "PowerPoint" },
-  { id: "portraits", label: "Faces" },
-  { id: "collages", label: "Collages" },
-  { id: "av", label: "Audio / Video" },
-  { id: "brandRemoval", label: "Brand removal" },
-  { id: "textReplace", label: "Text replace" },
+type AppMode = "home" | ToolMode;
+
+type AppModeItem = {
+  id: ToolMode;
+  label: string;
+  blurb: string;
+};
+
+const APP_MODES: ReadonlyArray<AppModeItem> = [
+  {
+    id: "blur",
+    label: "Logo blur",
+    blurb: "Zamegli izbrane regije po korakih in preveri berljivost",
+  },
+  {
+    id: "foveal",
+    label: "Foveal vision",
+    blurb: "Ostra sredina, mehak rob — simulacija ostrine pogleda",
+  },
+  {
+    id: "saliency",
+    label: "Attention",
+    blurb: "Napove, kam gre pogled, nato omili ostalo",
+  },
+  {
+    id: "report",
+    label: "PowerPoint",
+    blurb: "Zgradi PPTX iz blur / attention / foveal analiz",
+  },
+  {
+    id: "portraits",
+    label: "Faces",
+    blurb: "Pipeline za portrete in politične headshote",
+  },
+  {
+    id: "collages",
+    label: "Collages",
+    blurb: "Trakovi in zloženi kolaži iz več slik",
+  },
+  {
+    id: "av",
+    label: "Audio / Video",
+    blurb: "Prenos medijev, prepis in izvleček slides (samo lokalno / LAN)",
+  },
+  {
+    id: "brandRemoval",
+    label: "Brand removal",
+    blurb: "Odstrani logotipe in blagovne napise z AI",
+  },
+  {
+    id: "textReplace",
+    label: "Text replace",
+    blurb: "Image texts replace",
+  },
 ];
 
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split(".").map((p) => Number(p));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    return false;
+  }
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return false;
+}
+
+function isLocalAvHost(hostname = typeof window !== "undefined" ? window.location.hostname : ""): boolean {
+  const host = hostname.toLowerCase();
+  if (!host || host === "localhost" || host === "127.0.0.1") return true;
+  if (host.endsWith(".localhost")) return true;
+  return isPrivateIpv4(host);
+}
+
 function modeSubtitle(mode: AppMode): string {
-  if (mode === "textReplace") {
-    return "Detect text, replace strings or numbers, and generate stepped number variants";
-  }
-  if (mode === "brandRemoval") {
-    return "Remove logos and brand text from images using AI (filename lists targets)";
-  }
-  if (mode === "av") {
-    return "Download YouTube, Facebook, or Mixcloud media; transcribe, and extract slides";
-  }
-  if (mode === "collages") {
-    return "Compose vertical or horizontal ribbons and packed collages";
-  }
-  if (mode === "portraits") {
-    return "Automated pipeline for political headshots and portraits";
-  }
-  if (mode === "report") {
-    return "Build a PowerPoint deck from blur, attention, and foveal analyses";
-  }
-  if (mode === "saliency") {
-    return "Predict where viewers look first, then soften the rest";
-  }
-  if (mode === "foveal") {
-    return "Simulate sharp centre vision with a soft periphery";
-  }
-  return "Blur logo regions step by step and judge what stays readable";
+  if (mode === "home") return "Choose a tool";
+  const item = APP_MODES.find((m) => m.id === mode);
+  return item?.blurb ?? "";
 }
 
 function generateId(): string {
@@ -107,7 +149,15 @@ function getFileBaseName(filename: string): string {
 }
 
 export default function App() {
-  const [mode, setMode] = useState<AppMode>("blur");
+  const [mode, setMode] = useState<AppMode>("home");
+  const avAllowed = isLocalAvHost();
+  const visibleModes = APP_MODES.filter((m) => m.id !== "av" || avAllowed);
+
+  useEffect(() => {
+    if (mode === "av" && !avAllowed) {
+      setMode("home");
+    }
+  }, [mode, avAllowed]);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState("image");
@@ -636,7 +686,7 @@ export default function App() {
   const foveaSliderMax = imageRef > 0 ? imageRef * 0.2 : 200;
   const spreadSliderMax = imageRef > 0 ? imageRef * 0.5 : 500;
 
-  const modeSelect = (
+  const modeSelect = mode === "home" ? null : (
     <label className="mode-select">
       <span className="mode-select__label">Mode</span>
       <select
@@ -645,7 +695,7 @@ export default function App() {
         onChange={(e) => setMode(e.target.value as AppMode)}
         aria-label="Application mode"
       >
-        {APP_MODES.map((item) => (
+        {visibleModes.map((item) => (
           <option key={item.id} value={item.id}>
             {item.label}
           </option>
@@ -658,16 +708,33 @@ export default function App() {
     <div className="app">
       <header className="app-top">
         <div>
-          <h1 className="app-top__title">Image Processor</h1>
+          <button
+            type="button"
+            className="app-top__title-btn"
+            onClick={() => setMode("home")}
+            aria-label="Home"
+          >
+            <h1 className="app-top__title">Image Processor</h1>
+          </button>
           <p className="app-top__sub">{modeSubtitle(mode)}</p>
         </div>
         <div className="app-top__actions">
+          {mode !== "home" && (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => setMode("home")}
+            >
+              Home
+            </button>
+          )}
           {image &&
             mode !== "portraits" &&
             mode !== "collages" &&
             mode !== "av" &&
             mode !== "brandRemoval" &&
-            mode !== "textReplace" && (
+            mode !== "textReplace" &&
+            mode !== "home" && (
             <button type="button" className="btn btn--ghost" onClick={reset}>
               New image
             </button>
@@ -676,7 +743,12 @@ export default function App() {
         </div>
       </header>
 
-      {mode === "portraits" ? (
+      {mode === "home" ? (
+        <HomeLanding
+          modes={visibleModes}
+          onSelect={(id) => setMode(id as ToolMode)}
+        />
+      ) : mode === "portraits" ? (
         <PortraitsMode />
       ) : mode === "collages" ? (
         <CollagesMode />
