@@ -36,7 +36,7 @@ node .cursor/skills/review-user-errors/scripts/fetch-feedback-errors.cjs --kind 
 - For ideas too: `--kind all` or `--kind idea`.
 - Prefer this script over hand-rolled SQL. Do not print or commit env files (script deletes its temp env file).
 
-**Fallback** (if script fails): `GET /api/feedback-list` with a valid access cookie, or `GET /api/feedback-list?id=<id>` for one full row. Schema: `api/helpers/feedbackDb.js` (`feedback_reports`).
+**Fallback** (if script fails): `GET /api/feedback-list` with a valid access cookie, or `GET /api/feedback-list?id=<id>` for one full row. Schema: `feedback_reports` (via `@zenel/user-feedback` / Neon).
 
 ### 2. Local disk (optional)
 

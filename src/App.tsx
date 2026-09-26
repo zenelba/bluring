@@ -34,7 +34,8 @@ import AudioVideoMode from "./AudioVideoMode";
 import BrandRemovalMode from "./BrandRemovalMode";
 import TextReplaceMode from "./TextReplaceMode";
 import HomeLanding from "./HomeLanding";
-import FeedbackModal from "./FeedbackModal";
+import { FeedbackModal } from "@zenel/user-feedback/client";
+import "@zenel/user-feedback/styles.css";
 import {
   getRestoredTask,
   touchTask,
@@ -42,7 +43,12 @@ import {
   type ImageAppPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
-import { logEvent, startSession } from "./lib/sessionJournal";
+import {
+  formatJournalMarkdown,
+  getJournalSnapshot,
+  logEvent,
+  startSession,
+} from "./lib/sessionJournal";
 import { domToPng } from "modern-screenshot";
 import "./App.css";
 
@@ -1044,6 +1050,12 @@ export default function App() {
         }
         taskId={activeTaskRef.current.taskId}
         taskTitle={activeTaskRef.current.title}
+        journal={getJournalSnapshot()}
+        journalMarkdown={(() => {
+          const snap = getJournalSnapshot();
+          return snap ? formatJournalMarkdown(snap) : undefined;
+        })()}
+        idbName="bluring-feedback"
         onClose={() => {
           setFeedbackOpen(false);
           setFeedbackShot(null);

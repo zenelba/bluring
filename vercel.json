@@ -48,11 +48,11 @@
     },
     "api/feedback-save.ts": {
       "maxDuration": 60,
-      "includeFiles": "api/helpers/**"
+      "includeFiles": ["api/helpers/**", "node_modules/@zenel/user-feedback/**"]
     },
     "api/feedback-list.ts": {
       "maxDuration": 30,
-      "includeFiles": "api/helpers/**"
+      "includeFiles": ["api/helpers/**", "node_modules/@zenel/user-feedback/**"]
     }
   }
 }

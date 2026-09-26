@@ -1,47 +1,48 @@
 /**
  * Persist feedback rows in Postgres (Neon / Vercel) and screenshots in Blob.
+ * Host calls ensureEnv() before handlers if needed; this module only reads process.env.
  */
-
 import { neon } from "@neondatabase/serverless";
 import { put } from "@vercel/blob";
-import { ensureProjectEnv } from "./loadEnv.js";
-
+let ensureEnvHook = null;
+/** Optional: host registers ensureProjectEnv so DB/Blob reads see loaded secrets. */
+export function setFeedbackEnsureEnv(fn) {
+    ensureEnvHook = fn;
+}
+function runEnsureEnv() {
+    ensureEnvHook?.();
+}
 function databaseUrl() {
-  ensureProjectEnv();
-  return (
-    process.env.POSTGRES_URL?.trim() ||
-    process.env.DATABASE_URL?.trim() ||
-    process.env.POSTGRES_URL_NON_POOLING?.trim() ||
-    ""
-  );
+    runEnsureEnv();
+    return (process.env.POSTGRES_URL?.trim() ||
+        process.env.DATABASE_URL?.trim() ||
+        process.env.POSTGRES_URL_NON_POOLING?.trim() ||
+        "");
 }
-
 function blobToken() {
-  ensureProjectEnv();
-  return process.env.BLOB_READ_WRITE_TOKEN?.trim() || "";
+    runEnsureEnv();
+    return process.env.BLOB_READ_WRITE_TOKEN?.trim() || "";
 }
-
 export function isFeedbackDbConfigured() {
-  return Boolean(databaseUrl());
+    return Boolean(databaseUrl());
 }
-
 export function isFeedbackBlobConfigured() {
-  return Boolean(blobToken());
+    return Boolean(blobToken());
 }
-
 function getSql() {
-  const url = databaseUrl();
-  if (!url) return null;
-  return neon(url);
+    const url = databaseUrl();
+    if (!url)
+        return null;
+    return neon(url);
 }
-
 let tableReady = false;
-
 export async function ensureFeedbackTable() {
-  const sql = getSql();
-  if (!sql) return false;
-  if (tableReady) return true;
-  await sql`
+    const sql = getSql();
+    if (!sql)
+        return false;
+    if (tableReady)
+        return true;
+    await sql `
     CREATE TABLE IF NOT EXISTS feedback_reports (
       id TEXT PRIMARY KEY,
       kind TEXT NOT NULL,
@@ -61,40 +62,34 @@ export async function ensureFeedbackTable() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
-  await sql`
+    await sql `
     CREATE INDEX IF NOT EXISTS feedback_reports_created_at_idx
     ON feedback_reports (created_at DESC)
   `;
-  tableReady = true;
-  return true;
+    tableReady = true;
+    return true;
 }
-
-/**
- * @returns {Promise<string | null>} public screenshot URL
- */
 export async function uploadFeedbackScreenshot(filenameBase, pngBase64) {
-  if (!isFeedbackBlobConfigured()) return null;
-  const buf = Buffer.from(pngBase64, "base64");
-  const pathname = `feedback/${filenameBase}.png`;
-  const result = await put(pathname, buf, {
-    access: "public",
-    contentType: "image/png",
-    token: blobToken(),
-    addRandomSuffix: false,
-    allowOverwrite: true,
-  });
-  return result.url;
+    if (!isFeedbackBlobConfigured())
+        return null;
+    const buf = Buffer.from(pngBase64, "base64");
+    const pathname = `feedback/${filenameBase}.png`;
+    const result = await put(pathname, buf, {
+        access: "public",
+        contentType: "image/png",
+        token: blobToken(),
+        addRandomSuffix: false,
+        allowOverwrite: true,
+    });
+    return result.url;
 }
-
-/**
- * @returns {Promise<{ id: string } | null>}
- */
 export async function insertFeedbackReport(row) {
-  const sql = getSql();
-  if (!sql) return null;
-  await ensureFeedbackTable();
-  const id = row.id || crypto.randomUUID();
-  await sql`
+    const sql = getSql();
+    if (!sql)
+        return null;
+    await ensureFeedbackTable();
+    const id = row.id || crypto.randomUUID();
+    await sql `
     INSERT INTO feedback_reports (
       id, kind, tool_id, tool_label, focus, wrong, expected,
       task_id, task_title, page_url, user_agent, filename_base,
@@ -117,18 +112,15 @@ export async function insertFeedbackReport(row) {
       ${row.screenshotUrl ?? null}
     )
   `;
-  return { id };
+    return { id };
 }
-
-/**
- * @param {number} [limit]
- */
 export async function listFeedbackReports(limit = 50) {
-  const sql = getSql();
-  if (!sql) return [];
-  await ensureFeedbackTable();
-  const n = Math.max(1, Math.min(200, Math.floor(limit) || 50));
-  const rows = await sql`
+    const sql = getSql();
+    if (!sql)
+        return [];
+    await ensureFeedbackTable();
+    const n = Math.max(1, Math.min(200, Math.floor(limit) || 50));
+    const rows = await sql `
     SELECT
       id, kind, tool_id, tool_label, focus, wrong, expected,
       task_id, task_title, page_url, filename_base, screenshot_url,
@@ -137,18 +129,15 @@ export async function listFeedbackReports(limit = 50) {
     ORDER BY created_at DESC
     LIMIT ${n}
   `;
-  return rows;
+    return rows;
 }
-
-/**
- * @param {string} id
- */
 export async function getFeedbackReport(id) {
-  const sql = getSql();
-  if (!sql) return null;
-  await ensureFeedbackTable();
-  const rows = await sql`
+    const sql = getSql();
+    if (!sql)
+        return null;
+    await ensureFeedbackTable();
+    const rows = await sql `
     SELECT * FROM feedback_reports WHERE id = ${id} LIMIT 1
   `;
-  return rows[0] ?? null;
+    return rows[0] ?? null;
 }

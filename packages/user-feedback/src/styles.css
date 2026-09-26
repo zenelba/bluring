@@ -1,0 +1,123 @@
+/* Feedback modal — host app supplies --surface, --border, --text, --radius, .btn */
+
+.feedback-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.feedback-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.feedback-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: min(640px, 100%);
+  max-height: min(92vh, 900px);
+  overflow: auto;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius, 12px);
+  padding: 1.1rem 1.2rem 1.25rem;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.feedback-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.feedback-modal__head h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.feedback-modal__shot {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 220px;
+  background: var(--surface-raised, #f8fafc);
+}
+
+.feedback-modal__shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.feedback-modal__kind {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.feedback-modal__kind label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.feedback-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted, #64748b);
+}
+
+.feedback-modal__field textarea {
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text, #0f172a);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  resize: vertical;
+  min-height: 2.5rem;
+  background: #fff;
+}
+
+.feedback-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.feedback-modal__done {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.feedback-modal__soft {
+  color: var(--text-muted, #64748b);
+  font-size: 0.9rem;
+}
+
+.feedback-modal .error-text {
+  color: #b91c1c;
+  font-size: 0.9rem;
+  margin: 0;
+}

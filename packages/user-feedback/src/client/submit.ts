@@ -2,10 +2,6 @@
 
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
-import {
-  formatJournalMarkdown,
-  type JournalSnapshot,
-} from "./sessionJournal";
 
 export type FeedbackKind = "error" | "idea";
 
@@ -20,12 +16,19 @@ export type FeedbackSubmitInput = {
   toolId: string;
   toolLabel: string;
   answers: FeedbackAnswers;
-  journal: JournalSnapshot | null;
+  /** Opaque session journal JSON (stored in DB). */
+  journal?: unknown;
+  /** Pre-formatted journal markdown section (host builds this). */
+  journalMarkdown?: string;
   screenshotPngBase64: string;
   pageUrl: string;
   userAgent: string;
   taskId?: string | null;
   taskTitle?: string | null;
+  /** Override POST path (default /api/feedback-save). */
+  saveUrl?: string;
+  /** IndexedDB database name (default user-feedback). */
+  idbName?: string;
 };
 
 export type FeedbackSubmitResult = {
@@ -38,12 +41,11 @@ export type FeedbackSubmitResult = {
   error?: string;
 };
 
-const DB_NAME = "bluring-feedback";
 const STORE = "reports";
 
-function openDb(): Promise<IDBDatabase> {
+function openDb(dbName: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(dbName, 1);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -59,11 +61,23 @@ function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 }
 
-export function buildFeedbackMarkdown(input: FeedbackSubmitInput): string {
-  const journalMd = input.journal
-    ? formatJournalMarkdown(input.journal)
-    : "_No session journal._";
-  const base = `${stamp()}_${input.toolId}_${input.kind}`;
+export function buildFeedbackMarkdown(input: {
+  kind: FeedbackKind;
+  toolId: string;
+  toolLabel: string;
+  answers: FeedbackAnswers;
+  pageUrl: string;
+  userAgent: string;
+  taskId?: string | null;
+  taskTitle?: string | null;
+  journalMarkdown?: string;
+  filenameBase?: string;
+}): string {
+  const base =
+    input.filenameBase ??
+    `${stamp()}_${input.toolId}_${input.kind}`;
+  const journalMd =
+    input.journalMarkdown?.trim() || "_No session journal._";
   return [
     `# Feedback: ${input.kind}`,
     "",
@@ -106,8 +120,9 @@ export async function stashFeedbackLocally(input: {
   kind: FeedbackKind;
   toolId: string;
   createdAt: number;
+  idbName?: string;
 }): Promise<void> {
-  const db = await openDb();
+  const db = await openDb(input.idbName ?? "user-feedback");
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
@@ -135,8 +150,11 @@ export async function downloadFeedbackZip(input: {
 export async function submitFeedback(
   input: FeedbackSubmitInput,
 ): Promise<FeedbackSubmitResult> {
-  const markdown = buildFeedbackMarkdown(input);
   const filenameBase = `${stamp()}_${input.toolId}_${input.kind}`;
+  const markdown = buildFeedbackMarkdown({
+    ...input,
+    filenameBase,
+  });
 
   await stashFeedbackLocally({
     id: crypto.randomUUID(),
@@ -145,6 +163,7 @@ export async function submitFeedback(
     kind: input.kind,
     toolId: input.toolId,
     createdAt: Date.now(),
+    idbName: input.idbName,
   });
 
   let emailed = false;
@@ -153,8 +172,10 @@ export async function submitFeedback(
   let screenshotUrl: string | null = null;
   let apiError: string | undefined;
 
+  const saveUrl = input.saveUrl ?? "/api/feedback-save";
+
   try {
-    const res = await fetch("/api/feedback-save", {
+    const res = await fetch(saveUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
@@ -163,7 +184,7 @@ export async function submitFeedback(
         toolId: input.toolId,
         toolLabel: input.toolLabel,
         answers: input.answers,
-        journal: input.journal,
+        journal: input.journal ?? null,
         screenshotPngBase64: input.screenshotPngBase64,
         pageUrl: input.pageUrl,
         userAgent: input.userAgent,
@@ -193,7 +214,6 @@ export async function submitFeedback(
     apiError = err instanceof Error ? err.message : "Network error";
   }
 
-  // Zip download only if nothing durable was persisted remotely/locally on disk
   if (!savedToDisk && !savedToDb) {
     await downloadFeedbackZip({
       filenameBase,

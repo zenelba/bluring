@@ -3,29 +3,35 @@ import {
   submitFeedback,
   type FeedbackKind,
   type FeedbackSubmitResult,
-} from "./lib/feedbackStore";
-import {
-  getJournalSnapshot,
-  type JournalSnapshot,
-} from "./lib/sessionJournal";
+} from "./submit.js";
 
-type FeedbackModalProps = {
+export type FeedbackModalProps = {
   open: boolean;
   screenshotDataUrl: string | null;
   toolId: string;
   toolLabel: string;
   taskId?: string | null;
   taskTitle?: string | null;
+  /** Pre-formatted session journal markdown (host builds this). */
+  journalMarkdown?: string;
+  /** Opaque journal JSON for DB storage. */
+  journal?: unknown;
+  idbName?: string;
+  saveUrl?: string;
   onClose: () => void;
 };
 
-export default function FeedbackModal({
+export function FeedbackModal({
   open,
   screenshotDataUrl,
   toolId,
   toolLabel,
   taskId,
   taskTitle,
+  journalMarkdown,
+  journal,
+  idbName,
+  saveUrl,
   onClose,
 }: FeedbackModalProps) {
   const [kind, setKind] = useState<FeedbackKind>("error");
@@ -35,9 +41,6 @@ export default function FeedbackModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<FeedbackSubmitResult | null>(null);
-  const [journal] = useState<JournalSnapshot | null>(() =>
-    open ? getJournalSnapshot() : null,
-  );
 
   useEffect(() => {
     if (!open) return;
@@ -65,21 +68,23 @@ export default function FeedbackModal({
       const comma = screenshotDataUrl.indexOf(",");
       const pngBase64 =
         comma >= 0 ? screenshotDataUrl.slice(comma + 1) : screenshotDataUrl;
-      const snap = getJournalSnapshot() ?? journal;
       const res = await submitFeedback({
         kind,
         toolId,
         toolLabel,
         answers: { focus, wrong, expected },
-        journal: snap,
+        journal,
+        journalMarkdown,
         screenshotPngBase64: pngBase64,
         pageUrl: window.location.href,
         userAgent: navigator.userAgent,
         taskId,
         taskTitle,
+        idbName,
+        saveUrl,
       });
       setResult(res);
-      if (res.error && !res.emailed && !res.savedToDisk) {
+      if (res.error && !res.emailed && !res.savedToDisk && !res.savedToDb) {
         setError(res.error);
       }
     } catch (err) {
@@ -90,8 +95,16 @@ export default function FeedbackModal({
   };
 
   return (
-    <div className="feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title">
-      <div className="feedback-modal__backdrop" onClick={() => !busy && onClose()} />
+    <div
+      className="feedback-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="feedback-title"
+    >
+      <div
+        className="feedback-modal__backdrop"
+        onClick={() => !busy && onClose()}
+      />
       <div className="feedback-modal__panel">
         <div className="feedback-modal__head">
           <h2 id="feedback-title">Report error / idea</h2>
@@ -111,14 +124,14 @@ export default function FeedbackModal({
               Thanks — report saved
               {result.savedToDb
                 ? " to the database"
-                : result.savedToDisk
-                  ? (
-                      <>
-                        {" "}
-                        to <code>feedback/</code>
-                      </>
-                    )
-                  : " (downloaded as zip)"}
+                : result.savedToDisk ? (
+                    <>
+                      {" "}
+                      to <code>feedback/</code>
+                    </>
+                  ) : (
+                    " (downloaded as zip)"
+                  )}
               .
             </p>
             {result.emailed ? (
@@ -128,7 +141,11 @@ export default function FeedbackModal({
                 Email not configured or send failed.
               </p>
             )}
-            <button type="button" className="btn btn--primary" onClick={onClose}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={onClose}
+            >
               Done
             </button>
           </div>
@@ -217,3 +234,5 @@ export default function FeedbackModal({
     </div>
   );
 }
+
+export default FeedbackModal;
