@@ -1019,6 +1019,7 @@ button.tr-result-thumb:focus-visible {
   padding: 1.5rem;
   background: transparent;
   cursor: default;
+  pointer-events: none;
 }
 
 .tr-lightbox__panel {
@@ -1028,6 +1029,7 @@ button.tr-result-thumb:focus-visible {
   align-items: center;
   gap: 0.45rem;
   max-width: min(90vw, 720px);
+  pointer-events: auto;
 }
 
 .tr-lightbox__img {
