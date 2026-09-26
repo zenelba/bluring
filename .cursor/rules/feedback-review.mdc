@@ -1,19 +1,16 @@
 ---
-description: Review Bluring user feedback reports from feedback/
+description: Review Bluring user feedback reports from feedback/ or Vercel Neon
 globs:
 alwaysApply: false
 ---
 
 # Feedback review (Plan mode)
 
-When the user asks to review errors, ideas, or feedback (e.g. “go through feedback”):
+When the user asks to review errors, ideas, or feedback (e.g. “go through feedback”, “check reported errors”):
 
-1. Prefer the database API when available:
-   - `GET /api/feedback-list` (authenticated access cookie) → list of reports
-   - `GET /api/feedback-list?id=<id>` → full row including markdown/journal/screenshot_url
-   - Or use `npx vercel` / Neon SQL against `feedback_reports` if env is linked.
-2. Also check local `feedback/*.md` + matching PNGs if the folder exists (local/dev disk writes).
-3. Triage into **bugs** vs **ideas**, note tool/session timeline and the three answers (focus / wrong / expected).
-4. Propose a prioritized plan; cite report ids or filenames.
-
-Do not invent feedback that is not in the DB or on disk.
+1. Follow the project skill **review-user-errors** at `.cursor/skills/review-user-errors/SKILL.md` (fetch script → SwitchMode to Plan → prioritized fix plan).
+2. Prefer production DB via that skill’s script, or:
+   - `GET /api/feedback-list` (access cookie) / `?id=<id>`
+   - Neon SQL on `feedback_reports`
+3. Also check local `feedback/*.md` + PNGs if present.
+4. Triage **bugs** vs **ideas**; cite report ids. Do not invent feedback.

@@ -1464,6 +1464,34 @@ async function ensurePillFontsLoaded(
     loads.push(document.fonts.load(css).catch(() => []));
   }
   await Promise.all(loads);
+  if (document.fonts.ready) {
+    await document.fonts.ready.catch(() => undefined);
+  }
+}
+
+/**
+ * Width that must fit inside the pill: max of advance and ink bounds.
+ * Bold / display fonts often overhang past measureText().width.
+ */
+function pillTextInkWidth(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+): { width: number; ascent: number; descent: number } {
+  const m = ctx.measureText(text || "Hg");
+  const advance = Math.max(1, m.width);
+  const left = Number.isFinite(m.actualBoundingBoxLeft)
+    ? m.actualBoundingBoxLeft
+    : 0;
+  const right = Number.isFinite(m.actualBoundingBoxRight)
+    ? m.actualBoundingBoxRight
+    : 0;
+  const ink = left + right;
+  const width = Math.max(advance, ink > 0 ? ink : advance);
+  const ascent =
+    m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : 0;
+  const descent =
+    m.actualBoundingBoxDescent > 0 ? m.actualBoundingBoxDescent : 0;
+  return { width, ascent, descent };
 }
 
 function measurePill(
@@ -1486,22 +1514,27 @@ function measurePill(
   const { sizePx, css } = pillTypeface(item, imgH);
 
   ctx.font = css;
+  ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
 
-  // Padding from original plate vs advance of original text at the draw font
-  const origAdvance = Math.max(1, ctx.measureText(item.text || "Hg").width);
+  const origInk = pillTextInkWidth(ctx, item.text || "Hg").width;
   const h = orig.h;
-  const padH = Math.max(0.4 * h, (orig.w - origAdvance) / 2);
+  // Side pad: measured plate vs OCR text, container padX, or a solid floor
+  const fromPlate = (orig.w - origInk) / 2;
+  const fromContainer = (item.container.padX || 0.45) * h;
+  const padH = Math.max(0.5 * h, fromContainer, fromPlate, 8);
 
-  const newMetrics = ctx.measureText(text || "Hg");
-  const newAdvance = Math.max(1, newMetrics.width);
+  const newInk = pillTextInkWidth(ctx, text || "Hg");
   const ascent =
-    newMetrics.actualBoundingBoxAscent > 0
-      ? newMetrics.actualBoundingBoxAscent
-      : sizePx * 0.8;
+    newInk.ascent > 0 ? newInk.ascent : sizePx * 0.8;
 
-  const slack = Math.max(2, 0.04 * h);
-  const w = Math.max(h * 0.8, newAdvance + 2 * padH + slack);
+  // Extra slack: measureText under-reads some webfonts vs fillText
+  const slack = Math.max(6, 0.12 * h);
+  const contentW = newInk.width + 2 * padH + slack;
+  // Grow at least with text length vs original (guards bad pad when plate≈ink)
+  const grow =
+    origInk > 1 ? orig.w * (newInk.width / origInk) + slack * 0.5 : contentW;
+  const w = Math.max(h * 0.8, contentW, grow);
   const radius =
     item.container.radiusPxHint > 0
       ? item.container.radiusPxHint
@@ -1560,16 +1593,28 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   roundRectPath(ctx, layout.x, layout.y, layout.w, layout.h, layout.radius);
   ctx.fill();
 
-  const cx = layout.x + layout.w / 2;
-  const cy = layout.y + layout.h / 2;
-
-  // Same font as measurePill; no horizontal OCR scale
+  // Same font + left/alphabetic metrics as measurePill so ink stays inside pad
   ctx.save();
   ctx.font = layout.fontCss;
   ctx.fillStyle = layout.item.style.color;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(layout.text, cx, cy);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  const ink = pillTextInkWidth(ctx, layout.text);
+  const m = ctx.measureText(layout.text || "Hg");
+  const leftBearing = Number.isFinite(m.actualBoundingBoxLeft)
+    ? m.actualBoundingBoxLeft
+    : 0;
+  const textX = layout.x + (layout.w - ink.width) / 2 - leftBearing;
+  const midY = layout.y + layout.h / 2;
+  const ascent =
+    ink.ascent > 0
+      ? ink.ascent
+      : layout.ascent > 0
+        ? layout.ascent
+        : layout.fontSize * 0.8;
+  const descent = ink.descent > 0 ? ink.descent : layout.fontSize * 0.2;
+  const baselineY = midY + (ascent - descent) / 2;
+  ctx.fillText(layout.text, textX, baselineY);
   ctx.restore();
 }
 
@@ -1631,9 +1676,11 @@ function expandPillRowIds(
 }
 
 function collectEraseTargets(
+  ctx: CanvasRenderingContext2D,
   items: DetectedText[],
   edits: TextReplaceEdits,
   seriesItemId: string | null,
+  seriesValue: number | null,
   imgW: number,
   imgH: number,
 ): PxRect[] {
@@ -1660,20 +1707,48 @@ function collectEraseTargets(
 
   changedIds = expandPillRowIds(items, changedIds);
 
-  const rects: PxRect[] = [];
+  const texts = new Map<string, string>();
   for (const item of items) {
-    if (!changedIds.has(item.id)) continue;
-    if (item.container.type === "pill") {
-      rects.push(pillContainerPx(item, imgW, imgH));
-    } else {
-      const box = bboxToPx(item.bbox, imgW, imgH);
-      rects.push({
-        x: box.x - 2,
-        y: box.y - 2,
-        w: box.w + 4,
-        h: box.h + 4,
-      });
+    const seriesVal =
+      seriesItemId === item.id && seriesValue != null ? seriesValue : null;
+    texts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
+  }
+
+  const rects: PxRect[] = [];
+  const pillHandled = new Set<string>();
+  const pillChanged = items.filter(
+    (i) => i.container.type === "pill" && changedIds.has(i.id),
+  );
+
+  for (const seed of pillChanged) {
+    if (pillHandled.has(seed.id)) continue;
+    const row = pillChanged.filter(
+      (p) =>
+        p.id === seed.id ||
+        (p.layoutGroupId && p.layoutGroupId === seed.layoutGroupId) ||
+        pillsOnSameRow(p, seed),
+    );
+    for (const m of row) pillHandled.add(m.id);
+    const layouts = layoutPillGroup(ctx, row, texts, imgW, imgH);
+    for (const layout of layouts) {
+      const orig = pillContainerPx(layout.item, imgW, imgH);
+      const x0 = Math.min(orig.x, layout.x) - 2;
+      const y0 = Math.min(orig.y, layout.y) - 2;
+      const x1 = Math.max(orig.x + orig.w, layout.x + layout.w) + 2;
+      const y1 = Math.max(orig.y + orig.h, layout.y + layout.h) + 2;
+      rects.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
     }
+  }
+
+  for (const item of items) {
+    if (!changedIds.has(item.id) || item.container.type === "pill") continue;
+    const box = bboxToPx(item.bbox, imgW, imgH);
+    rects.push({
+      x: box.x - 2,
+      y: box.y - 2,
+      w: box.w + 4,
+      h: box.h + 4,
+    });
   }
   return rects;
 }
@@ -1683,6 +1758,7 @@ function buildCleanPlate(
   items: DetectedText[],
   edits: TextReplaceEdits,
   seriesItemId: string | null,
+  seriesValue: number | null = null,
 ): HTMLCanvasElement {
   const imgW = source.naturalWidth;
   const imgH = source.naturalHeight;
@@ -1693,7 +1769,15 @@ function buildCleanPlate(
   if (!ctx) throw new Error("Canvas unavailable");
   ctx.drawImage(source, 0, 0);
 
-  const rects = collectEraseTargets(items, edits, seriesItemId, imgW, imgH);
+  const rects = collectEraseTargets(
+    ctx,
+    items,
+    edits,
+    seriesItemId,
+    seriesValue,
+    imgW,
+    imgH,
+  );
   for (const rect of rects) {
     inpaintRect(ctx, rect, imgW, imgH);
   }
@@ -1829,11 +1913,26 @@ export async function renderTextReplaceVariants(input: {
       ? buildSeries(center, series.steps, series.step)
       : [null];
 
+  // Erase using the widest series label so longer prices clear the plate
+  let eraseSeriesValue: number | null = null;
+  if (seriesItem?.number) {
+    let bestLen = -1;
+    for (const v of values) {
+      if (v == null) continue;
+      const len = formatNumber(v, seriesItem.number).length;
+      if (len > bestLen) {
+        bestLen = len;
+        eraseSeriesValue = v;
+      }
+    }
+  }
+
   const clean = buildCleanPlate(
     source,
     items,
     edits,
     seriesItem?.id ?? null,
+    eraseSeriesValue,
   );
 
   const variants: RenderedVariant[] = [];
