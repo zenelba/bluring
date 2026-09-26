@@ -24,6 +24,7 @@ import {
   type PortraitsPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
+import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
 
 function statusLabel(status: PortraitStatus): string {
@@ -321,6 +322,7 @@ export default function PortraitsMode(props: {
           mime: item.file.type || "image/jpeg",
         })),
       });
+      logEvent("portraits_batch_done", `${source.length} file(s)`);
     }
 
     setBusy(false);

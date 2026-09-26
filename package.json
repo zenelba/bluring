@@ -17,10 +17,12 @@
     "file-saver": "^2.0.5",
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
+    "modern-screenshot": "^4.7.0",
     "onnxruntime-web": "^1.21.0",
     "pptxgenjs": "^4.0.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "undici": "^8.10.2"
   },
   "devDependencies": {
     "@types/file-saver": "^2.0.7",

@@ -8,3 +8,4 @@ tsconfig.tsbuildinfo
 vite.config.js
 /api/*.js
 !api/helpers/
+feedback/

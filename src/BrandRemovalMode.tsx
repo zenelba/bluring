@@ -16,6 +16,7 @@ import {
   type BrandRemovalPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
+import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
 
 function statusLabel(status: BrandRemovalStatus): string {
@@ -174,8 +175,16 @@ export default function BrandRemovalMode(props: {
       }
       setLiveNote("Batch finished.");
       persistBrandHistory(finished);
+      logEvent(
+        "brand_batch_done",
+        `${finished.filter((i) => i.scene).length}/${finished.length} analyzed`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Processing failed");
+      logEvent(
+        "brand_batch_error",
+        err instanceof Error ? err.message : "failed",
+      );
     } finally {
       setBusy(false);
     }

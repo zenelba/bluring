@@ -28,6 +28,7 @@ import {
   type AvPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
+import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
 
 type Step =
@@ -212,10 +213,15 @@ export default function AudioVideoMode(props: {
         transcript: null,
         slides: [],
       });
+      logEvent("av_probe_done", jobTitle);
     } catch (err) {
       setStep("error");
       setError(err instanceof Error ? err.message : "Could not resolve link");
       setLiveNote("");
+      logEvent(
+        "av_probe_error",
+        err instanceof Error ? err.message : "probe failed",
+      );
     }
   };
 
@@ -305,6 +311,15 @@ export default function AudioVideoMode(props: {
       slides: foundSlides,
     });
     setStep("done");
+    logEvent(
+      "av_job_done",
+      [
+        text ? "transcript" : null,
+        foundSlides.length ? `${foundSlides.length} slides` : null,
+      ]
+        .filter(Boolean)
+        .join(", ") || "media only",
+    );
     setLiveNote(
       [
         "Ready",

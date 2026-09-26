@@ -28,6 +28,11 @@
       "includeFiles": "api/helpers/**",
       "memory": 1024
     },
+    "api/av-media-upload.ts": {
+      "maxDuration": 800,
+      "includeFiles": "api/helpers/**",
+      "memory": 1024
+    },
     "api/brand-analyze.ts": {
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"
@@ -38,6 +43,10 @@
       "memory": 1024
     },
     "api/text-detect.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
+    "api/feedback-save.ts": {
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"
     }

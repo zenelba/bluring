@@ -34,6 +34,7 @@ import AudioVideoMode from "./AudioVideoMode";
 import BrandRemovalMode from "./BrandRemovalMode";
 import TextReplaceMode from "./TextReplaceMode";
 import HomeLanding from "./HomeLanding";
+import FeedbackModal from "./FeedbackModal";
 import {
   getRestoredTask,
   saveTask,
@@ -41,6 +42,8 @@ import {
   type ImageAppPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
+import { logEvent, startSession } from "./lib/sessionJournal";
+import { domToPng } from "modern-screenshot";
 import "./App.css";
 
 type ToolMode =
@@ -162,6 +165,17 @@ export default function App() {
   const [historyEpoch, setHistoryEpoch] = useState(0);
   const [restoreTask, setRestoreTask] = useState<RestoredTask | null>(null);
   const skipImageHistoryRef = useRef(false);
+  const pendingSessionRef = useRef<{
+    taskId: string | null;
+    title: string | null;
+  } | null>(null);
+  const activeTaskRef = useRef<{
+    taskId: string | null;
+    title: string | null;
+  }>({ taskId: null, title: null });
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackShot, setFeedbackShot] = useState<string | null>(null);
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
 
   useEffect(() => {
     if (mode === "av" && !avAllowed) {
@@ -173,6 +187,23 @@ export default function App() {
     if (mode === "home") {
       setHistoryEpoch((n) => n + 1);
     }
+  }, [mode]);
+
+  useEffect(() => {
+    const pending = pendingSessionRef.current;
+    pendingSessionRef.current = null;
+    const label =
+      mode === "home"
+        ? "Home"
+        : (APP_MODES.find((m) => m.id === mode)?.label ?? mode);
+    const taskId = pending?.taskId ?? null;
+    const title = pending?.title ?? label;
+    activeTaskRef.current = { taskId, title };
+    startSession({
+      toolId: mode === "home" ? "home" : mode,
+      taskId,
+      title,
+    });
   }, [mode]);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -247,6 +278,7 @@ export default function App() {
       setReportProgress("idle");
       setReportError(null);
       if (opts?.skipHistory) skipImageHistoryRef.current = true;
+      logEvent("image_upload", file.name);
     };
     img.src = url;
   }, []);
@@ -317,6 +349,10 @@ export default function App() {
       const restored = await getRestoredTask(taskId);
       if (!restored) return;
       await touchTask(taskId);
+      pendingSessionRef.current = {
+        taskId: restored.record.id,
+        title: restored.record.title,
+      };
       const toolId = restored.record.toolId;
       if (
         toolId === "blur" ||
@@ -367,14 +403,39 @@ export default function App() {
         setReportError(null);
         setRestoreTask(null);
         setMode(toolId);
+        logEvent("restore_task", `${toolId}: ${restored.record.title}`);
         return;
       }
       setRestoreTask(restored);
       setMode(toolId);
+      logEvent("restore_task", `${toolId}: ${restored.record.title}`);
     } catch {
       /* ignore restore errors */
     }
   }, []);
+
+  const openFeedback = async () => {
+    if (feedbackBusy) return;
+    setFeedbackBusy(true);
+    try {
+      const root =
+        (document.querySelector(".app") as HTMLElement | null) ??
+        document.documentElement;
+      const dataUrl = await domToPng(root, {
+        quality: 0.92,
+        scale: Math.min(2, window.devicePixelRatio || 1),
+      });
+      setFeedbackShot(dataUrl);
+      setFeedbackOpen(true);
+      logEvent("feedback_open");
+    } catch (err) {
+      console.error(err);
+      setFeedbackShot(null);
+      setFeedbackOpen(true);
+    } finally {
+      setFeedbackBusy(false);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -727,11 +788,19 @@ export default function App() {
         );
         setAttentionHotspots(hotspots);
         void persistImageAppTask("saliency", { hotspots });
+        logEvent(
+          "saliency_done",
+          `${hotspots.length} hotspot(s)`,
+        );
       })
       .catch((error) => {
         if (requestId !== saliencyRequestRef.current) return;
         setSaliencyError(
           error instanceof Error ? error.message : "Saliency analysis failed",
+        );
+        logEvent(
+          "saliency_error",
+          error instanceof Error ? error.message : "failed",
         );
       })
       .finally(() => {
@@ -881,6 +950,14 @@ export default function App() {
           <p className="app-top__sub">{modeSubtitle(mode)}</p>
         </div>
         <div className="app-top__actions">
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={() => void openFeedback()}
+            disabled={feedbackBusy}
+          >
+            {feedbackBusy ? "Capturing…" : "Report error / idea"}
+          </button>
           {mode !== "home" && (
             <button
               type="button"
@@ -904,6 +981,23 @@ export default function App() {
           {modeSelect}
         </div>
       </header>
+
+      <FeedbackModal
+        open={feedbackOpen}
+        screenshotDataUrl={feedbackShot}
+        toolId={mode === "home" ? "home" : mode}
+        toolLabel={
+          mode === "home"
+            ? "Home"
+            : (APP_MODES.find((m) => m.id === mode)?.label ?? mode)
+        }
+        taskId={activeTaskRef.current.taskId}
+        taskTitle={activeTaskRef.current.title}
+        onClose={() => {
+          setFeedbackOpen(false);
+          setFeedbackShot(null);
+        }}
+      />
 
       {mode === "home" ? (
         <HomeLanding

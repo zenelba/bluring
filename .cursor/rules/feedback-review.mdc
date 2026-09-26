@@ -1,0 +1,16 @@
+---
+description: Review Bluring user feedback reports from feedback/
+globs:
+alwaysApply: false
+---
+
+# Feedback review (Plan mode)
+
+When the user asks to review errors, ideas, or feedback (e.g. “go through feedback”):
+
+1. List files under `feedback/` (markdown + matching PNGs). Ignore if the folder is empty or missing.
+2. For each `*.md`, read the report and its companion `*.png` screenshot.
+3. Triage into **bugs** vs **ideas**, note tool/session timeline and the three answers (focus / wrong / expected).
+4. Propose a prioritized plan to fix bugs and consider ideas; cite report filenames.
+
+Do not invent feedback that is not on disk.

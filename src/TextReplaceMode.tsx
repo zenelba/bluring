@@ -19,6 +19,7 @@ import {
   type RestoredTask,
   type TextReplacePayload,
 } from "./lib/taskHistory";
+import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
 
 function CloudIcon() {
@@ -449,6 +450,7 @@ export default function TextReplaceMode(props: {
       setLiveNote(
         `Found ${detected.length} text region(s). Drag boxes if they are misaligned.`,
       );
+      logEvent("text_detect_done", `${detected.length} region(s)`);
       const payload: TextReplacePayload = {
         kind: "textReplace",
         fileName: file.name,
@@ -466,6 +468,10 @@ export default function TextReplaceMode(props: {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Detect failed");
       setLiveNote("");
+      logEvent(
+        "text_detect_error",
+        err instanceof Error ? err.message : "Detect failed",
+      );
     } finally {
       setBusy(false);
       setPhase("idle");

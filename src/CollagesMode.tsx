@@ -32,6 +32,7 @@ import {
   type CollagesPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
+import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
 
 function statusLabel(status: CollageItemStatus): string {
@@ -265,6 +266,7 @@ export default function CollagesMode(props: {
           mime: item.file.type || "image/jpeg",
         })),
       });
+      logEvent("collage_files_loaded", `${incoming.length} image(s)`);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to read ZIP or image files",
