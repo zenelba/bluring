@@ -14,6 +14,11 @@ import {
   type TextBBox,
   type TextReplaceEdits,
 } from "./lib/textReplace";
+import {
+  saveTask,
+  type RestoredTask,
+  type TextReplacePayload,
+} from "./lib/taskHistory";
 import "./osebe.css";
 
 function CloudIcon() {
@@ -267,7 +272,11 @@ function TextBBoxOverlay(props: {
   );
 }
 
-export default function TextReplaceMode() {
+export default function TextReplaceMode(props: {
+  initialTask?: RestoredTask | null;
+  onInitialConsumed?: () => void;
+}) {
+  const { initialTask, onInitialConsumed } = props;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
@@ -288,6 +297,7 @@ export default function TextReplaceMode() {
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
   const editListRef = useRef<HTMLUListElement>(null);
+  const hydratedRef = useRef<string | null>(null);
 
   // When a box is selected on the image, scroll/focus its row in Detected text
   useEffect(() => {
@@ -310,6 +320,34 @@ export default function TextReplaceMode() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!initialTask || initialTask.record.toolId !== "textReplace") return;
+    if (hydratedRef.current === initialTask.record.id) return;
+    const payload = initialTask.record.payload;
+    if (payload.kind !== "textReplace") return;
+    hydratedRef.current = initialTask.record.id;
+    const nextFile =
+      initialTask.files[0] ??
+      new File([], payload.fileName, { type: payload.mimeType });
+    if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+    revokeVariants(variants);
+    setVariants([]);
+    setFile(nextFile);
+    setThumbUrl(URL.createObjectURL(nextFile));
+    setItems(payload.items as DetectedText[]);
+    setEdits(payload.edits);
+    setSeries(payload.series);
+    setSelectedId(null);
+    setError(null);
+    setLiveNote(
+      payload.items.length > 0
+        ? `Restored ${payload.items.length} text region(s).`
+        : "Restored image.",
+    );
+    onInitialConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTask]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -405,11 +443,26 @@ export default function TextReplaceMode() {
         return;
       }
       setItems(detected);
-      setEdits(defaultEdits(detected));
+      const nextEdits = defaultEdits(detected);
+      setEdits(nextEdits);
       setSeries((s) => ({ ...s, itemId: null }));
       setLiveNote(
         `Found ${detected.length} text region(s). Drag boxes if they are misaligned.`,
       );
+      const payload: TextReplacePayload = {
+        kind: "textReplace",
+        fileName: file.name,
+        mimeType: file.type || "image/jpeg",
+        items: detected,
+        edits: nextEdits,
+        series: { itemId: null, steps: series.steps, step: series.step },
+      };
+      void saveTask({
+        toolId: "textReplace",
+        title: file.name,
+        payload,
+        files: [{ blob: file, name: file.name, mime: file.type || "image/jpeg" }],
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Detect failed");
       setLiveNote("");

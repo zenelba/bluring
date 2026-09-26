@@ -10,6 +10,12 @@ import {
   type BrandRemovalStatus,
   type BrandSceneMode,
 } from "./lib/brandRemoval";
+import {
+  filesTitle,
+  saveTask,
+  type BrandRemovalPayload,
+  type RestoredTask,
+} from "./lib/taskHistory";
 import "./osebe.css";
 
 function statusLabel(status: BrandRemovalStatus): string {
@@ -46,7 +52,11 @@ function CloudIcon() {
   );
 }
 
-export default function BrandRemovalMode() {
+export default function BrandRemovalMode(props: {
+  initialTask?: RestoredTask | null;
+  onInitialConsumed?: () => void;
+}) {
+  const { initialTask, onInitialConsumed } = props;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<BrandRemovalItem[]>([]);
   const [sceneMode, setSceneMode] = useState<BrandSceneMode>(
@@ -57,6 +67,7 @@ export default function BrandRemovalMode() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
+  const hydratedRef = useRef<string | null>(null);
 
   const settings: BrandRemovalSettings = useMemo(
     () => ({ sceneMode }),
@@ -84,10 +95,69 @@ export default function BrandRemovalMode() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!initialTask || initialTask.record.toolId !== "brandRemoval") return;
+    if (hydratedRef.current === initialTask.record.id) return;
+    const payload = initialTask.record.payload;
+    if (payload.kind !== "brandRemoval") return;
+    hydratedRef.current = initialTask.record.id;
+    setSceneMode(payload.sceneMode);
+    for (const item of items) {
+      URL.revokeObjectURL(item.thumbUrl);
+      if (item.resultUrl) URL.revokeObjectURL(item.resultUrl);
+    }
+    const restoredItems = createBrandRemovalItems(initialTask.files).map(
+      (item, idx) => {
+        const snap = payload.files[idx];
+        if (!snap) return item;
+        return {
+          ...item,
+          targets: snap.targets.length > 0 ? snap.targets : item.targets,
+          scene: snap.scene,
+          sceneConfidence: snap.sceneConfidence,
+          sceneRationale: snap.sceneRationale,
+        };
+      },
+    );
+    setItems(restoredItems);
+    setError(null);
+    setLiveNote(`Restored ${restoredItems.length} image(s).`);
+    onInitialConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTask]);
+
   const patchItem = (localId: string, patch: Partial<BrandRemovalItem>) => {
     setItems((prev) =>
       prev.map((item) => (item.localId === localId ? { ...item, ...patch } : item)),
     );
+  };
+
+  const persistBrandHistory = (queue: BrandRemovalItem[]) => {
+    const withScene = queue.filter((i) => i.scene != null).slice(0, 5);
+    const source = withScene.length > 0 ? withScene : queue.slice(0, 5);
+    if (source.length === 0) return;
+    const payload: BrandRemovalPayload = {
+      kind: "brandRemoval",
+      sceneMode,
+      files: source.map((item) => ({
+        name: item.sourceName,
+        mime: item.file.type || "image/jpeg",
+        targets: item.targets,
+        scene: item.scene,
+        sceneConfidence: item.sceneConfidence,
+        sceneRationale: item.sceneRationale,
+      })),
+    };
+    void saveTask({
+      toolId: "brandRemoval",
+      title: filesTitle(source.map((i) => i.sourceName)),
+      payload,
+      files: source.map((item) => ({
+        blob: item.file,
+        name: item.sourceName,
+        mime: item.file.type || "image/jpeg",
+      })),
+    });
   };
 
   const runProcessQueue = async (queue: BrandRemovalItem[]) => {
@@ -96,11 +166,14 @@ export default function BrandRemovalMode() {
     setBusy(true);
     setError(null);
     try {
+      const finished: BrandRemovalItem[] = [];
       for (let i = 0; i < work.length; i++) {
         setLiveNote(`Processing ${i + 1} / ${work.length}…`);
-        await processBrandRemovalItem(work[i], settings, patchItem);
+        const next = await processBrandRemovalItem(work[i], settings, patchItem);
+        finished.push(next);
       }
       setLiveNote("Batch finished.");
+      persistBrandHistory(finished);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Processing failed");
     } finally {

@@ -1,4 +1,9 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  formatTaskOption,
+  listTaskSummaries,
+  type TaskSummary,
+} from "./lib/taskHistory";
 
 export type HomeModeItem = {
   id: string;
@@ -9,6 +14,8 @@ export type HomeModeItem = {
 type HomeLandingProps = {
   modes: ReadonlyArray<HomeModeItem>;
   onSelect: (id: string) => void;
+  onRestore: (taskId: string) => void;
+  historyEpoch?: number;
 };
 
 function ModeIcon({ id }: { id: string }): ReactNode {
@@ -103,10 +110,54 @@ function ModeIcon({ id }: { id: string }): ReactNode {
   }
 }
 
-export default function HomeLanding({ modes, onSelect }: HomeLandingProps) {
+export default function HomeLanding({
+  modes,
+  onSelect,
+  onRestore,
+  historyEpoch = 0,
+}: HomeLandingProps) {
+  const [recent, setRecent] = useState<TaskSummary[]>([]);
+  const [selectValue, setSelectValue] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void listTaskSummaries()
+      .then((rows) => {
+        if (!cancelled) setRecent(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setRecent([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [historyEpoch]);
+
   return (
     <div className="home">
       <p className="home__intro">Choose a tool</p>
+      {recent.length > 0 && (
+        <label className="home__recent">
+          <span className="home__recent-label">Recent</span>
+          <select
+            className="home__recent-select"
+            value={selectValue}
+            aria-label="Recent tasks"
+            onChange={(e) => {
+              const id = e.target.value;
+              setSelectValue("");
+              if (id) onRestore(id);
+            }}
+          >
+            <option value="">Recent tasks…</option>
+            {recent.map((task) => (
+              <option key={task.id} value={task.id}>
+                {formatTaskOption(task)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="home__grid">
         {modes.map((item) => (
           <button

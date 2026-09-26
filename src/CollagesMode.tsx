@@ -26,6 +26,12 @@ import {
   normalizeHex,
   type BgRemovalModel,
 } from "./lib/portraits";
+import {
+  filesTitle,
+  saveTask,
+  type CollagesPayload,
+  type RestoredTask,
+} from "./lib/taskHistory";
 import "./osebe.css";
 
 function statusLabel(status: CollageItemStatus): string {
@@ -57,7 +63,11 @@ function CloudIcon() {
   );
 }
 
-export default function CollagesMode() {
+export default function CollagesMode(props: {
+  initialTask?: RestoredTask | null;
+  onInitialConsumed?: () => void;
+}) {
+  const { initialTask, onInitialConsumed } = props;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<CollageItem[]>([]);
   const [layout, setLayout] = useState<CollageLayout>(DEFAULT_COLLAGE_LAYOUT);
@@ -86,6 +96,7 @@ export default function CollagesMode() {
   const [liveNote, setLiveNote] = useState("");
   const [selectedGrid, setSelectedGrid] = useState<CollageGrid | null>(null);
   const [allGrids, setAllGrids] = useState(false);
+  const hydratedRef = useRef<string | null>(null);
 
   const selectedLayout =
     COLLAGE_LAYOUTS.find((item) => item.id === layout) ?? COLLAGE_LAYOUTS[0];
@@ -160,6 +171,33 @@ export default function CollagesMode() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!initialTask || initialTask.record.toolId !== "collages") return;
+    if (hydratedRef.current === initialTask.record.id) return;
+    const payload = initialTask.record.payload;
+    if (payload.kind !== "collages") return;
+    hydratedRef.current = initialTask.record.id;
+    for (const item of items) URL.revokeObjectURL(item.thumbUrl);
+    for (const result of results) URL.revokeObjectURL(result.url);
+    setResults([]);
+    setResultExport(null);
+    setLayout(payload.layout);
+    setStripWhitespace(payload.stripWhitespace);
+    setOptimizeForPowerpoint(payload.optimizeForPowerpoint);
+    setRemoveBackground(payload.removeBackground);
+    setBackground(payload.background);
+    setHexDraft(payload.background);
+    setBgRemovalModel(payload.bgRemovalModel as BgRemovalModel);
+    setGap(payload.gap);
+    setSelectedGrid(null);
+    setAllGrids(false);
+    setItems(createCollageItems(initialTask.files));
+    setError(null);
+    setLiveNote(`Restored ${initialTask.files.length} image(s).`);
+    onInitialConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTask]);
+
   const patchItem = (localId: string, patch: Partial<CollageItem>) => {
     setItems((prev) =>
       prev.map((item) => {
@@ -202,6 +240,31 @@ export default function CollagesMode() {
         return incoming;
       });
       setLiveNote(`${incoming.length} image${incoming.length === 1 ? "" : "s"} loaded.`);
+      const source = incoming.slice(0, 8);
+      const payload: CollagesPayload = {
+        kind: "collages",
+        layout,
+        stripWhitespace,
+        optimizeForPowerpoint,
+        removeBackground,
+        background: normalizeHex(background),
+        bgRemovalModel,
+        gap,
+        files: source.map((item) => ({
+          name: item.sourceName,
+          mime: item.file.type || "image/jpeg",
+        })),
+      };
+      void saveTask({
+        toolId: "collages",
+        title: filesTitle(source.map((i) => i.sourceName)),
+        payload,
+        files: source.map((item) => ({
+          blob: item.file,
+          name: item.sourceName,
+          mime: item.file.type || "image/jpeg",
+        })),
+      });
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to read ZIP or image files",

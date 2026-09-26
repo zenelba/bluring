@@ -34,6 +34,13 @@ import AudioVideoMode from "./AudioVideoMode";
 import BrandRemovalMode from "./BrandRemovalMode";
 import TextReplaceMode from "./TextReplaceMode";
 import HomeLanding from "./HomeLanding";
+import {
+  getRestoredTask,
+  saveTask,
+  touchTask,
+  type ImageAppPayload,
+  type RestoredTask,
+} from "./lib/taskHistory";
 import "./App.css";
 
 type ToolMode =
@@ -152,12 +159,21 @@ export default function App() {
   const [mode, setMode] = useState<AppMode>("home");
   const avAllowed = isLocalAvHost();
   const visibleModes = APP_MODES.filter((m) => m.id !== "av" || avAllowed);
+  const [historyEpoch, setHistoryEpoch] = useState(0);
+  const [restoreTask, setRestoreTask] = useState<RestoredTask | null>(null);
+  const skipImageHistoryRef = useRef(false);
 
   useEffect(() => {
     if (mode === "av" && !avAllowed) {
       setMode("home");
     }
   }, [mode, avAllowed]);
+
+  useEffect(() => {
+    if (mode === "home") {
+      setHistoryEpoch((n) => n + 1);
+    }
+  }, [mode]);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState("image");
@@ -206,7 +222,7 @@ export default function App() {
     image?.naturalHeight ?? 0,
   );
 
-  const loadImage = useCallback((file: File) => {
+  const loadImage = useCallback((file: File, opts?: { skipHistory?: boolean }) => {
     if (!file.type.startsWith("image/")) return;
 
     const url = URL.createObjectURL(file);
@@ -230,8 +246,134 @@ export default function App() {
       setAttentionHotspots([]);
       setReportProgress("idle");
       setReportError(null);
+      if (opts?.skipHistory) skipImageHistoryRef.current = true;
     };
     img.src = url;
+  }, []);
+
+  const persistImageAppTask = useCallback(
+    async (
+      toolId: "blur" | "foveal" | "saliency" | "report",
+      extras?: Partial<
+        Pick<
+          ImageAppPayload,
+          | "regions"
+          | "blurLevelIndex"
+          | "fovealParams"
+          | "saliencyParams"
+          | "hotspotCount"
+          | "hotspots"
+        >
+      >,
+    ) => {
+      if (!uploadedFileBlob) return;
+      const fileName = `${uploadedFileName}.${uploadedMimeType.includes("png") ? "png" : "jpg"}`;
+      const payload: ImageAppPayload = {
+        kind: "imageApp",
+        toolId,
+        fileName,
+        mimeType: uploadedMimeType,
+        blurLevelIndex,
+        regions,
+        fovealParams,
+        saliencyParams,
+        hotspotCount,
+        hotspots: attentionHotspots,
+        ...extras,
+      };
+      try {
+        await saveTask({
+          toolId,
+          title: fileName,
+          payload,
+          files: [
+            {
+              blob: uploadedFileBlob,
+              name: fileName,
+              mime: uploadedMimeType,
+            },
+          ],
+        });
+        setHistoryEpoch((n) => n + 1);
+      } catch {
+        /* history is best-effort */
+      }
+    },
+    [
+      uploadedFileBlob,
+      uploadedFileName,
+      uploadedMimeType,
+      blurLevelIndex,
+      regions,
+      fovealParams,
+      saliencyParams,
+      hotspotCount,
+      attentionHotspots,
+    ],
+  );
+
+  const handleRestore = useCallback(async (taskId: string) => {
+    try {
+      const restored = await getRestoredTask(taskId);
+      if (!restored) return;
+      await touchTask(taskId);
+      const toolId = restored.record.toolId;
+      if (
+        toolId === "blur" ||
+        toolId === "foveal" ||
+        toolId === "saliency" ||
+        toolId === "report"
+      ) {
+        const payload = restored.record.payload;
+        if (payload.kind !== "imageApp") return;
+        const file =
+          restored.files[0] ??
+          new File([], payload.fileName, { type: payload.mimeType });
+        skipImageHistoryRef.current = true;
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error("Failed to load saved image"));
+          img.src = url;
+        });
+        setImageUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
+        setImage(img);
+        setUploadedFileName(getFileBaseName(payload.fileName));
+        setUploadedFileBlob(file);
+        setUploadedMimeType(payload.mimeType || file.type || "image/jpeg");
+        setBlurLevelIndex(payload.blurLevelIndex);
+        setRegions(
+          payload.regions.length > 0
+            ? payload.regions
+            : [fullImageRegion(img)],
+        );
+        setFovealParams(
+          payload.fovealParams ??
+            defaultFovealParamsForImage(img.naturalWidth, img.naturalHeight),
+        );
+        setSaliencyParams(payload.saliencyParams);
+        setHotspotCount(payload.hotspotCount);
+        setAttentionHotspots(payload.hotspots);
+        setSaliencyMask(null);
+        setSaliencyResult(null);
+        setSaliencyOverlay(null);
+        setSaliencyError(null);
+        setSaliencyView("map");
+        setReportProgress("idle");
+        setReportError(null);
+        setRestoreTask(null);
+        setMode(toolId);
+        return;
+      }
+      setRestoreTask(restored);
+      setMode(toolId);
+    } catch {
+      /* ignore restore errors */
+    }
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -545,6 +687,18 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!image || !uploadedFileBlob) return;
+    if (skipImageHistoryRef.current) {
+      skipImageHistoryRef.current = false;
+      return;
+    }
+    if (mode !== "blur" && mode !== "foveal" && mode !== "report") return;
+    void persistImageAppTask(mode);
+    // Save once per fresh image load for these modes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [image, uploadedFileBlob, mode]);
+
+  useEffect(() => {
     if (mode !== "saliency") return;
     if (!image || !uploadedFileBlob) return;
     if (saliencyMask) return;
@@ -565,6 +719,14 @@ export default function App() {
         setSaliencyOverlay(overlay);
         setSaliencyResult(result);
         setSaliencyView("map");
+        const hotspots = findAttentionHotspots(
+          mask,
+          image.naturalWidth,
+          image.naturalHeight,
+          hotspotCount,
+        );
+        setAttentionHotspots(hotspots);
+        void persistImageAppTask("saliency", { hotspots });
       })
       .catch((error) => {
         if (requestId !== saliencyRequestRef.current) return;
@@ -746,18 +908,50 @@ export default function App() {
       {mode === "home" ? (
         <HomeLanding
           modes={visibleModes}
-          onSelect={(id) => setMode(id as ToolMode)}
+          onSelect={(id) => {
+            setRestoreTask(null);
+            setMode(id as ToolMode);
+          }}
+          onRestore={(taskId) => {
+            void handleRestore(taskId);
+          }}
+          historyEpoch={historyEpoch}
         />
       ) : mode === "portraits" ? (
-        <PortraitsMode />
+        <PortraitsMode
+          initialTask={
+            restoreTask?.record.toolId === "portraits" ? restoreTask : null
+          }
+          onInitialConsumed={() => setRestoreTask(null)}
+        />
       ) : mode === "collages" ? (
-        <CollagesMode />
+        <CollagesMode
+          initialTask={
+            restoreTask?.record.toolId === "collages" ? restoreTask : null
+          }
+          onInitialConsumed={() => setRestoreTask(null)}
+        />
       ) : mode === "av" ? (
-        <AudioVideoMode />
+        <AudioVideoMode
+          initialTask={
+            restoreTask?.record.toolId === "av" ? restoreTask : null
+          }
+          onInitialConsumed={() => setRestoreTask(null)}
+        />
       ) : mode === "brandRemoval" ? (
-        <BrandRemovalMode />
+        <BrandRemovalMode
+          initialTask={
+            restoreTask?.record.toolId === "brandRemoval" ? restoreTask : null
+          }
+          onInitialConsumed={() => setRestoreTask(null)}
+        />
       ) : mode === "textReplace" ? (
-        <TextReplaceMode />
+        <TextReplaceMode
+          initialTask={
+            restoreTask?.record.toolId === "textReplace" ? restoreTask : null
+          }
+          onInitialConsumed={() => setRestoreTask(null)}
+        />
       ) : (
       <div className="main">
         <aside className="sidebar">

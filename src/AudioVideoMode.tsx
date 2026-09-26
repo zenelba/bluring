@@ -7,10 +7,13 @@ import {
   downloadMediaFile,
   downloadSlidesPackage,
   downloadTextFile,
+  uploadAvMediaForTranscription,
   type AvDownloadProgress,
   isLikelyMediaUrl,
   probeAvUrl,
   sanitizeFilename,
+  getMediaDurationSec,
+  LOCAL_UPLOAD_TRANSCRIBE_THRESHOLD,
   transcribeAvBlob,
   type AvDownloadResult,
   type AvJobOptions,
@@ -19,6 +22,12 @@ import {
   type AvQualityOption,
   type DetectedSlide,
 } from "./lib/av";
+import {
+  avTitleFromUrl,
+  saveTask,
+  type AvPayload,
+  type RestoredTask,
+} from "./lib/taskHistory";
 import "./osebe.css";
 
 type Step =
@@ -30,7 +39,11 @@ type Step =
   | "done"
   | "error";
 
-export default function AudioVideoMode() {
+export default function AudioVideoMode(props: {
+  initialTask?: RestoredTask | null;
+  onInitialConsumed?: () => void;
+}) {
+  const { initialTask, onInitialConsumed } = props;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
   const [step, setStep] = useState<Step>("idle");
@@ -50,6 +63,10 @@ export default function AudioVideoMode() {
   const [slides, setSlides] = useState<DetectedSlide[]>([]);
   const [title, setTitle] = useState("media");
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [transcribeProgress, setTranscribeProgress] = useState<number | null>(
+    null,
+  );
+  const hydratedRef = useRef<string | null>(null);
 
   const platform = useMemo(
     () => (url.trim() ? detectAvPlatform(url.trim()) : "unknown"),
@@ -65,11 +82,74 @@ export default function AudioVideoMode() {
     };
   }, [media?.url]);
 
+  useEffect(() => {
+    if (!initialTask || initialTask.record.toolId !== "av") return;
+    if (hydratedRef.current === initialTask.record.id) return;
+    const payload = initialTask.record.payload;
+    if (payload.kind !== "av") return;
+    hydratedRef.current = initialTask.record.id;
+    if (media?.url) URL.revokeObjectURL(media.url);
+    setMedia(null);
+    setUrl(payload.url);
+    setOptions(payload.options);
+    setProbe((payload.probe as AvProbeResult | null) ?? null);
+    setTranscript(payload.transcript);
+    setSlides([]);
+    setTitle(payload.title || "media");
+    setSelectedQuality(null);
+    setSelectedPicker(null);
+    setStep(payload.probe ? "choose" : "idle");
+    setError(null);
+    setLiveNote(
+      payload.transcript
+        ? "Restored link, probe, and transcript."
+        : payload.probe
+          ? "Restored link and probe."
+          : "Restored link.",
+    );
+    onInitialConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTask]);
+
+  const persistAvHistory = (
+    next: Partial<{
+      url: string;
+      title: string;
+      options: AvJobOptions;
+      probe: AvProbeResult | null;
+      transcript: string | null;
+      slides: DetectedSlide[];
+    }> = {},
+  ) => {
+    const sourceUrl = (next.url ?? url).trim();
+    if (!sourceUrl) return;
+    const payload: AvPayload = {
+      kind: "av",
+      url: sourceUrl,
+      title: next.title ?? title,
+      options: next.options ?? options,
+      probe: next.probe !== undefined ? next.probe : probe,
+      transcript:
+        next.transcript !== undefined ? next.transcript : transcript,
+      slides: (next.slides ?? slides).map((s) => ({
+        index: s.index,
+        timeSec: s.timeSec,
+      })),
+    };
+    void saveTask({
+      toolId: "av",
+      title: avTitleFromUrl(sourceUrl),
+      payload,
+      files: [],
+    });
+  };
+
   const clearOutputs = () => {
     if (media?.url) URL.revokeObjectURL(media.url);
     setMedia(null);
     setTranscript(null);
     setSlides([]);
+    setTranscribeProgress(null);
   };
 
   const resetAll = () => {
@@ -99,7 +179,8 @@ export default function AudioVideoMode() {
     try {
       const result = await probeAvUrl(trimmed);
       setProbe(result);
-      setTitle(result.title || sanitizeFilename(trimmed));
+      const jobTitle = result.title || sanitizeFilename(trimmed);
+      setTitle(jobTitle);
       if (result.qualities.length === 1 && !result.picker?.length) {
         setSelectedQuality(result.qualities[0]);
       } else {
@@ -124,6 +205,13 @@ export default function AudioVideoMode() {
       } else {
         setError(null);
       }
+      persistAvHistory({
+        url: trimmed,
+        title: jobTitle,
+        probe: result,
+        transcript: null,
+        slides: [],
+      });
     } catch (err) {
       setStep("error");
       setError(err instanceof Error ? err.message : "Could not resolve link");
@@ -131,7 +219,11 @@ export default function AudioVideoMode() {
     }
   };
 
-  const runJob = async (downloaded: AvDownloadResult, jobTitle: string) => {
+  const runJob = async (
+    downloaded: AvDownloadResult,
+    jobTitle: string,
+    opts?: { storedMediaId?: string },
+  ) => {
     setStep("analyzing");
     const objectUrl = URL.createObjectURL(downloaded.blob);
     setMedia({ ...downloaded, url: objectUrl });
@@ -141,7 +233,9 @@ export default function AudioVideoMode() {
     let foundSlides: DetectedSlide[] = [];
 
     if (options.transcribe) {
+      setTranscribeProgress(4);
       setLiveNote("Transcribing with Soniox…");
+      const durationSec = await getMediaDurationSec(downloaded.blob);
       try {
         const result = await transcribeAvBlob(
           downloaded.blob,
@@ -150,8 +244,14 @@ export default function AudioVideoMode() {
             language: options.language,
             speakerDiarization: options.speakerDiarization,
             sourceUrl: probe?.sourceUrl,
+            storedMediaId: opts?.storedMediaId,
             videoQuality: selectedQuality?.videoQuality,
             downloadMode: "audio",
+            estimatedDurationSec: durationSec,
+            onProgress: (p) => {
+              setTranscribeProgress(p.percent);
+              if (p.note) setLiveNote(p.note);
+            },
           },
         );
         text = result.text;
@@ -162,6 +262,8 @@ export default function AudioVideoMode() {
             ? `Transcription: ${err.message}`
             : "Transcription failed",
         );
+      } finally {
+        setTranscribeProgress(null);
       }
     }
 
@@ -197,6 +299,11 @@ export default function AudioVideoMode() {
     }
 
     downloadMediaFile(downloaded.blob, downloaded.filename);
+    persistAvHistory({
+      title: jobTitle,
+      transcript: text,
+      slides: foundSlides,
+    });
     setStep("done");
     setLiveNote(
       [
@@ -290,6 +397,22 @@ export default function AudioVideoMode() {
     setTitle(jobTitle);
     setUrl("");
     try {
+      let storedMediaId: string | undefined;
+      if (options.transcribe && file.size > LOCAL_UPLOAD_TRANSCRIBE_THRESHOLD) {
+        setStep("downloading");
+        setDownloadProgress(0);
+        setLiveNote("Uploading file to server…");
+        const onProgress = (p: AvDownloadProgress) => {
+          if (p.percent != null) {
+            setDownloadProgress(p.percent);
+            setLiveNote(`Uploading… ${p.percent}%`);
+          }
+        };
+        const uploaded = await uploadAvMediaForTranscription(file, onProgress);
+        storedMediaId = uploaded.storedMediaId;
+        setDownloadProgress(100);
+        setDownloadProgress(null);
+      }
       await runJob(
         {
           blob: file,
@@ -297,10 +420,13 @@ export default function AudioVideoMode() {
           mimeType: file.type || "application/octet-stream",
         },
         jobTitle,
+        { storedMediaId },
       );
     } catch (err) {
       setStep("error");
-      setError(err instanceof Error ? err.message : "Processing failed");
+      const msg = err instanceof Error ? err.message : "Processing failed";
+      setError(msg.startsWith("Upload") ? msg : `Upload: ${msg.split(" at afterWriteDispatched")[0]}`);
+      setDownloadProgress(null);
     }
   };
 
@@ -510,6 +636,16 @@ export default function AudioVideoMode() {
                       downloadProgress == null
                         ? "osebe-indeterminate 1.2s ease-in-out infinite alternate"
                         : undefined,
+                  }}
+                />
+              </div>
+            )}
+            {transcribeProgress != null && step === "analyzing" && (
+              <div className="osebe-bar" style={{ marginTop: "0.65rem" }}>
+                <div
+                  className="osebe-bar__fill"
+                  style={{
+                    width: `${Math.max(4, Math.min(100, transcribeProgress))}%`,
                   }}
                 />
               </div>

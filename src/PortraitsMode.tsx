@@ -18,6 +18,12 @@ import {
   processPortrait,
   readImageSize,
 } from "./lib/portraits";
+import {
+  filesTitle,
+  saveTask,
+  type PortraitsPayload,
+  type RestoredTask,
+} from "./lib/taskHistory";
 import "./osebe.css";
 
 function statusLabel(status: PortraitStatus): string {
@@ -73,7 +79,11 @@ function LockIcon({ locked }: { locked: boolean }) {
   );
 }
 
-export default function PortraitsMode() {
+export default function PortraitsMode(props: {
+  initialTask?: RestoredTask | null;
+  onInitialConsumed?: () => void;
+}) {
+  const { initialTask, onInitialConsumed } = props;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<PortraitItem[]>([]);
   const [smartFaceCrop, setSmartFaceCrop] = useState(true);
@@ -96,6 +106,7 @@ export default function PortraitsMode() {
   const [zipError, setZipError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const suffixManualRef = useRef(false);
+  const hydratedRef = useRef<string | null>(null);
   const aspectRef = useRef(
     DEFAULT_PORTRAIT_SIZE.width / DEFAULT_PORTRAIT_SIZE.height,
   );
@@ -150,6 +161,33 @@ export default function PortraitsMode() {
     // Only on unmount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!initialTask || initialTask.record.toolId !== "portraits") return;
+    if (hydratedRef.current === initialTask.record.id) return;
+    const payload = initialTask.record.payload;
+    if (payload.kind !== "portraits") return;
+    hydratedRef.current = initialTask.record.id;
+    for (const item of items) {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
+    }
+    setSmartFaceCrop(payload.smartFaceCrop);
+    setWidth(payload.width);
+    setHeight(payload.height);
+    setLockAspect(payload.lockAspect);
+    setBackground(payload.background);
+    setHexDraft(payload.background);
+    setBgRemovalModel(payload.bgRemovalModel as BgRemovalModel);
+    setIncludeBrands(payload.includeBrands);
+    setFilenameSuffix(payload.filenameSuffix);
+    aspectRef.current = payload.width / Math.max(1, payload.height);
+    const restored = createPortraitItems(initialTask.files);
+    setItems(restored);
+    setZipError(null);
+    onInitialConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTask]);
 
   const patchItem = (localId: string, patch: Partial<PortraitItem>) => {
     setItems((prev) =>
@@ -254,6 +292,35 @@ export default function PortraitsMode() {
         (patch) => patchItem(item.localId, patch),
       );
       await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+
+    const source = queue.slice(0, 5);
+    if (source.length > 0) {
+      const payload: PortraitsPayload = {
+        kind: "portraits",
+        smartFaceCrop,
+        width,
+        height,
+        lockAspect,
+        background: normalizeHex(background),
+        bgRemovalModel,
+        includeBrands,
+        filenameSuffix,
+        files: source.map((item) => ({
+          name: item.sourceName,
+          mime: item.file.type || "image/jpeg",
+        })),
+      };
+      void saveTask({
+        toolId: "portraits",
+        title: filesTitle(source.map((i) => i.sourceName)),
+        payload,
+        files: source.map((item) => ({
+          blob: item.file,
+          name: item.sourceName,
+          mime: item.file.type || "image/jpeg",
+        })),
+      });
     }
 
     setBusy(false);
