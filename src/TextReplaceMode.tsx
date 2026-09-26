@@ -15,7 +15,7 @@ import {
   type TextReplaceEdits,
 } from "./lib/textReplace";
 import {
-  saveTask,
+  upsertTask,
   type RestoredTask,
   type TextReplacePayload,
 } from "./lib/taskHistory";
@@ -299,6 +299,8 @@ export default function TextReplaceMode(props: {
   const [liveNote, setLiveNote] = useState("");
   const editListRef = useRef<HTMLUListElement>(null);
   const hydratedRef = useRef<string | null>(null);
+  const historyIdRef = useRef<string | null>(null);
+  const historyTimerRef = useRef<number | null>(null);
 
   // When a box is selected on the image, scroll/focus its row in Detected text
   useEffect(() => {
@@ -328,6 +330,7 @@ export default function TextReplaceMode(props: {
     const payload = initialTask.record.payload;
     if (payload.kind !== "textReplace") return;
     hydratedRef.current = initialTask.record.id;
+    historyIdRef.current = initialTask.record.id;
     const nextFile =
       initialTask.files[0] ??
       new File([], payload.fileName, { type: payload.mimeType });
@@ -389,7 +392,63 @@ export default function TextReplaceMode(props: {
     setThumbUrl(next ? URL.createObjectURL(next) : null);
     setError(null);
     setLiveNote(next ? "Image loaded — click Detect text." : "");
+    historyIdRef.current = null;
   };
+
+  const persistTextHistory = async (
+    nextItems: DetectedText[],
+    nextEdits: TextReplaceEdits,
+    nextSeries: SeriesSettings,
+  ) => {
+    if (!file) return;
+    const payload: TextReplacePayload = {
+      kind: "textReplace",
+      fileName: file.name,
+      mimeType: file.type || "image/jpeg",
+      items: nextItems,
+      edits: nextEdits,
+      series: nextSeries,
+    };
+    try {
+      const id = await upsertTask({
+        id: historyIdRef.current,
+        toolId: "textReplace",
+        title: file.name,
+        payload,
+        files: [
+          { blob: file, name: file.name, mime: file.type || "image/jpeg" },
+        ],
+      });
+      historyIdRef.current = id;
+    } catch {
+      /* best-effort */
+    }
+  };
+
+  const scheduleTextHistoryPersist = () => {
+    if (historyTimerRef.current != null) {
+      window.clearTimeout(historyTimerRef.current);
+    }
+    historyTimerRef.current = window.setTimeout(() => {
+      historyTimerRef.current = null;
+      if (!file || items.length === 0) return;
+      void persistTextHistory(items, edits, series);
+    }, 400);
+  };
+
+  useEffect(() => {
+    if (!historyIdRef.current || items.length === 0) return;
+    scheduleTextHistoryPersist();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edits, series, items]);
+
+  useEffect(() => {
+    return () => {
+      if (historyTimerRef.current != null) {
+        window.clearTimeout(historyTimerRef.current);
+      }
+    };
+  }, []);
 
   const acceptFile = (list: FileList | File[]) => {
     const arr = Array.from(list);
@@ -445,26 +504,14 @@ export default function TextReplaceMode(props: {
       }
       setItems(detected);
       const nextEdits = defaultEdits(detected);
+      const nextSeries = { ...series, itemId: null as string | null };
       setEdits(nextEdits);
-      setSeries((s) => ({ ...s, itemId: null }));
+      setSeries(nextSeries);
       setLiveNote(
         `Found ${detected.length} text region(s). Drag boxes if they are misaligned.`,
       );
       logEvent("text_detect_done", `${detected.length} region(s)`);
-      const payload: TextReplacePayload = {
-        kind: "textReplace",
-        fileName: file.name,
-        mimeType: file.type || "image/jpeg",
-        items: detected,
-        edits: nextEdits,
-        series: { itemId: null, steps: series.steps, step: series.step },
-      };
-      void saveTask({
-        toolId: "textReplace",
-        title: file.name,
-        payload,
-        files: [{ blob: file, name: file.name, mime: file.type || "image/jpeg" }],
-      });
+      await persistTextHistory(detected, nextEdits, nextSeries);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Detect failed");
       setLiveNote("");
@@ -516,6 +563,7 @@ export default function TextReplaceMode(props: {
           ? "1 image ready."
           : `${out.length} variants ready.`,
       );
+      await persistTextHistory(items, committed, series);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generate failed");
       setLiveNote("");

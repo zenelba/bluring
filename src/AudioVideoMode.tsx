@@ -24,7 +24,7 @@ import {
 } from "./lib/av";
 import {
   avTitleFromUrl,
-  saveTask,
+  upsertTask,
   type AvPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
@@ -68,6 +68,8 @@ export default function AudioVideoMode(props: {
     null,
   );
   const hydratedRef = useRef<string | null>(null);
+  const historyIdRef = useRef<string | null>(null);
+  const historyTimerRef = useRef<number | null>(null);
 
   const platform = useMemo(
     () => (url.trim() ? detectAvPlatform(url.trim()) : "unknown"),
@@ -89,6 +91,7 @@ export default function AudioVideoMode(props: {
     const payload = initialTask.record.payload;
     if (payload.kind !== "av") return;
     hydratedRef.current = initialTask.record.id;
+    historyIdRef.current = initialTask.record.id;
     if (media?.url) URL.revokeObjectURL(media.url);
     setMedia(null);
     setUrl(payload.url);
@@ -97,8 +100,19 @@ export default function AudioVideoMode(props: {
     setTranscript(payload.transcript);
     setSlides([]);
     setTitle(payload.title || "media");
-    setSelectedQuality(null);
-    setSelectedPicker(null);
+    const qualities =
+      (payload.probe as AvProbeResult | null)?.qualities ?? [];
+    setSelectedQuality(
+      payload.selectedQualityId
+        ? (qualities.find((q) => q.id === payload.selectedQualityId) ?? null)
+        : null,
+    );
+    const pickerItems = (payload.probe as AvProbeResult | null)?.picker ?? [];
+    setSelectedPicker(
+      payload.selectedPickerUrl
+        ? (pickerItems.find((p) => p.url === payload.selectedPickerUrl) ?? null)
+        : null,
+    );
     setStep(payload.probe ? "choose" : "idle");
     setError(null);
     setLiveNote(
@@ -112,7 +126,7 @@ export default function AudioVideoMode(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTask]);
 
-  const persistAvHistory = (
+  const persistAvHistory = async (
     next: Partial<{
       url: string;
       title: string;
@@ -120,6 +134,8 @@ export default function AudioVideoMode(props: {
       probe: AvProbeResult | null;
       transcript: string | null;
       slides: DetectedSlide[];
+      selectedQualityId: string | null;
+      selectedPickerUrl: string | null;
     }> = {},
   ) => {
     const sourceUrl = (next.url ?? url).trim();
@@ -129,6 +145,14 @@ export default function AudioVideoMode(props: {
       url: sourceUrl,
       title: next.title ?? title,
       options: next.options ?? options,
+      selectedQualityId:
+        next.selectedQualityId !== undefined
+          ? next.selectedQualityId
+          : (selectedQuality?.id ?? null),
+      selectedPickerUrl:
+        next.selectedPickerUrl !== undefined
+          ? next.selectedPickerUrl
+          : (selectedPicker?.url ?? null),
       probe: next.probe !== undefined ? next.probe : probe,
       transcript:
         next.transcript !== undefined ? next.transcript : transcript,
@@ -137,13 +161,36 @@ export default function AudioVideoMode(props: {
         timeSec: s.timeSec,
       })),
     };
-    void saveTask({
-      toolId: "av",
-      title: avTitleFromUrl(sourceUrl),
-      payload,
-      files: [],
-    });
+    try {
+      const id = await upsertTask({
+        id: historyIdRef.current,
+        toolId: "av",
+        title: avTitleFromUrl(sourceUrl),
+        payload,
+        files: [],
+      });
+      historyIdRef.current = id;
+    } catch {
+      /* best-effort */
+    }
   };
+
+  useEffect(() => {
+    if (!url.trim() || !historyIdRef.current) return;
+    if (historyTimerRef.current != null) {
+      window.clearTimeout(historyTimerRef.current);
+    }
+    historyTimerRef.current = window.setTimeout(() => {
+      historyTimerRef.current = null;
+      void persistAvHistory();
+    }, 400);
+    return () => {
+      if (historyTimerRef.current != null) {
+        window.clearTimeout(historyTimerRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options, selectedQuality?.id, selectedPicker?.url]);
 
   const clearOutputs = () => {
     if (media?.url) URL.revokeObjectURL(media.url);

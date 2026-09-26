@@ -37,8 +37,8 @@ import HomeLanding from "./HomeLanding";
 import FeedbackModal from "./FeedbackModal";
 import {
   getRestoredTask,
-  saveTask,
   touchTask,
+  upsertTask,
   type ImageAppPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
@@ -165,6 +165,8 @@ export default function App() {
   const [historyEpoch, setHistoryEpoch] = useState(0);
   const [restoreTask, setRestoreTask] = useState<RestoredTask | null>(null);
   const skipImageHistoryRef = useRef(false);
+  const imageHistoryIdRef = useRef<string | null>(null);
+  const imageHistoryTimerRef = useRef<number | null>(null);
   const pendingSessionRef = useRef<{
     taskId: string | null;
     title: string | null;
@@ -277,7 +279,11 @@ export default function App() {
       setAttentionHotspots([]);
       setReportProgress("idle");
       setReportError(null);
-      if (opts?.skipHistory) skipImageHistoryRef.current = true;
+      if (opts?.skipHistory) {
+        skipImageHistoryRef.current = true;
+      } else {
+        imageHistoryIdRef.current = null;
+      }
       logEvent("image_upload", file.name);
     };
     img.src = url;
@@ -314,7 +320,8 @@ export default function App() {
         ...extras,
       };
       try {
-        await saveTask({
+        const id = await upsertTask({
+          id: imageHistoryIdRef.current,
           toolId,
           title: fileName,
           payload,
@@ -326,6 +333,7 @@ export default function App() {
             },
           ],
         });
+        imageHistoryIdRef.current = id;
         setHistoryEpoch((n) => n + 1);
       } catch {
         /* history is best-effort */
@@ -344,6 +352,19 @@ export default function App() {
     ],
   );
 
+  const scheduleImageHistoryPersist = useCallback(
+    (toolId: "blur" | "foveal" | "saliency" | "report") => {
+      if (imageHistoryTimerRef.current != null) {
+        window.clearTimeout(imageHistoryTimerRef.current);
+      }
+      imageHistoryTimerRef.current = window.setTimeout(() => {
+        imageHistoryTimerRef.current = null;
+        void persistImageAppTask(toolId);
+      }, 400);
+    },
+    [persistImageAppTask],
+  );
+
   const handleRestore = useCallback(async (taskId: string) => {
     try {
       const restored = await getRestoredTask(taskId);
@@ -353,6 +374,7 @@ export default function App() {
         taskId: restored.record.id,
         title: restored.record.title,
       };
+      imageHistoryIdRef.current = restored.record.id;
       const toolId = restored.record.toolId;
       if (
         toolId === "blur" ||
@@ -758,6 +780,35 @@ export default function App() {
     // Save once per fresh image load for these modes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image, uploadedFileBlob, mode]);
+
+  useEffect(() => {
+    if (!uploadedFileBlob || !imageHistoryIdRef.current) return;
+    if (mode === "blur" || mode === "report") {
+      scheduleImageHistoryPersist(mode);
+    } else if (mode === "foveal") {
+      scheduleImageHistoryPersist("foveal");
+    } else if (mode === "saliency") {
+      scheduleImageHistoryPersist("saliency");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    blurLevelIndex,
+    regions,
+    fovealParams,
+    saliencyParams,
+    hotspotCount,
+    attentionHotspots,
+    mode,
+    scheduleImageHistoryPersist,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (imageHistoryTimerRef.current != null) {
+        window.clearTimeout(imageHistoryTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (mode !== "saliency") return;

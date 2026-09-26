@@ -12,7 +12,7 @@ import {
 } from "./lib/brandRemoval";
 import {
   filesTitle,
-  saveTask,
+  upsertTask,
   type BrandRemovalPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
@@ -69,6 +69,8 @@ export default function BrandRemovalMode(props: {
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
   const hydratedRef = useRef<string | null>(null);
+  const historyIdRef = useRef<string | null>(null);
+  const historyTimerRef = useRef<number | null>(null);
 
   const settings: BrandRemovalSettings = useMemo(
     () => ({ sceneMode }),
@@ -102,6 +104,7 @@ export default function BrandRemovalMode(props: {
     const payload = initialTask.record.payload;
     if (payload.kind !== "brandRemoval") return;
     hydratedRef.current = initialTask.record.id;
+    historyIdRef.current = initialTask.record.id;
     setSceneMode(payload.sceneMode);
     for (const item of items) {
       URL.revokeObjectURL(item.thumbUrl);
@@ -133,7 +136,7 @@ export default function BrandRemovalMode(props: {
     );
   };
 
-  const persistBrandHistory = (queue: BrandRemovalItem[]) => {
+  const persistBrandHistory = async (queue: BrandRemovalItem[]) => {
     const withScene = queue.filter((i) => i.scene != null).slice(0, 5);
     const source = withScene.length > 0 ? withScene : queue.slice(0, 5);
     if (source.length === 0) return;
@@ -149,17 +152,40 @@ export default function BrandRemovalMode(props: {
         sceneRationale: item.sceneRationale,
       })),
     };
-    void saveTask({
-      toolId: "brandRemoval",
-      title: filesTitle(source.map((i) => i.sourceName)),
-      payload,
-      files: source.map((item) => ({
-        blob: item.file,
-        name: item.sourceName,
-        mime: item.file.type || "image/jpeg",
-      })),
-    });
+    try {
+      const id = await upsertTask({
+        id: historyIdRef.current,
+        toolId: "brandRemoval",
+        title: filesTitle(source.map((i) => i.sourceName)),
+        payload,
+        files: source.map((item) => ({
+          blob: item.file,
+          name: item.sourceName,
+          mime: item.file.type || "image/jpeg",
+        })),
+      });
+      historyIdRef.current = id;
+    } catch {
+      /* best-effort */
+    }
   };
+
+  useEffect(() => {
+    if (items.length === 0) return;
+    if (historyTimerRef.current != null) {
+      window.clearTimeout(historyTimerRef.current);
+    }
+    historyTimerRef.current = window.setTimeout(() => {
+      historyTimerRef.current = null;
+      void persistBrandHistory(items);
+    }, 400);
+    return () => {
+      if (historyTimerRef.current != null) {
+        window.clearTimeout(historyTimerRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneMode]);
 
   const runProcessQueue = async (queue: BrandRemovalItem[]) => {
     const work = queue.filter((i) => i.status === "queued" && !i.parseError);
@@ -174,7 +200,7 @@ export default function BrandRemovalMode(props: {
         finished.push(next);
       }
       setLiveNote("Batch finished.");
-      persistBrandHistory(finished);
+      await persistBrandHistory(finished);
       logEvent(
         "brand_batch_done",
         `${finished.filter((i) => i.scene).length}/${finished.length} analyzed`,

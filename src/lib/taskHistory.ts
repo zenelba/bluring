@@ -111,6 +111,8 @@ export type CollagesPayload = {
   background: string;
   bgRemovalModel: string;
   gap: number;
+  selectedGrid: { cols: number; rows: number } | null;
+  allGrids: boolean;
   files: Array<{ name: string; mime: string }>;
 };
 
@@ -125,6 +127,8 @@ export type AvPayload = {
     language: string;
     speakerDiarization: boolean;
   };
+  selectedQualityId: string | null;
+  selectedPickerUrl: string | null;
   probe: unknown | null;
   transcript: string | null;
   slides: Array<{ index: number; timeSec: number }>;
@@ -287,6 +291,12 @@ export type SaveTaskInput = {
   files: Array<{ blob: Blob; name: string; mime?: string }>;
 };
 
+export type UpdateTaskInput = {
+  title?: string;
+  payload: TaskPayload;
+  files?: Array<{ blob: Blob; name: string; mime?: string }>;
+};
+
 export async function saveTask(input: SaveTaskInput): Promise<string> {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -318,6 +328,71 @@ export async function saveTask(input: SaveTaskInput): Promise<string> {
   } finally {
     db.close();
   }
+}
+
+export async function updateTask(
+  id: string,
+  input: UpdateTaskInput,
+): Promise<boolean> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction([STORE_TASKS, STORE_BLOBS], "readwrite");
+    const taskStore = tx.objectStore(STORE_TASKS);
+    const blobStore = tx.objectStore(STORE_BLOBS);
+    const existing = (await idbReq(taskStore.get(id))) as TaskRecord | undefined;
+    if (!existing) {
+      await idbTxDone(tx);
+      return false;
+    }
+
+    let blobs = existing.blobs;
+    if (input.files) {
+      for (const ref of existing.blobs) {
+        blobStore.delete(ref.key);
+      }
+      blobs = [];
+      for (let i = 0; i < input.files.length; i++) {
+        const f = input.files[i];
+        const key = `${id}:${i}`;
+        const mime = f.mime || f.blob.type || "application/octet-stream";
+        blobStore.put({ key, blob: f.blob });
+        blobs.push({ key, name: f.name, mime });
+      }
+    }
+
+    const record: TaskRecord = {
+      ...existing,
+      title: input.title != null ? input.title.slice(0, 80) || "untitled" : existing.title,
+      usedAt: Date.now(),
+      payload: input.payload,
+      blobs,
+    };
+    taskStore.put(record);
+    await idbTxDone(tx);
+    return true;
+  } finally {
+    db.close();
+  }
+}
+
+export type UpsertTaskInput = SaveTaskInput & { id?: string | null };
+
+/** Update existing id if present; otherwise create. Returns the task id. */
+export async function upsertTask(input: UpsertTaskInput): Promise<string> {
+  if (input.id) {
+    const ok = await updateTask(input.id, {
+      title: input.title,
+      payload: input.payload,
+      files: input.files,
+    });
+    if (ok) return input.id;
+  }
+  return saveTask({
+    toolId: input.toolId,
+    title: input.title,
+    payload: input.payload,
+    files: input.files,
+  });
 }
 
 export function avTitleFromUrl(url: string): string {

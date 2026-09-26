@@ -20,7 +20,7 @@ import {
 } from "./lib/portraits";
 import {
   filesTitle,
-  saveTask,
+  upsertTask,
   type PortraitsPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
@@ -108,6 +108,8 @@ export default function PortraitsMode(props: {
   const [isDragOver, setIsDragOver] = useState(false);
   const suffixManualRef = useRef(false);
   const hydratedRef = useRef<string | null>(null);
+  const historyIdRef = useRef<string | null>(null);
+  const historyTimerRef = useRef<number | null>(null);
   const aspectRef = useRef(
     DEFAULT_PORTRAIT_SIZE.width / DEFAULT_PORTRAIT_SIZE.height,
   );
@@ -169,6 +171,7 @@ export default function PortraitsMode(props: {
     const payload = initialTask.record.payload;
     if (payload.kind !== "portraits") return;
     hydratedRef.current = initialTask.record.id;
+    historyIdRef.current = initialTask.record.id;
     for (const item of items) {
       if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
       if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
@@ -279,6 +282,68 @@ export default function PortraitsMode(props: {
     setHexDraft(hex);
   };
 
+  const persistPortraitsHistory = async (sourceItems: PortraitItem[]) => {
+    const source = sourceItems.slice(0, 5);
+    if (source.length === 0) return;
+    const payload: PortraitsPayload = {
+      kind: "portraits",
+      smartFaceCrop,
+      width,
+      height,
+      lockAspect,
+      background: normalizeHex(background),
+      bgRemovalModel,
+      includeBrands,
+      filenameSuffix,
+      files: source.map((item) => ({
+        name: item.sourceName,
+        mime: item.file.type || "image/jpeg",
+      })),
+    };
+    try {
+      const id = await upsertTask({
+        id: historyIdRef.current,
+        toolId: "portraits",
+        title: filesTitle(source.map((i) => i.sourceName)),
+        payload,
+        files: source.map((item) => ({
+          blob: item.file,
+          name: item.sourceName,
+          mime: item.file.type || "image/jpeg",
+        })),
+      });
+      historyIdRef.current = id;
+    } catch {
+      /* best-effort */
+    }
+  };
+
+  useEffect(() => {
+    if (items.length === 0) return;
+    if (historyTimerRef.current != null) {
+      window.clearTimeout(historyTimerRef.current);
+    }
+    historyTimerRef.current = window.setTimeout(() => {
+      historyTimerRef.current = null;
+      void persistPortraitsHistory(items);
+    }, 400);
+    return () => {
+      if (historyTimerRef.current != null) {
+        window.clearTimeout(historyTimerRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    smartFaceCrop,
+    width,
+    height,
+    lockAspect,
+    background,
+    bgRemovalModel,
+    includeBrands,
+    filenameSuffix,
+  ]);
+
   const processAll = async () => {
     if (busy || items.length === 0) return;
     setBusy(true);
@@ -295,35 +360,8 @@ export default function PortraitsMode(props: {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
 
-    const source = queue.slice(0, 5);
-    if (source.length > 0) {
-      const payload: PortraitsPayload = {
-        kind: "portraits",
-        smartFaceCrop,
-        width,
-        height,
-        lockAspect,
-        background: normalizeHex(background),
-        bgRemovalModel,
-        includeBrands,
-        filenameSuffix,
-        files: source.map((item) => ({
-          name: item.sourceName,
-          mime: item.file.type || "image/jpeg",
-        })),
-      };
-      void saveTask({
-        toolId: "portraits",
-        title: filesTitle(source.map((i) => i.sourceName)),
-        payload,
-        files: source.map((item) => ({
-          blob: item.file,
-          name: item.sourceName,
-          mime: item.file.type || "image/jpeg",
-        })),
-      });
-      logEvent("portraits_batch_done", `${source.length} file(s)`);
-    }
+    await persistPortraitsHistory(queue);
+    logEvent("portraits_batch_done", `${queue.length} file(s)`);
 
     setBusy(false);
   };

@@ -28,7 +28,7 @@ import {
 } from "./lib/portraits";
 import {
   filesTitle,
-  saveTask,
+  upsertTask,
   type CollagesPayload,
   type RestoredTask,
 } from "./lib/taskHistory";
@@ -98,6 +98,8 @@ export default function CollagesMode(props: {
   const [selectedGrid, setSelectedGrid] = useState<CollageGrid | null>(null);
   const [allGrids, setAllGrids] = useState(false);
   const hydratedRef = useRef<string | null>(null);
+  const historyIdRef = useRef<string | null>(null);
+  const historyTimerRef = useRef<number | null>(null);
 
   const selectedLayout =
     COLLAGE_LAYOUTS.find((item) => item.id === layout) ?? COLLAGE_LAYOUTS[0];
@@ -178,6 +180,7 @@ export default function CollagesMode(props: {
     const payload = initialTask.record.payload;
     if (payload.kind !== "collages") return;
     hydratedRef.current = initialTask.record.id;
+    historyIdRef.current = initialTask.record.id;
     for (const item of items) URL.revokeObjectURL(item.thumbUrl);
     for (const result of results) URL.revokeObjectURL(result.url);
     setResults([]);
@@ -190,14 +193,80 @@ export default function CollagesMode(props: {
     setHexDraft(payload.background);
     setBgRemovalModel(payload.bgRemovalModel as BgRemovalModel);
     setGap(payload.gap);
-    setSelectedGrid(null);
-    setAllGrids(false);
+    setSelectedGrid(payload.selectedGrid ?? null);
+    setAllGrids(Boolean(payload.allGrids));
     setItems(createCollageItems(initialTask.files));
     setError(null);
     setLiveNote(`Restored ${initialTask.files.length} image(s).`);
     onInitialConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTask]);
+
+  const persistCollagesHistory = async (sourceItems: CollageItem[]) => {
+    const source = sourceItems.slice(0, 8);
+    if (source.length === 0) return;
+    const payload: CollagesPayload = {
+      kind: "collages",
+      layout,
+      stripWhitespace,
+      optimizeForPowerpoint,
+      removeBackground,
+      background: normalizeHex(background),
+      bgRemovalModel,
+      gap,
+      selectedGrid: selectedGrid
+        ? { cols: selectedGrid.cols, rows: selectedGrid.rows }
+        : null,
+      allGrids,
+      files: source.map((item) => ({
+        name: item.sourceName,
+        mime: item.file.type || "image/jpeg",
+      })),
+    };
+    try {
+      const id = await upsertTask({
+        id: historyIdRef.current,
+        toolId: "collages",
+        title: filesTitle(source.map((i) => i.sourceName)),
+        payload,
+        files: source.map((item) => ({
+          blob: item.file,
+          name: item.sourceName,
+          mime: item.file.type || "image/jpeg",
+        })),
+      });
+      historyIdRef.current = id;
+    } catch {
+      /* best-effort */
+    }
+  };
+
+  useEffect(() => {
+    if (items.length === 0) return;
+    if (historyTimerRef.current != null) {
+      window.clearTimeout(historyTimerRef.current);
+    }
+    historyTimerRef.current = window.setTimeout(() => {
+      historyTimerRef.current = null;
+      void persistCollagesHistory(items);
+    }, 400);
+    return () => {
+      if (historyTimerRef.current != null) {
+        window.clearTimeout(historyTimerRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    layout,
+    stripWhitespace,
+    optimizeForPowerpoint,
+    removeBackground,
+    background,
+    bgRemovalModel,
+    gap,
+    selectedGrid,
+    allGrids,
+  ]);
 
   const patchItem = (localId: string, patch: Partial<CollageItem>) => {
     setItems((prev) =>
@@ -241,31 +310,9 @@ export default function CollagesMode(props: {
         return incoming;
       });
       setLiveNote(`${incoming.length} image${incoming.length === 1 ? "" : "s"} loaded.`);
+      historyIdRef.current = null;
       const source = incoming.slice(0, 8);
-      const payload: CollagesPayload = {
-        kind: "collages",
-        layout,
-        stripWhitespace,
-        optimizeForPowerpoint,
-        removeBackground,
-        background: normalizeHex(background),
-        bgRemovalModel,
-        gap,
-        files: source.map((item) => ({
-          name: item.sourceName,
-          mime: item.file.type || "image/jpeg",
-        })),
-      };
-      void saveTask({
-        toolId: "collages",
-        title: filesTitle(source.map((i) => i.sourceName)),
-        payload,
-        files: source.map((item) => ({
-          blob: item.file,
-          name: item.sourceName,
-          mime: item.file.type || "image/jpeg",
-        })),
-      });
+      await persistCollagesHistory(source);
       logEvent("collage_files_loaded", `${incoming.length} image(s)`);
     } catch (err) {
       setError(
@@ -358,6 +405,7 @@ export default function CollagesMode(props: {
             ? `Ready · ${describeGridProposal(gridsForBuild[0].cols, gridsForBuild[0].rows)}`
             : "Collage ready.",
       );
+      await persistCollagesHistory(items);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to build collage");
       setLiveNote("");
