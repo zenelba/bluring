@@ -870,21 +870,22 @@ function assignLayoutGroups(items: DetectedText[]): DetectedText[] {
     for (let j = i + 1; j < pills.length; j++) {
       const a = pills[i].item;
       const b = pills[j].item;
-      const ay = a.bbox.y + a.bbox.h / 2;
-      const by = b.bbox.y + b.bbox.h / 2;
-      const avgH = (a.bbox.h + b.bbox.h) / 2;
-      if (Math.abs(ay - by) > avgH * 0.85) continue;
-      const aRight = a.bbox.x + a.bbox.w;
-      const bRight = b.bbox.x + b.bbox.w;
-      const gap =
-        a.bbox.x < b.bbox.x ? b.bbox.x - aRight : a.bbox.x - bRight;
-      // Same-row chips: allow a wider gap so adjacent pills always reflow together
+      const ar = a.container.rect ?? a.bbox;
+      const br = b.container.rect ?? b.bbox;
+      const ay = ar.y + ar.h / 2;
+      const by = br.y + br.h / 2;
+      const avgH = (ar.h + br.h) / 2;
+      if (Math.abs(ay - by) > avgH * 1.0) continue;
+      const aRight = ar.x + ar.w;
+      const bRight = br.x + br.w;
+      const gap = ar.x < br.x ? br.x - aRight : ar.x - bRight;
+      // Same-row chips: wide gap so ENOTNA CENA + 2 LETI always reflow together
       const maxGap = Math.max(
-        Math.max(a.bbox.w, b.bbox.w) * 1.6,
-        avgH * 3,
-        0.12,
+        Math.max(ar.w, br.w) * 2.0,
+        avgH * 4,
+        0.15,
       );
-      if (gap < 0 || gap > maxGap) continue;
+      if (gap < -0.02 || gap > maxGap) continue;
       if (a.layoutGroupId && b.layoutGroupId && a.layoutGroupId !== b.layoutGroupId) {
         union(a.layoutGroupId, b.layoutGroupId);
       }
@@ -1433,7 +1434,7 @@ type PillLayout = {
   fontSize: number;
   scaleX: number;
   ascent: number;
-  padLeft: number;
+  padH: number;
 };
 
 function measurePill(
@@ -1449,44 +1450,38 @@ function measurePill(
   scaleX: number;
   ascent: number;
   radius: number;
-  padLeft: number;
+  padH: number;
   orig: PxRect;
 } {
   const orig = pillContainerPx(item, imgW, imgH);
-  const textBox = bboxToPx(item.bbox, imgW, imgH);
   const fontSize = itemFontSize(item, imgH);
   const scaleX = itemScaleX(item);
   const family = item.style.fontFamily || "Montserrat";
   const weight = itemFontWeight(item);
 
-  const cal = calibrate(ctx, text, family, weight, {
-    x: 0,
-    y: 0,
-    w: textBox.w,
-    h: textBox.h,
-  });
-  const ascent = (cal.ascent / cal.size) * fontSize;
-
   ctx.font = fontCss(family, weight, fontSize);
-  const textW = ctx.measureText(text).width;
+  ctx.textBaseline = "alphabetic";
 
-  // Measured padding from container.rect vs text box (stored as padX * textH)
-  const padLeft =
-    item.container.rect != null
-      ? Math.max(0, textBox.x - orig.x)
-      : item.container.padX * textBox.h;
-  const padRight =
-    item.container.rect != null
-      ? Math.max(0, orig.x + orig.w - (textBox.x + textBox.w))
-      : padLeft;
+  // Padding from rendered original ink vs plate (not OCR text box)
+  const origMetrics = ctx.measureText(item.text || "Hg");
+  const origAdvance = Math.max(1, origMetrics.width * scaleX);
+  const minPad = orig.h * 0.22;
+  const padH = Math.max(minPad, (orig.w - origAdvance) / 2);
 
-  const w = Math.max(orig.h * 0.8, textW * scaleX + padLeft + padRight);
+  const newMetrics = ctx.measureText(text || "Hg");
+  const newAdvance = Math.max(1, newMetrics.width * scaleX);
+  const ascent =
+    newMetrics.actualBoundingBoxAscent > 0
+      ? newMetrics.actualBoundingBoxAscent
+      : fontSize * 0.8;
+
+  const w = Math.max(orig.h * 0.8, newAdvance + 2 * padH);
   const h = orig.h;
   const radius =
     item.container.radiusPxHint > 0
       ? item.container.radiusPxHint
       : h / 2;
-  return { w, h, fontSize, scaleX, ascent, radius, padLeft, orig };
+  return { w, h, fontSize, scaleX, ascent, radius, padH, orig };
 }
 
 function layoutPillGroup(
@@ -1527,7 +1522,7 @@ function layoutPillGroup(
       fontSize: m.fontSize,
       scaleX: m.scaleX,
       ascent: m.ascent,
-      padLeft: m.padLeft,
+      padH: m.padH,
     };
     cursorX += m.w + (gaps[i] ?? 0);
     return layout;
@@ -1545,7 +1540,7 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   const cx = layout.x + layout.w / 2;
   const cy = layout.y + layout.h / 2;
 
-  // Center text in the pill (horizontal + vertical); scale around the center
+  // Always center in pill — ignore style.align (pills resize to text)
   ctx.save();
   ctx.translate(cx, cy);
   ctx.scale(layout.scaleX, 1);
@@ -1557,12 +1552,27 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   ctx.restore();
 }
 
+/** Normalized plate rect for same-row / gap checks (prefer measured container). */
+function pillNormRect(item: DetectedText): TextBBox {
+  if (item.container.rect) return item.container.rect;
+  const padX = item.container.padX * item.bbox.h;
+  const padY = item.container.padY * item.bbox.h;
+  return {
+    x: item.bbox.x - padX,
+    y: item.bbox.y - padY,
+    w: item.bbox.w + padX * 2,
+    h: item.bbox.h + padY * 2,
+  };
+}
+
 function pillsOnSameRow(a: DetectedText, b: DetectedText): boolean {
   if (a.container.type !== "pill" || b.container.type !== "pill") return false;
-  const ay = a.bbox.y + a.bbox.h / 2;
-  const by = b.bbox.y + b.bbox.h / 2;
-  const avgH = (a.bbox.h + b.bbox.h) / 2;
-  return Math.abs(ay - by) <= avgH * 0.85;
+  const ar = pillNormRect(a);
+  const br = pillNormRect(b);
+  const ay = ar.y + ar.h / 2;
+  const by = br.y + br.h / 2;
+  const avgH = (ar.h + br.h) / 2;
+  return Math.abs(ay - by) <= avgH * 1.0;
 }
 
 /** Expand changed pill ids to include same-row neighbors so chips reflow together. */
@@ -1580,17 +1590,16 @@ function expandPillRowIds(
       for (const q of pills) {
         if (out.has(q.id)) continue;
         if (!pillsOnSameRow(p, q)) continue;
-        // Only pull neighbors that are horizontally close (same chip row)
+        const pr = pillNormRect(p);
+        const qr = pillNormRect(q);
         const gap =
-          p.bbox.x < q.bbox.x
-            ? q.bbox.x - (p.bbox.x + p.bbox.w)
-            : p.bbox.x - (q.bbox.x + q.bbox.w);
+          pr.x < qr.x ? qr.x - (pr.x + pr.w) : pr.x - (qr.x + qr.w);
         const maxGap = Math.max(
-          Math.max(p.bbox.w, q.bbox.w) * 1.6,
-          ((p.bbox.h + q.bbox.h) / 2) * 3,
-          0.12,
+          Math.max(pr.w, qr.w) * 2.0,
+          ((pr.h + qr.h) / 2) * 4,
+          0.15,
         );
-        if (gap >= 0 && gap <= maxGap) {
+        if (gap >= -0.02 && gap <= maxGap) {
           out.add(q.id);
           grew = true;
         }
