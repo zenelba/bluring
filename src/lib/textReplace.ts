@@ -1792,30 +1792,8 @@ function measurePill(
 
   const h = orig.h;
   const textBox = bboxToPx(item.bbox, imgW, imgH);
-  const origMetrics = pillTextInkWidth(ctx, item.text || "Hg", scaleX);
-  const origDrawn = measureDrawnTextWidth(
-    family,
-    weight,
-    sizePx,
-    scaleX,
-    item.text || "Hg",
-  );
-  // Prefer the tighter OCR box as a lower bound on original ink so pad isn't
-  // collapsed when measureText overestimates the source glyphs.
-  const origInk = Math.max(
-    1,
-    Math.min(
-      Math.max(origMetrics.width, origDrawn),
-      textBox.w,
-      orig.w * 0.92,
-    ),
-  );
-
-  const fromPlate = (orig.w - origInk) / 2;
-  const fromContainer = (item.container.padX || 0.45) * h;
-  // Keep side pad at least ~half the plate height (chip look) and never below
-  // the measured source inset.
-  const padH = Math.max(0.5 * h, fromContainer, fromPlate, 8);
+  // Source side pad from plate vs OCR box (stable; ignores flaky measureText).
+  const padH = Math.max(8, (orig.w - textBox.w) / 2);
 
   const newMetrics = pillTextInkWidth(ctx, text || "Hg", scaleX);
   const newDrawn = measureDrawnTextWidth(
@@ -1825,29 +1803,12 @@ function measurePill(
     scaleX,
     text || "Hg",
   );
-  // Unscaled advance as a floor — scaleX can undershoot bold display width.
-  ctx.font = css;
-  const rawAdvance = Math.max(1, ctx.measureText(text || "Hg").width);
-  const newInk = Math.max(newMetrics.width, newDrawn, rawAdvance * scaleX);
+  const newInk = Math.max(newMetrics.width, newDrawn);
   const ascent =
     newMetrics.ascent > 0 ? newMetrics.ascent : sizePx * 0.8;
 
-  // Character-count floor: bold caps are ~0.62em; stops "GARANCIJA CENE" from
-  // keeping the old "ENOTNA CENA" plate when metrics under-read.
-  const origLen = Math.max(1, (item.text || "").trim().length);
-  const newLen = Math.max(1, (text || "").trim().length);
-  const lenRatio = Math.max(1, newLen / origLen);
-  const charFloor = newLen * sizePx * 0.58 * Math.min(1, scaleX) + 2 * padH;
-  const grownFromOrig = orig.w * lenRatio;
-  const inkFloor = newInk + 2 * padH;
-  // User-requested ~15% safety *after* width math so glyphs never crowd edges.
-  const contentW = Math.max(inkFloor, charFloor, grownFromOrig) * 1.15;
-  let w = Math.max(h * 0.8, contentW, orig.w);
-
-  // Final guard: plate must fit rasterized ink + pad (+15%).
-  const fitted = (newInk + 2 * padH) * 1.15;
-  if (w < fitted) w = fitted;
-
+  // Single model: drawn ink + source pad, then +15% safety.
+  const w = Math.max(orig.w, (newInk + 2 * padH) * 1.15, h * 0.8);
   const radius =
     item.container.radiusPxHint > 0
       ? item.container.radiusPxHint
@@ -1872,6 +1833,7 @@ function layoutPillGroup(
   imgW: number,
   imgH: number,
 ): PillLayout[] {
+  if (members.length === 0) return [];
   const sorted = [...members].sort((a, b) => a.bbox.x - b.bbox.x);
   const measured = sorted.map((item) => {
     const text = texts.get(item.id) ?? item.text;
@@ -1879,9 +1841,7 @@ function layoutPillGroup(
     return { item, text, ...m };
   });
 
-  // Original gaps between consecutive pills (container edges).
-  // When OCR splits one chip ("2"+"LETI") both may share nearly the same plate —
-  // use a small positive gap instead of stacking them on the same x.
+  // Gaps from original plate edges (merged co-plate chips already share one plate).
   const gaps: number[] = [];
   for (let i = 0; i < measured.length - 1; i++) {
     const a = measured[i].orig;
@@ -1914,7 +1874,6 @@ function layoutPillGroup(
     return layout;
   });
 
-  // Hard no-overlap pass: a grown plate must push everything to its right.
   for (let i = 1; i < layouts.length; i++) {
     const prev = layouts[i - 1];
     const minGap = Math.max(4, Math.round(prev.h * 0.2));
@@ -2014,6 +1973,51 @@ function chipsOnSameRow(a: DetectedText, b: DetectedText): boolean {
   return Math.abs(ay - by) <= avgH * 1.15;
 }
 
+function normRectIoU(a: TextBBox, b: TextBBox): number {
+  const ax1 = a.x + a.w;
+  const ay1 = a.y + a.h;
+  const bx1 = b.x + b.w;
+  const by1 = b.y + b.h;
+  const ix0 = Math.max(a.x, b.x);
+  const iy0 = Math.max(a.y, b.y);
+  const ix1 = Math.min(ax1, bx1);
+  const iy1 = Math.min(ay1, by1);
+  const iw = Math.max(0, ix1 - ix0);
+  const ih = Math.max(0, iy1 - iy0);
+  const inter = iw * ih;
+  const uni = a.w * a.h + b.w * b.h - inter;
+  return uni > 0 ? inter / uni : 0;
+}
+
+function pxRectsIntersect(a: PxRect, b: PxRect, pad = 0): boolean {
+  return !(
+    a.x + a.w + pad < b.x ||
+    b.x + b.w + pad < a.x ||
+    a.y + a.h + pad < b.y ||
+    b.y + b.h + pad < a.y
+  );
+}
+
+function unionPxRects(rects: PxRect[], pad = 0): PxRect | null {
+  if (rects.length === 0) return null;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const r of rects) {
+    x0 = Math.min(x0, r.x);
+    y0 = Math.min(y0, r.y);
+    x1 = Math.max(x1, r.x + r.w);
+    y1 = Math.max(y1, r.y + r.h);
+  }
+  return {
+    x: x0 - pad,
+    y: y0 - pad,
+    w: x1 - x0 + pad * 2,
+    h: y1 - y0 + pad * 2,
+  };
+}
+
 /** Expand changed ids to same-row chip neighbors so plates reflow together. */
 function expandPillRowIds(
   items: DetectedText[],
@@ -2064,7 +2068,297 @@ function asPillForLayout(item: DetectedText): DetectedText {
   };
 }
 
-function collectEraseTargets(
+/**
+ * Merge OCR fragments that share nearly the same plate (e.g. "2" + "LETI")
+ * into one chip before measure / wipe / draw.
+ */
+function mergeCoPlateMembers(
+  members: DetectedText[],
+  texts: Map<string, string>,
+): { members: DetectedText[]; texts: Map<string, string>; absorbed: Set<string> } {
+  const absorbed = new Set<string>();
+  if (members.length < 2) return { members, texts, absorbed };
+
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    const p = parent.get(id) ?? id;
+    if (p !== id) {
+      const root = find(p);
+      parent.set(id, root);
+      return root;
+    }
+    return id;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  for (const m of members) parent.set(m.id, m.id);
+
+  for (let i = 0; i < members.length; i++) {
+    for (let j = i + 1; j < members.length; j++) {
+      const a = members[i];
+      const b = members[j];
+      if (!chipsOnSameRow(a, b)) continue;
+      const ar = rowChipNormRect(a);
+      const br = rowChipNormRect(b);
+      const iou = normRectIoU(ar, br);
+      const sameFill =
+        !!a.container.fill &&
+        !!b.container.fill &&
+        a.container.fill.toLowerCase() === b.container.fill.toLowerCase();
+      // Shared plate: high IoU, or same vivid fill with heavy x-overlap
+      const ax1 = ar.x + ar.w;
+      const bx1 = br.x + br.w;
+      const overlapX = Math.max(0, Math.min(ax1, bx1) - Math.max(ar.x, br.x));
+      const minW = Math.min(ar.w, br.w);
+      const heavyOverlap = minW > 0 && overlapX / minW >= 0.55;
+      if (iou >= 0.55 || (sameFill && heavyOverlap)) {
+        union(a.id, b.id);
+      }
+    }
+  }
+
+  const groups = new Map<string, DetectedText[]>();
+  for (const m of members) {
+    const root = find(m.id);
+    const list = groups.get(root) ?? [];
+    list.push(m);
+    groups.set(root, list);
+  }
+
+  const nextTexts = new Map(texts);
+  const out: DetectedText[] = [];
+
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      out.push(group[0]);
+      continue;
+    }
+    const sorted = [...group].sort((a, b) => a.bbox.x - b.bbox.x);
+    // Prefer number item as survivor so Serija still targets it
+    const survivor =
+      sorted.find((m) => m.number != null) ?? sorted[0];
+    const combined = sorted
+      .map((m) => nextTexts.get(m.id) ?? m.text)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    nextTexts.set(survivor.id, combined);
+
+    // Union plate rects in normalized space
+    const rects = sorted.map((m) => rowChipNormRect(m));
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const r of rects) {
+      x0 = Math.min(x0, r.x);
+      y0 = Math.min(y0, r.y);
+      x1 = Math.max(x1, r.x + r.w);
+      y1 = Math.max(y1, r.y + r.h);
+    }
+    const unionRect: TextBBox = {
+      x: x0,
+      y: y0,
+      w: Math.max(0.001, x1 - x0),
+      h: Math.max(0.001, y1 - y0),
+    };
+    // Union OCR bbox so pad math uses full glyph span
+    let bx0 = Infinity;
+    let by0 = Infinity;
+    let bx1 = -Infinity;
+    let by1 = -Infinity;
+    for (const m of sorted) {
+      bx0 = Math.min(bx0, m.bbox.x);
+      by0 = Math.min(by0, m.bbox.y);
+      bx1 = Math.max(bx1, m.bbox.x + m.bbox.w);
+      by1 = Math.max(by1, m.bbox.y + m.bbox.h);
+    }
+
+    const merged: DetectedText = {
+      ...survivor,
+      text: sorted.map((m) => m.text).join(" ").replace(/\s+/g, " ").trim(),
+      bbox: {
+        x: bx0,
+        y: by0,
+        w: Math.max(0.001, bx1 - bx0),
+        h: Math.max(0.001, by1 - by0),
+      },
+      container: {
+        ...survivor.container,
+        type: "pill",
+        fill:
+          survivor.container.fill ??
+          sorted.find((m) => m.container.fill)?.container.fill ??
+          "#FFD400",
+        rect: unionRect,
+      },
+    };
+    out.push(asPillForLayout(merged));
+    for (const m of sorted) {
+      if (m.id !== survivor.id) absorbed.add(m.id);
+    }
+  }
+
+  return { members: out, texts: nextTexts, absorbed };
+}
+
+/**
+ * Full-pixel gradient reconstruct for a chip-row AABB.
+ * Samples above/below each column (rejects vivid chip colors); lerps by y.
+ * No left/right borders, no ink-only mask.
+ */
+function wipeChipRowGradient(
+  ctx: CanvasRenderingContext2D,
+  aabb: PxRect,
+  imgW: number,
+  imgH: number,
+) {
+  const x0 = Math.max(0, Math.floor(aabb.x));
+  const y0 = Math.max(0, Math.floor(aabb.y));
+  const x1 = Math.min(imgW, Math.ceil(aabb.x + aabb.w));
+  const y1 = Math.min(imgH, Math.ceil(aabb.y + aabb.h));
+  const rw = x1 - x0;
+  const rh = y1 - y0;
+  if (rw <= 0 || rh <= 0) return;
+
+  const sampleSpan = Math.max(6, Math.min(16, Math.round(rh * 0.45)));
+  const margin = sampleSpan + 2;
+  const sx0 = Math.max(0, x0 - 2);
+  const sy0 = Math.max(0, y0 - margin);
+  const sx1 = Math.min(imgW, x1 + 2);
+  const sy1 = Math.min(imgH, y1 + margin);
+  const sw = sx1 - sx0;
+  const sh = sy1 - sy0;
+  const imageData = ctx.getImageData(sx0, sy0, sw, sh);
+  const data = imageData.data;
+
+  const readRgb = (gx: number, gy: number): Rgb | null => {
+    if (gx < sx0 || gy < sy0 || gx >= sx1 || gy >= sy1) return null;
+    const i = ((gy - sy0) * sw + (gx - sx0)) * 4;
+    return { r: data[i], g: data[i + 1], b: data[i + 2] };
+  };
+
+  const cleanSample = (
+    gx: number,
+    yStart: number,
+    yEnd: number,
+  ): Rgb | null => {
+    const pool: Rgb[] = [];
+    const step = Math.max(1, Math.floor(Math.abs(yEnd - yStart) / 6));
+    const lo = Math.min(yStart, yEnd);
+    const hi = Math.max(yStart, yEnd);
+    for (let y = lo; y <= hi; y += step) {
+      const c = readRgb(gx, y);
+      if (!c) continue;
+      if (isVividChipColor(c)) continue;
+      // Skip near-white flecks / UI chrome
+      if (c.r > 230 && c.g > 230 && c.b > 230) continue;
+      pool.push(c);
+    }
+    if (pool.length < 2) return null;
+    return {
+      r: medianChannel(pool.map((c) => c.r)),
+      g: medianChannel(pool.map((c) => c.g)),
+      b: medianChannel(pool.map((c) => c.b)),
+    };
+  };
+
+  const top: Array<Rgb | null> = new Array(rw);
+  const bot: Array<Rgb | null> = new Array(rw);
+  for (let i = 0; i < rw; i++) {
+    const gx = x0 + i;
+    top[i] = cleanSample(gx, y0 - sampleSpan, y0 - 2);
+    bot[i] = cleanSample(gx, y1 + 1, y1 + sampleSpan);
+  }
+
+  // Fill gaps from nearest clean column
+  const fillGaps = (arr: Array<Rgb | null>) => {
+    let last: Rgb | null = null;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i]) last = arr[i];
+      else if (last) arr[i] = last;
+    }
+    last = null;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i]) last = arr[i];
+      else if (last) arr[i] = last;
+    }
+  };
+  fillGaps(top);
+  fillGaps(bot);
+
+  // Global fallback if a whole edge failed
+  const allClean: Rgb[] = [];
+  for (let i = 0; i < rw; i++) {
+    if (top[i]) allClean.push(top[i]!);
+    if (bot[i]) allClean.push(bot[i]!);
+  }
+  const fallback: Rgb =
+    allClean.length > 0
+      ? {
+          r: medianChannel(allClean.map((c) => c.r)),
+          g: medianChannel(allClean.map((c) => c.g)),
+          b: medianChannel(allClean.map((c) => c.b)),
+        }
+      : { r: 0, g: 140, b: 200 };
+
+  for (let i = 0; i < rw; i++) {
+    if (!top[i]) top[i] = bot[i] ?? fallback;
+    if (!bot[i]) bot[i] = top[i] ?? fallback;
+  }
+
+  // Light horizontal smooth (3-tap) so column noise doesn't streak
+  const smooth = (arr: Array<Rgb | null>): Rgb[] => {
+    const out: Rgb[] = new Array(rw);
+    for (let i = 0; i < rw; i++) {
+      const samples = [arr[i - 1], arr[i], arr[i + 1]].filter(Boolean) as Rgb[];
+      out[i] = {
+        r: medianChannel(samples.map((c) => c.r)),
+        g: medianChannel(samples.map((c) => c.g)),
+        b: medianChannel(samples.map((c) => c.b)),
+      };
+    }
+    return out;
+  };
+  const topS = smooth(top);
+  const botS = smooth(bot);
+
+  for (let j = 0; j < rh; j++) {
+    const t = rh <= 1 ? 0.5 : j / (rh - 1);
+    for (let i = 0; i < rw; i++) {
+      const a = topS[i];
+      const b = botS[i];
+      const r = a.r + (b.r - a.r) * t;
+      const g = a.g + (b.g - a.g) * t;
+      const bl = a.b + (b.b - a.b) * t;
+      const di = ((y0 + j - sy0) * sw + (x0 + i - sx0)) * 4;
+      data[di] = Math.max(0, Math.min(255, Math.round(r)));
+      data[di + 1] = Math.max(0, Math.min(255, Math.round(g)));
+      data[di + 2] = Math.max(0, Math.min(255, Math.round(bl)));
+      data[di + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imageData, sx0, sy0);
+}
+
+type ChipRowPlan = {
+  members: DetectedText[];
+  texts: Map<string, string>;
+  layouts: PillLayout[];
+  aabb: PxRect;
+  handledIds: Set<string>;
+};
+
+/**
+ * Build chip rows for wipe + redraw: expand neighbors, merge co-plate
+ * fragments, layout, then pull in any chip whose plate hits the grown AABB.
+ */
+function collectChipRowPlans(
   ctx: CanvasRenderingContext2D,
   items: DetectedText[],
   edits: TextReplaceEdits,
@@ -2072,66 +2366,162 @@ function collectEraseTargets(
   seriesValue: number | null,
   imgW: number,
   imgH: number,
-): PxRect[] {
+): ChipRowPlan[] {
   let changedIds = new Set(
     items
       .filter((item) => itemChanged(item, edits[item.id], seriesItemId))
       .map((item) => item.id),
   );
 
-  // If any member of a pill group changes, erase the whole group
-  const groupMembers = new Map<string, DetectedText[]>();
   for (const item of items) {
-    if (!isRowChip(item) || !item.layoutGroupId) continue;
-    const list = groupMembers.get(item.layoutGroupId) ?? [];
-    list.push(item);
-    groupMembers.set(item.layoutGroupId, list);
-  }
-
-  for (const [, members] of groupMembers) {
-    if (members.some((m) => changedIds.has(m.id))) {
-      for (const m of members) changedIds.add(m.id);
+    if (!item.layoutGroupId || !changedIds.has(item.id)) continue;
+    for (const sib of items) {
+      if (sib.layoutGroupId === item.layoutGroupId) changedIds.add(sib.id);
     }
   }
-
   changedIds = expandPillRowIds(items, changedIds);
 
-  const texts = new Map<string, string>();
+  const baseTexts = new Map<string, string>();
   for (const item of items) {
     const seriesVal =
       seriesItemId === item.id && seriesValue != null ? seriesValue : null;
-    texts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
+    baseTexts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
   }
 
-  const rects: PxRect[] = [];
-  const pillHandled = new Set<string>();
-  const pillChanged = items
-    .filter((i) => isRowChip(i) && changedIds.has(i.id))
-    .map(asPillForLayout);
+  const allChips = items.filter(isRowChip).map(asPillForLayout);
+  const plans: ChipRowPlan[] = [];
+  const globalHandled = new Set<string>();
 
-  for (const seed of pillChanged) {
-    if (pillHandled.has(seed.id)) continue;
-    const row = pillChanged.filter(
-      (p) =>
-        p.id === seed.id ||
-        (p.layoutGroupId && p.layoutGroupId === seed.layoutGroupId) ||
-        chipsOnSameRow(p, seed) ||
-        pillsOnSameRow(p, seed),
-    );
-    for (const m of row) pillHandled.add(m.id);
-    const layouts = layoutPillGroup(ctx, row, texts, imgW, imgH);
-    for (const layout of layouts) {
-      const orig = pillContainerPx(layout.item, imgW, imgH);
-      const x0 = Math.min(orig.x, layout.x) - 2;
-      const y0 = Math.min(orig.y, layout.y) - 2;
-      const x1 = Math.max(orig.x + orig.w, layout.x + layout.w) + 2;
-      const y1 = Math.max(orig.y + orig.h, layout.y + layout.h) + 2;
-      rects.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+  const seeds = allChips.filter((c) => changedIds.has(c.id));
+  for (const seed of seeds) {
+    if (globalHandled.has(seed.id)) continue;
+
+    let rowIds = new Set<string>([seed.id]);
+    // Grow row by same-row proximity among chips that are changed or nearby
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const p of allChips) {
+        if (!rowIds.has(p.id)) continue;
+        for (const q of allChips) {
+          if (rowIds.has(q.id)) continue;
+          if (!chipsOnSameRow(p, q) && !pillsOnSameRow(p, q)) continue;
+          const pr = rowChipNormRect(p);
+          const qr = rowChipNormRect(q);
+          const gap =
+            pr.x < qr.x ? qr.x - (pr.x + pr.w) : pr.x - (qr.x + qr.w);
+          const maxGap = Math.max(
+            Math.max(pr.w, qr.w) * 2.5,
+            ((pr.h + qr.h) / 2) * 5,
+            0.18,
+          );
+          // Include if near, or already in changed set
+          if (
+            (gap >= -0.05 && gap <= maxGap) ||
+            changedIds.has(q.id)
+          ) {
+            if (gap >= -0.05 && gap <= maxGap) {
+              rowIds.add(q.id);
+              grew = true;
+            } else if (changedIds.has(q.id) && chipsOnSameRow(p, q)) {
+              rowIds.add(q.id);
+              grew = true;
+            }
+          }
+        }
+      }
     }
+
+    // Iteratively add chips whose plates intersect grown AABB
+    let members = allChips.filter((c) => rowIds.has(c.id));
+    let merged = mergeCoPlateMembers(members, baseTexts);
+    let layouts = layoutPillGroup(
+      ctx,
+      merged.members,
+      merged.texts,
+      imgW,
+      imgH,
+    );
+    for (let iter = 0; iter < 4; iter++) {
+      const footprint: PxRect[] = [];
+      for (const m of merged.members) {
+        footprint.push(pillContainerPx(m, imgW, imgH));
+      }
+      for (const layout of layouts) {
+        footprint.push({
+          x: layout.x,
+          y: layout.y,
+          w: layout.w,
+          h: layout.h,
+        });
+      }
+      const aabb = unionPxRects(footprint, 4);
+      if (!aabb) break;
+      let added = false;
+      for (const q of allChips) {
+        if (rowIds.has(q.id) || merged.absorbed.has(q.id)) continue;
+        if (!chipsOnSameRow(q, seed) && !members.some((m) => chipsOnSameRow(m, q))) {
+          continue;
+        }
+        const plate = pillContainerPx(q, imgW, imgH);
+        if (pxRectsIntersect(plate, aabb, 2)) {
+          rowIds.add(q.id);
+          added = true;
+        }
+      }
+      if (!added) break;
+      members = allChips.filter((c) => rowIds.has(c.id));
+      merged = mergeCoPlateMembers(members, baseTexts);
+      layouts = layoutPillGroup(
+        ctx,
+        merged.members,
+        merged.texts,
+        imgW,
+        imgH,
+      );
+    }
+
+    const footprint: PxRect[] = [];
+    for (const m of merged.members) {
+      footprint.push(pillContainerPx(m, imgW, imgH));
+    }
+    for (const layout of layouts) {
+      footprint.push({ x: layout.x, y: layout.y, w: layout.w, h: layout.h });
+    }
+    const aabb = unionPxRects(footprint, 4);
+    if (!aabb || layouts.length === 0) continue;
+
+    const handledIds = new Set<string>([
+      ...merged.members.map((m) => m.id),
+      ...merged.absorbed,
+    ]);
+    for (const id of handledIds) globalHandled.add(id);
+
+    plans.push({
+      members: merged.members,
+      texts: merged.texts,
+      layouts,
+      aabb,
+      handledIds,
+    });
   }
 
+  return plans;
+}
+
+function collectPlainEraseTargets(
+  items: DetectedText[],
+  edits: TextReplaceEdits,
+  seriesItemId: string | null,
+  chipHandled: Set<string>,
+  imgW: number,
+  imgH: number,
+): PxRect[] {
+  const rects: PxRect[] = [];
   for (const item of items) {
-    if (!changedIds.has(item.id) || isRowChip(item)) continue;
+    if (chipHandled.has(item.id)) continue;
+    if (isRowChip(item)) continue;
+    if (!itemChanged(item, edits[item.id], seriesItemId)) continue;
     const box = bboxToPx(item.bbox, imgW, imgH);
     rects.push({
       x: box.x - 2,
@@ -2159,7 +2549,7 @@ function buildCleanPlate(
   if (!ctx) throw new Error("Canvas unavailable");
   ctx.drawImage(source, 0, 0);
 
-  const rects = collectEraseTargets(
+  const chipRows = collectChipRowPlans(
     ctx,
     items,
     edits,
@@ -2168,7 +2558,21 @@ function buildCleanPlate(
     imgW,
     imgH,
   );
-  for (const rect of rects) {
+  const chipHandled = new Set<string>();
+  for (const row of chipRows) {
+    wipeChipRowGradient(ctx, row.aabb, imgW, imgH);
+    for (const id of row.handledIds) chipHandled.add(id);
+  }
+
+  const plainRects = collectPlainEraseTargets(
+    items,
+    edits,
+    seriesItemId,
+    chipHandled,
+    imgW,
+    imgH,
+  );
+  for (const rect of plainRects) {
     inpaintRect(ctx, rect, imgW, imgH);
   }
   return canvas;
@@ -2183,68 +2587,33 @@ function drawAllReplacements(
   imgW: number,
   imgH: number,
 ) {
-  const texts = new Map<string, string>();
-  for (const item of items) {
-    const seriesVal =
-      seriesItemId === item.id && seriesValue != null ? seriesValue : null;
-    texts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
-  }
-
-  const changed = (item: DetectedText) =>
-    itemChanged(item, edits[item.id], seriesItemId);
-
-  let redrawIds = new Set(
-    items.filter(changed).map((item) => item.id),
+  const chipRows = collectChipRowPlans(
+    ctx,
+    items,
+    edits,
+    seriesItemId,
+    seriesValue,
+    imgW,
+    imgH,
   );
-  // Include layout-group siblings
-  for (const item of items) {
-    if (!item.layoutGroupId || !redrawIds.has(item.id)) continue;
-    for (const sib of items) {
-      if (sib.layoutGroupId === item.layoutGroupId) redrawIds.add(sib.id);
-    }
-  }
-  redrawIds = expandPillRowIds(items, redrawIds);
-
   const handled = new Set<string>();
-
-  // Build row clusters among chip-like items that need redraw
-  const pillRedraw = items
-    .filter((i) => isRowChip(i) && redrawIds.has(i.id))
-    .map(asPillForLayout);
-  const clustered = new Set<string>();
-  for (const seed of pillRedraw) {
-    if (clustered.has(seed.id)) continue;
-    const members = pillRedraw.filter(
-      (p) =>
-        !clustered.has(p.id) &&
-        (p.id === seed.id ||
-          p.layoutGroupId === seed.layoutGroupId ||
-          chipsOnSameRow(p, seed) ||
-          pillsOnSameRow(p, seed)),
-    );
-    // Expand to full same-row set among redraw chips
-    const row = pillRedraw.filter((p) =>
-      members.some(
-        (m) =>
-          p.id === m.id ||
-          (p.layoutGroupId && p.layoutGroupId === m.layoutGroupId) ||
-          chipsOnSameRow(p, m) ||
-          pillsOnSameRow(p, m),
-      ),
-    );
-    for (const m of row) clustered.add(m.id);
-    if (row.length === 0) continue;
-    const layouts = layoutPillGroup(ctx, row, texts, imgW, imgH);
-    for (const layout of layouts) {
+  for (const row of chipRows) {
+    for (const layout of row.layouts) {
       drawPill(ctx, layout);
       handled.add(layout.item.id);
     }
+    for (const id of row.handledIds) handled.add(id);
   }
 
   for (const item of items) {
-    if (handled.has(item.id) || !redrawIds.has(item.id)) continue;
-    const text = texts.get(item.id) ?? item.text;
+    if (handled.has(item.id)) continue;
+    if (!itemChanged(item, edits[item.id], seriesItemId)) continue;
     if (isRowChip(item)) {
+      // Lone chip that didn't join a row plan — still draw via layout
+      const texts = new Map<string, string>();
+      const seriesVal =
+        seriesItemId === item.id && seriesValue != null ? seriesValue : null;
+      texts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
       const layouts = layoutPillGroup(
         ctx,
         [asPillForLayout(item)],
@@ -2252,10 +2621,13 @@ function drawAllReplacements(
         imgW,
         imgH,
       );
-      drawPill(ctx, layouts[0]);
-    } else {
-      drawPlainText(ctx, item, text, imgW, imgH, items);
+      if (layouts[0]) drawPill(ctx, layouts[0]);
+      continue;
     }
+    const seriesVal =
+      seriesItemId === item.id && seriesValue != null ? seriesValue : null;
+    const text = resolveItemText(item, edits[item.id], seriesVal);
+    drawPlainText(ctx, item, text, imgW, imgH, items);
   }
 }
 
