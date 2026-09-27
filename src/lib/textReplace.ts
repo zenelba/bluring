@@ -624,6 +624,49 @@ function sampleInteriorChipFill(
 }
 
 /**
+ * Medians over the OCR box are pulled toward glyph anti-aliasing. The solid
+ * plate is the most frequent color near the estimate, so take the mode bin.
+ */
+function dominantPlateColor(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  box: PxRect,
+  estimate: Rgb,
+  textRgb: Rgb,
+): Rgb {
+  const pad = Math.max(2, Math.round(box.h * 0.6));
+  const x0 = Math.max(0, Math.floor(box.x - pad));
+  const x1 = Math.min(imgW, Math.ceil(box.x + box.w + pad));
+  const y0 = Math.max(0, Math.floor(box.y - pad));
+  const y1 = Math.min(imgH, Math.ceil(box.y + box.h + pad));
+  const bins = new Map<number, { n: number; r: number; g: number; b: number }>();
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * imgW + x) * 4;
+      const c = { r: data[i], g: data[i + 1], b: data[i + 2] };
+      if (colorDist(c, estimate) > 110) continue;
+      if (colorDist(c, textRgb) < 60) continue;
+      const key = ((c.r >> 3) << 10) | ((c.g >> 3) << 5) | (c.b >> 3);
+      const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+      bin.n++;
+      bin.r += c.r;
+      bin.g += c.g;
+      bin.b += c.b;
+      bins.set(key, bin);
+    }
+  }
+  let best: { n: number; r: number; g: number; b: number } | null = null;
+  for (const bin of bins.values()) if (!best || bin.n > best.n) best = bin;
+  if (!best || best.n < 6) return estimate;
+  return {
+    r: Math.round(best.r / best.n),
+    g: Math.round(best.g / best.n),
+    b: Math.round(best.b / best.n),
+  };
+}
+
+/**
  * Flood-expand a solid-color plate around a text box (pill chip detection).
  * Returns null if no coherent fill is found.
  */
@@ -683,6 +726,7 @@ function measurePillPlate(
   } else if (interiorFill) {
     fillRgb = interiorFill;
   }
+  fillRgb = dominantPlateColor(data, imgW, imgH, box, fillRgb, textRgb);
   const fillHex = rgbToHex(fillRgb.r, fillRgb.g, fillRgb.b);
   const thresh = 38;
 
@@ -695,38 +739,79 @@ function measurePillPlate(
     );
   };
 
-  let left = Math.floor(box.x);
-  let right = Math.ceil(box.x + box.w);
-  let top = Math.floor(box.y);
-  let bottom = Math.ceil(box.y + box.h);
-  const maxExpand = Math.round(Math.max(box.h * 4, box.w * 0.8));
+  // Bounded 2D flood of the chip color. The OCR box interior is passable so
+  // glyphs don't stop growth; the window keeps full-width fields from flooding.
+  const bx0 = Math.floor(box.x);
+  const by0 = Math.floor(box.y);
+  const bx1 = Math.ceil(box.x + box.w);
+  const by1 = Math.ceil(box.y + box.h);
+  const winX0 = Math.max(0, Math.floor(box.x - box.h * 4));
+  const winX1 = Math.min(imgW, Math.ceil(box.x + box.w + box.h * 4));
+  const winY0 = Math.max(0, Math.floor(box.y - box.h * 1.5));
+  const winY1 = Math.min(imgH, Math.ceil(box.y + box.h + box.h * 1.5));
+  const ww = winX1 - winX0;
+  const wh = winY1 - winY0;
+  if (ww <= 0 || wh <= 0) return null;
 
-  let leftExpand = 0;
-  let rightExpand = 0;
-  for (let i = 0; i < maxExpand; i++) {
-    const midY = Math.round((top + bottom) / 2);
-    if (pixelMatches(left - 1, midY)) {
-      left -= 1;
-      leftExpand += 1;
-    } else break;
+  const inBox = (x: number, y: number) =>
+    x >= bx0 && x < bx1 && y >= by0 && y < by1;
+  const visited = new Uint8Array(ww * wh);
+  const stack: number[] = [];
+  let seeded = 0;
+  for (let y = Math.max(by0, winY0); y < Math.min(by1, winY1); y++) {
+    for (let x = Math.max(bx0, winX0); x < Math.min(bx1, winX1); x++) {
+      if (!pixelMatches(x, y)) continue;
+      const k = (y - winY0) * ww + (x - winX0);
+      visited[k] = 1;
+      stack.push(k);
+      seeded++;
+    }
   }
-  for (let i = 0; i < maxExpand; i++) {
-    const midY = Math.round((top + bottom) / 2);
-    if (pixelMatches(right + 1, midY)) {
-      right += 1;
-      rightExpand += 1;
-    } else break;
+  if (seeded === 0) return null;
+  // Interior (glyph) pixels count as plate once the chip color is present.
+  for (let y = Math.max(by0, winY0); y < Math.min(by1, winY1); y++) {
+    for (let x = Math.max(bx0, winX0); x < Math.min(bx1, winX1); x++) {
+      const k = (y - winY0) * ww + (x - winX0);
+      if (!visited[k]) {
+        visited[k] = 1;
+        stack.push(k);
+      }
+    }
   }
-  for (let i = 0; i < maxExpand; i++) {
-    const midX = Math.round((left + right) / 2);
-    if (pixelMatches(midX, top - 1)) top -= 1;
-    else break;
+
+  let left = bx0;
+  let right = bx1;
+  let top = by0;
+  let bottom = by1;
+  while (stack.length > 0) {
+    const k = stack.pop()!;
+    const x = winX0 + (k % ww);
+    const y = winY0 + Math.floor(k / ww);
+    if (x < left) left = x;
+    if (x + 1 > right) right = x + 1;
+    if (y < top) top = y;
+    if (y + 1 > bottom) bottom = y + 1;
+    const nbrs = [
+      [x - 1, y],
+      [x + 1, y],
+      [x, y - 1],
+      [x, y + 1],
+    ];
+    for (const [nx, ny] of nbrs) {
+      if (nx < winX0 || ny < winY0 || nx >= winX1 || ny >= winY1) continue;
+      const nk = (ny - winY0) * ww + (nx - winX0);
+      if (visited[nk]) continue;
+      if (!inBox(nx, ny) && !pixelMatches(nx, ny)) continue;
+      visited[nk] = 1;
+      stack.push(nk);
+    }
   }
-  for (let i = 0; i < maxExpand; i++) {
-    const midX = Math.round((left + right) / 2);
-    if (pixelMatches(midX, bottom + 1)) bottom += 1;
-    else break;
-  }
+
+  const leftExpand = bx0 - left;
+  const rightExpand = right - bx1;
+  const touchesLeft = left <= winX0 && winX0 > 0;
+  const touchesRight = right >= winX1 && winX1 < imgW;
+  const maxExpand = Math.round(box.h * 4);
 
   const rectPx: PxRect = {
     x: left,
@@ -752,7 +837,8 @@ function measurePillPlate(
     padXPx,
     padYPx,
     hitMaxHorizontal:
-      leftExpand >= maxExpand - 1 && rightExpand >= maxExpand - 1,
+      (touchesLeft || leftExpand >= maxExpand - 1) &&
+      (touchesRight || rightExpand >= maxExpand - 1),
   };
 }
 
@@ -767,7 +853,8 @@ function shouldPromotePlainToPill(
   box: PxRect,
   plate: NonNullable<ReturnType<typeof measurePillPlate>>,
 ): boolean {
-  if (plate.rectPx.h > box.h * 2.4) return false;
+  // Real badge plates are often ~3x cap height once the flood wraps the text.
+  if (plate.rectPx.h > box.h * 3.6) return false;
   if (plate.rectPx.w > box.w * 4.0) return false;
   if (plate.rectPx.w > box.w + box.h * 10) return false;
 
@@ -900,7 +987,10 @@ export async function measureStyles(
     let container: TextContainer = { ...item.container, rect: null };
     const plate = measurePillPlate(data, imgW, imgH, box, textColor, bg);
     if (plate) {
-      const asPill = item.container.type === "pill";
+      // A "pill" whose plate is just the banner field (e.g. a 5G logo) is not a chip.
+      const bannerField =
+        plate.hitMaxHorizontal && !isVividChipColor(plate.fillRgb);
+      const asPill = item.container.type === "pill" && !bannerField;
       const promote =
         !asPill &&
         shouldPromotePlainToPill(data, imgW, imgH, box, plate);
@@ -914,6 +1004,8 @@ export async function measureStyles(
           padY: plate.padY,
           rect: plate.rect,
         };
+      } else if (bannerField) {
+        container = { ...container, type: "plain", fill: null };
       }
     }
 
@@ -1025,6 +1117,78 @@ export async function measureStyles(
       },
     };
   });
+}
+
+/**
+ * OCR often splits one chip ("2" + "LETI"). Items whose measured plates are
+ * the same component get one shared rect and layout group so they redraw as
+ * a single pill.
+ */
+function unifySharedPlates(input: DetectedText[]): DetectedText[] {
+  // Text whose box sits inside another chip's plate belongs to that chip
+  // (e.g. "2" inside the "2 LETI" pink plate even if its own promote failed).
+  const plates = input.filter(
+    (i) => i.container.type === "pill" && i.container.rect,
+  );
+  const items = input.map((item) => {
+    if (item.container.type === "pill" && item.container.rect) return item;
+    const b = item.bbox;
+    for (const p of plates) {
+      const r = p.container.rect!;
+      const ix = Math.max(0, Math.min(b.x + b.w, r.x + r.w) - Math.max(b.x, r.x));
+      const iy = Math.max(0, Math.min(b.y + b.h, r.y + r.h) - Math.max(b.y, r.y));
+      if (b.w * b.h > 0 && (ix * iy) / (b.w * b.h) >= 0.8) {
+        return { ...item, container: { ...p.container } };
+      }
+    }
+    return item;
+  });
+  const idx = items
+    .map((item, i) => ({ item, i }))
+    .filter(({ item }) => item.container.type === "pill" && item.container.rect);
+  const parent = idx.map((_, k) => k);
+  const find = (k: number): number =>
+    parent[k] === k ? k : (parent[k] = find(parent[k]));
+  for (let a = 0; a < idx.length; a++) {
+    for (let b = a + 1; b < idx.length; b++) {
+      const ra = idx[a].item.container.rect!;
+      const rb = idx[b].item.container.rect!;
+      const sameFill =
+        (idx[a].item.container.fill ?? "").toLowerCase() ===
+        (idx[b].item.container.fill ?? "").toLowerCase();
+      if (normRectIoU(ra, rb) >= 0.8 || (sameFill && normRectIoU(ra, rb) >= 0.6)) {
+        parent[find(a)] = find(b);
+      }
+    }
+  }
+  const groups = new Map<number, number[]>();
+  idx.forEach((_, k) => {
+    const r = find(k);
+    groups.set(r, [...(groups.get(r) ?? []), k]);
+  });
+  const out = [...items];
+  for (const ks of groups.values()) {
+    if (ks.length < 2) continue;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const k of ks) {
+      const r = idx[k].item.container.rect!;
+      x0 = Math.min(x0, r.x);
+      y0 = Math.min(y0, r.y);
+      x1 = Math.max(x1, r.x + r.w);
+      y1 = Math.max(y1, r.y + r.h);
+    }
+    const rect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    const groupId = `plate_${idx[ks[0]].item.id}`;
+    for (const k of ks) {
+      const { item, i } = idx[k];
+      out[i] = {
+        ...item,
+        layoutGroupId: groupId,
+        container: { ...item.container, rect },
+      };
+    }
+  }
+  return out;
 }
 
 /** Heuristic: group nearby horizontal pills that share a row. */
@@ -2650,7 +2814,7 @@ export async function detectTexts(file: File): Promise<{
   const enriched = enrichDetections(Array.isArray(data.items) ? data.items : []);
   const measured = await measureStyles(file, enriched);
   // Re-group pills after measured container.rect improves proximity
-  const items = assignLayoutGroups(measured);
+  const items = assignLayoutGroups(unifySharedPlates(measured));
   return { items, width: prepared.width, height: prepared.height };
 }
 
