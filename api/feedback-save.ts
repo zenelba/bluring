@@ -8,6 +8,7 @@ import { ensureProjectEnv } from "./helpers/loadEnv.js";
 
 export default createFeedbackSaveHandler({
   appName: "Bluring",
+  projectId: "bluring",
   authorize: (req) => hasValidAccessCookie(req.headers?.cookie),
   ensureEnv: ensureProjectEnv,
 });

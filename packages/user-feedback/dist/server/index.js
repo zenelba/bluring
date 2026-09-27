@@ -1,2 +1,2 @@
-export { ensureFeedbackTable, getFeedbackReport, insertFeedbackReport, isFeedbackBlobConfigured, isFeedbackDbConfigured, listFeedbackReports, setFeedbackEnsureEnv, uploadFeedbackScreenshot, } from "./db.js";
-export { createFeedbackListHandler, createFeedbackSaveHandler, } from "./handlers.js";
+export { ensureFeedbackTable, getFeedbackReport, insertFeedbackReport, isFeedbackBlobConfigured, isFeedbackDbConfigured, listFeedbackReports, listSimilarFeedbackReports, markFeedbackResolved, setFeedbackEnsureEnv, uploadFeedbackScreenshot, } from "./db.js";
+export { createFeedbackListHandler, createFeedbackResolveHandler, createFeedbackSaveHandler, } from "./handlers.js";

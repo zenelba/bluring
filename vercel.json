@@ -53,6 +53,10 @@
     "api/feedback-list.ts": {
       "maxDuration": 30,
       "includeFiles": "{api/helpers/**,packages/user-feedback/**}"
+    },
+    "api/feedback-resolve.ts": {
+      "maxDuration": 30,
+      "includeFiles": "{api/helpers/**,packages/user-feedback/**}"
     }
   }
 }

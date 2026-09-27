@@ -5,14 +5,18 @@ export {
   isFeedbackBlobConfigured,
   isFeedbackDbConfigured,
   listFeedbackReports,
+  listSimilarFeedbackReports,
+  markFeedbackResolved,
   setFeedbackEnsureEnv,
   uploadFeedbackScreenshot,
   type EnsureEnvFn,
   type FeedbackReportInsert,
+  type ListFeedbackOptions,
 } from "./db.js";
 
 export {
   createFeedbackListHandler,
+  createFeedbackResolveHandler,
   createFeedbackSaveHandler,
   type FeedbackBody,
   type FeedbackHandlerOptions,

@@ -1,16 +1,13 @@
 ---
-description: Review Bluring user feedback reports from feedback/ or Vercel Neon
+description: Review Bluring user feedback — use global review-user-errors skill
 globs:
 alwaysApply: false
 ---
 
-# Feedback review (Plan mode)
+# Feedback review
 
-When the user asks to review errors, ideas, or feedback (e.g. “go through feedback”, “check reported errors”):
+When the user asks to check reported errors / go through feedback:
 
-1. Follow the project skill **review-user-errors** at `.cursor/skills/review-user-errors/SKILL.md` (fetch script → SwitchMode to Plan → prioritized fix plan).
-2. Prefer production DB via that skill’s script, or:
-   - `GET /api/feedback-list` (access cookie) / `?id=<id>`
-   - Neon SQL on `feedback_reports`
-3. Also check local `feedback/*.md` + PNGs if present.
-4. Triage **bugs** vs **ideas**; cite report ids. Do not invent feedback.
+1. Follow global skill `~/.cursor/skills/review-user-errors/SKILL.md` with **projectId `bluring`**.
+2. Fix only **open** reports; use **resolved** as context; mark fixed ids resolved after ship.
+3. Do not invent feedback.

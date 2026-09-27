@@ -1,3 +1,3 @@
-export { ensureFeedbackTable, getFeedbackReport, insertFeedbackReport, isFeedbackBlobConfigured, isFeedbackDbConfigured, listFeedbackReports, setFeedbackEnsureEnv, uploadFeedbackScreenshot, type EnsureEnvFn, type FeedbackReportInsert, } from "./db.js";
-export { createFeedbackListHandler, createFeedbackSaveHandler, type FeedbackBody, type FeedbackHandlerOptions, type FeedbackRequest, type FeedbackResponse, } from "./handlers.js";
+export { ensureFeedbackTable, getFeedbackReport, insertFeedbackReport, isFeedbackBlobConfigured, isFeedbackDbConfigured, listFeedbackReports, listSimilarFeedbackReports, markFeedbackResolved, setFeedbackEnsureEnv, uploadFeedbackScreenshot, type EnsureEnvFn, type FeedbackReportInsert, type ListFeedbackOptions, } from "./db.js";
+export { createFeedbackListHandler, createFeedbackResolveHandler, createFeedbackSaveHandler, type FeedbackBody, type FeedbackHandlerOptions, type FeedbackRequest, type FeedbackResponse, } from "./handlers.js";
 //# sourceMappingURL=index.d.ts.map

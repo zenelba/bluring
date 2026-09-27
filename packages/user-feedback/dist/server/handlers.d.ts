@@ -7,10 +7,15 @@ export type FeedbackRequest = {
     headers?: {
         cookie?: string | string[];
     };
-    body?: FeedbackBody;
+    body?: FeedbackBody & {
+        ids?: string[];
+        resolutionNote?: string;
+    };
     query?: {
         id?: string;
         limit?: string;
+        status?: string;
+        kind?: string;
     };
 };
 export type FeedbackResponse = {
@@ -39,6 +44,8 @@ export type FeedbackBody = {
 };
 export type FeedbackHandlerOptions = {
     appName: string;
+    /** Stable id for filtering (e.g. "bluring"). Stored on each new report. */
+    projectId?: string;
     authorize: (req: FeedbackRequest) => boolean;
     ensureEnv?: EnsureEnvFn;
     defaultToEmail?: string;
@@ -46,4 +53,6 @@ export type FeedbackHandlerOptions = {
 };
 export declare function createFeedbackSaveHandler(opts: FeedbackHandlerOptions): (req: FeedbackRequest, res: FeedbackResponse) => Promise<void>;
 export declare function createFeedbackListHandler(opts: FeedbackHandlerOptions): (req: FeedbackRequest, res: FeedbackResponse) => Promise<void>;
+/** POST { ids: string[], resolutionNote?: string } — mark reports resolved. */
+export declare function createFeedbackResolveHandler(opts: FeedbackHandlerOptions): (req: FeedbackRequest, res: FeedbackResponse) => Promise<void>;
 //# sourceMappingURL=handlers.d.ts.map

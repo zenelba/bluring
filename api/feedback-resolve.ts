@@ -1,12 +1,12 @@
 /**
- * List / fetch feedback reports via @zenel/user-feedback.
+ * Mark feedback reports resolved via @zenel/user-feedback.
  */
 
-import { createFeedbackListHandler } from "@zenel/user-feedback/server";
+import { createFeedbackResolveHandler } from "@zenel/user-feedback/server";
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
 import { ensureProjectEnv } from "./helpers/loadEnv.js";
 
-export default createFeedbackListHandler({
+export default createFeedbackResolveHandler({
   appName: "Bluring",
   projectId: "bluring",
   authorize: (req) => hasValidAccessCookie(req.headers?.cookie),

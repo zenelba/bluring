@@ -4,7 +4,7 @@
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
-import { insertFeedbackReport, isFeedbackBlobConfigured, isFeedbackDbConfigured, setFeedbackEnsureEnv, uploadFeedbackScreenshot, getFeedbackReport, listFeedbackReports, } from "./db.js";
+import { insertFeedbackReport, isFeedbackBlobConfigured, isFeedbackDbConfigured, setFeedbackEnsureEnv, uploadFeedbackScreenshot, getFeedbackReport, listFeedbackReports, markFeedbackResolved, } from "./db.js";
 function canWriteDisk() {
     if (process.env.VERCEL === "1")
         return false;
@@ -207,6 +207,7 @@ export function createFeedbackSaveHandler(opts) {
                     markdown,
                     journal: body.journal ?? null,
                     screenshotUrl,
+                    projectId: opts.projectId ?? null,
                 });
                 if (inserted) {
                     savedToDb = true;
@@ -286,13 +287,80 @@ export function createFeedbackListHandler(opts) {
                 return;
             }
             const limit = Number(req.query?.limit ?? 50);
-            const reports = await listFeedbackReports(limit);
-            res.status(200).json({ configured: true, reports });
+            const statusRaw = req.query?.status?.trim() || "all";
+            const status = statusRaw === "open" || statusRaw === "resolved" || statusRaw === "all"
+                ? statusRaw
+                : "all";
+            const kindRaw = req.query?.kind?.trim() || "all";
+            const kind = kindRaw === "error" || kindRaw === "idea" || kindRaw === "all"
+                ? kindRaw
+                : "all";
+            const reports = await listFeedbackReports({
+                limit,
+                status,
+                kind,
+                projectId: opts.projectId ?? null,
+            });
+            res.status(200).json({
+                configured: true,
+                projectId: opts.projectId ?? null,
+                status,
+                kind,
+                reports,
+            });
         }
         catch (err) {
             console.error("feedback-list failed", err);
             res.status(500).json({
                 error: err instanceof Error ? err.message : "Failed to list feedback",
+            });
+        }
+    };
+}
+/** POST { ids: string[], resolutionNote?: string } — mark reports resolved. */
+export function createFeedbackResolveHandler(opts) {
+    if (opts.ensureEnv)
+        setFeedbackEnsureEnv(opts.ensureEnv);
+    return async function handler(req, res) {
+        if (req.method === "OPTIONS") {
+            res.setHeader("Allow", "POST, OPTIONS");
+            res.status(204).json({});
+            return;
+        }
+        if (req.method !== "POST") {
+            res.setHeader("Allow", "POST, OPTIONS");
+            res.status(405).json({ error: "Method not allowed" });
+            return;
+        }
+        if (!opts.authorize(req)) {
+            res.status(401).json({ error: "Access code required" });
+            return;
+        }
+        opts.ensureEnv?.();
+        if (!isFeedbackDbConfigured()) {
+            res.status(503).json({
+                error: "Postgres is not configured.",
+                configured: false,
+            });
+            return;
+        }
+        const body = req.body ?? {};
+        const ids = Array.isArray(body.ids)
+            ? body.ids.filter((x) => typeof x === "string")
+            : [];
+        if (ids.length === 0) {
+            res.status(400).json({ error: "ids[] required" });
+            return;
+        }
+        const note = typeof body.resolutionNote === "string" ? body.resolutionNote : "Fixed";
+        try {
+            const result = await markFeedbackResolved(ids, note);
+            res.status(200).json({ ok: true, ...result });
+        }
+        catch (err) {
+            console.error("feedback-resolve failed", err);
+            res.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to mark resolved",
             });
         }
     };

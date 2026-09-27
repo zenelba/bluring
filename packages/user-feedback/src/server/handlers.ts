@@ -14,13 +14,22 @@ import {
   type EnsureEnvFn,
   getFeedbackReport,
   listFeedbackReports,
+  markFeedbackResolved,
 } from "./db.js";
 
 export type FeedbackRequest = {
   method?: string;
   headers?: { cookie?: string | string[] };
-  body?: FeedbackBody;
-  query?: { id?: string; limit?: string };
+  body?: FeedbackBody & {
+    ids?: string[];
+    resolutionNote?: string;
+  };
+  query?: {
+    id?: string;
+    limit?: string;
+    status?: string;
+    kind?: string;
+  };
 };
 
 export type FeedbackResponse = {
@@ -45,6 +54,8 @@ export type FeedbackBody = {
 
 export type FeedbackHandlerOptions = {
   appName: string;
+  /** Stable id for filtering (e.g. "bluring"). Stored on each new report. */
+  projectId?: string;
   authorize: (req: FeedbackRequest) => boolean;
   ensureEnv?: EnsureEnvFn;
   defaultToEmail?: string;
@@ -293,6 +304,7 @@ export function createFeedbackSaveHandler(opts: FeedbackHandlerOptions) {
           markdown,
           journal: body.journal ?? null,
           screenshotUrl,
+          projectId: opts.projectId ?? null,
         });
         if (inserted) {
           savedToDb = true;
@@ -378,12 +390,87 @@ export function createFeedbackListHandler(opts: FeedbackHandlerOptions) {
       }
 
       const limit = Number(req.query?.limit ?? 50);
-      const reports = await listFeedbackReports(limit);
-      res.status(200).json({ configured: true, reports });
+      const statusRaw = req.query?.status?.trim() || "all";
+      const status =
+        statusRaw === "open" || statusRaw === "resolved" || statusRaw === "all"
+          ? statusRaw
+          : "all";
+      const kindRaw = req.query?.kind?.trim() || "all";
+      const kind =
+        kindRaw === "error" || kindRaw === "idea" || kindRaw === "all"
+          ? kindRaw
+          : "all";
+      const reports = await listFeedbackReports({
+        limit,
+        status,
+        kind,
+        projectId: opts.projectId ?? null,
+      });
+      res.status(200).json({
+        configured: true,
+        projectId: opts.projectId ?? null,
+        status,
+        kind,
+        reports,
+      });
     } catch (err) {
       console.error("feedback-list failed", err);
       res.status(500).json({
         error: err instanceof Error ? err.message : "Failed to list feedback",
+      });
+    }
+  };
+}
+
+/** POST { ids: string[], resolutionNote?: string } — mark reports resolved. */
+export function createFeedbackResolveHandler(opts: FeedbackHandlerOptions) {
+  if (opts.ensureEnv) setFeedbackEnsureEnv(opts.ensureEnv);
+
+  return async function handler(req: FeedbackRequest, res: FeedbackResponse) {
+    if (req.method === "OPTIONS") {
+      res.setHeader("Allow", "POST, OPTIONS");
+      res.status(204).json({});
+      return;
+    }
+    if (req.method !== "POST") {
+      res.setHeader("Allow", "POST, OPTIONS");
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+    if (!opts.authorize(req)) {
+      res.status(401).json({ error: "Access code required" });
+      return;
+    }
+
+    opts.ensureEnv?.();
+
+    if (!isFeedbackDbConfigured()) {
+      res.status(503).json({
+        error: "Postgres is not configured.",
+        configured: false,
+      });
+      return;
+    }
+
+    const body = req.body ?? {};
+    const ids = Array.isArray(body.ids)
+      ? body.ids.filter((x): x is string => typeof x === "string")
+      : [];
+    if (ids.length === 0) {
+      res.status(400).json({ error: "ids[] required" });
+      return;
+    }
+    const note =
+      typeof body.resolutionNote === "string" ? body.resolutionNote : "Fixed";
+
+    try {
+      const result = await markFeedbackResolved(ids, note);
+      res.status(200).json({ ok: true, ...result });
+    } catch (err) {
+      console.error("feedback-resolve failed", err);
+      res.status(500).json({
+        error:
+          err instanceof Error ? err.message : "Failed to mark resolved",
       });
     }
   };

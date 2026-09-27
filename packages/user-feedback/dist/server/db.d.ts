@@ -25,10 +25,33 @@ export type FeedbackReportInsert = {
     markdown?: string | null;
     journal?: unknown;
     screenshotUrl?: string | null;
+    projectId?: string | null;
 };
 export declare function insertFeedbackReport(row: FeedbackReportInsert): Promise<{
     id: string;
 } | null>;
-export declare function listFeedbackReports(limit?: number): Promise<Record<string, any>[]>;
+export type ListFeedbackOptions = {
+    limit?: number;
+    kind?: "error" | "idea" | "all";
+    /** When set, only rows for this project (plus null project_id for legacy). */
+    projectId?: string | null;
+    /** open = unresolved only; resolved = fixed; all = both */
+    status?: "open" | "resolved" | "all";
+};
+export declare function listFeedbackReports(options?: ListFeedbackOptions | number): Promise<Record<string, any>[]>;
 export declare function getFeedbackReport(id: string): Promise<Record<string, any> | null>;
+/**
+ * Mark one or more reports as resolved (does not delete; kept for context).
+ */
+export declare function markFeedbackResolved(ids: string[], resolutionNote: string): Promise<{
+    updated: number;
+}>;
+/**
+ * Similar past reports for context (same project + tool), including resolved.
+ */
+export declare function listSimilarFeedbackReports(input: {
+    projectId?: string | null;
+    toolId: string;
+    limit?: number;
+}): Promise<Record<string, any>[]>;
 //# sourceMappingURL=db.d.ts.map
