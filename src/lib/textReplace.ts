@@ -2988,25 +2988,83 @@ export async function renderTextReplaceVariants(input: {
   return variants;
 }
 
+export type ExportNaming = {
+  /** File name root, e.g. "telekom_naj_c". */
+  root: string;
+  addDate: boolean;
+  addTime: boolean;
+  /** Per-file suffix when a series produced several variants. */
+  seriesSuffix: "step" | "price";
+};
+
+export function defaultExportRoot(sourceName: string): string {
+  return sourceName.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+}
+
+function safeFilePart(s: string): string {
+  return s
+    .replace(/€/g, "EUR")
+    .replace(/\s+/g, "")
+    .replace(/[^\w.,+-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 60);
+}
+
+function exportStamp(naming: ExportNaming, now: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const parts: string[] = [];
+  if (naming.addDate) {
+    parts.push(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`);
+  }
+  if (naming.addTime) parts.push(`${pad(now.getHours())}-${pad(now.getMinutes())}`);
+  return parts.map((p) => `_${p}`).join("");
+}
+
+/** File names for each variant plus the ZIP name, e.g. root_2026-09-27_18-14_+1.png. */
+export function buildExportNames(
+  variants: Pick<RenderedVariant, "offset" | "label">[],
+  naming: ExportNaming,
+  now: Date = new Date(),
+): { files: string[]; zip: string } {
+  const root = safeFilePart(naming.root) || "export";
+  const stamp = exportStamp(naming, now);
+  const multi = variants.length > 1;
+  const seen = new Map<string, number>();
+  const files = variants.map((v) => {
+    let suffix = "";
+    if (multi) {
+      suffix =
+        naming.seriesSuffix === "price"
+          ? safeFilePart(v.label)
+          : v.offset > 0
+            ? `+${v.offset}`
+            : String(v.offset);
+      suffix = `_${suffix}`;
+    }
+    let name = `${root}${stamp}${suffix}`;
+    const n = seen.get(name) ?? 0;
+    seen.set(name, n + 1);
+    if (n > 0) name = `${name}_${n + 1}`;
+    return `${name}.png`;
+  });
+  return { files, zip: `${root}${stamp}.zip` };
+}
+
 export async function downloadTextReplaceZip(
   variants: RenderedVariant[],
-  sourceName: string,
+  naming: ExportNaming,
 ): Promise<void> {
   if (variants.length === 0) throw new Error("Nothing to download");
-  const base = sourceName.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+  const { files, zip: zipName } = buildExportNames(variants, naming);
   if (variants.length === 1) {
-    saveAs(variants[0].blob, `${base}_replaced.png`);
+    saveAs(variants[0].blob, files[0]);
     return;
   }
   const zip = new JSZip();
-  for (const v of variants) {
-    const safe = v.label.replace(/[^\w.,+-]+/g, "_").slice(0, 40);
-    const sign =
-      v.offset === 0 ? "v0" : v.offset > 0 ? `v+${v.offset}` : `v${v.offset}`;
-    zip.file(`${base}_${sign}_${safe}.png`, v.blob);
-  }
+  variants.forEach((v, i) => zip.file(files[i], v.blob));
   const out = await zip.generateAsync({ type: "blob" });
-  saveAs(out, `${base}_text_replace.zip`);
+  saveAs(out, zipName);
 }
 
 export function revokeVariants(variants: RenderedVariant[]) {

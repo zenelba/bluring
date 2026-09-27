@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  buildExportNames,
   buildSeries,
   defaultEdits,
+  defaultExportRoot,
   detectTexts,
   downloadTextReplaceZip,
   formatNumber,
@@ -9,6 +11,7 @@ import {
   renderTextReplaceVariants,
   revokeVariants,
   type DetectedText,
+  type ExportNaming,
   type RenderedVariant,
   type SeriesSettings,
   type TextBBox,
@@ -21,6 +24,120 @@ import {
 } from "./lib/taskHistory";
 import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
+
+const EXPORT_PREFS_KEY = "tr-export-naming";
+
+type ExportPrefs = Omit<ExportNaming, "root">;
+
+function loadExportPrefs(): ExportPrefs {
+  const fallback: ExportPrefs = { addDate: true, addTime: false, seriesSuffix: "price" };
+  try {
+    const raw = localStorage.getItem(EXPORT_PREFS_KEY);
+    return raw ? { ...fallback, ...(JSON.parse(raw) as Partial<ExportPrefs>) } : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function ExportDialog(props: {
+  variants: RenderedVariant[];
+  defaultRoot: string;
+  onCancel: () => void;
+  onConfirm: (naming: ExportNaming) => void;
+}) {
+  const { variants, defaultRoot, onCancel, onConfirm } = props;
+  const [root, setRoot] = useState(defaultRoot);
+  const [prefs, setPrefs] = useState<ExportPrefs>(loadExportPrefs);
+  const naming: ExportNaming = { root, ...prefs };
+  const multi = variants.length > 1;
+  const { files, zip } = buildExportNames(variants, naming);
+  const preview = multi ? [zip, ...files.slice(0, 3)] : files;
+
+  const confirm = () => {
+    localStorage.setItem(EXPORT_PREFS_KEY, JSON.stringify(prefs));
+    onConfirm(naming);
+  };
+
+  return (
+    <div className="tr-export" role="dialog" aria-modal="true" aria-label="Export">
+      <div className="tr-export__backdrop" onClick={onCancel} />
+      <form
+        className="tr-export__panel"
+        onSubmit={(e) => {
+          e.preventDefault();
+          confirm();
+        }}
+      >
+        <h3 className="tr-export__title">Export {multi ? `${variants.length} images` : "image"}</h3>
+        <label className="tr-export__field">
+          <span className="osebe-kicker">File name</span>
+          <input
+            className="tr-export__input"
+            value={root}
+            onChange={(e) => setRoot(e.target.value)}
+            autoFocus
+          />
+        </label>
+        <fieldset className="tr-export__group">
+          <legend className="osebe-kicker">Add</legend>
+          <label>
+            <input
+              type="checkbox"
+              checked={prefs.addDate}
+              onChange={(e) => setPrefs({ ...prefs, addDate: e.target.checked })}
+            />{" "}
+            Export date
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={prefs.addTime}
+              onChange={(e) => setPrefs({ ...prefs, addTime: e.target.checked })}
+            />{" "}
+            Export time (hour-minute)
+          </label>
+        </fieldset>
+        {multi && (
+          <fieldset className="tr-export__group">
+            <legend className="osebe-kicker">Per image</legend>
+            <label>
+              <input
+                type="radio"
+                name="tr-series-suffix"
+                checked={prefs.seriesSuffix === "step"}
+                onChange={() => setPrefs({ ...prefs, seriesSuffix: "step" })}
+              />{" "}
+              Step (-1, 0, +1)
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="tr-series-suffix"
+                checked={prefs.seriesSuffix === "price"}
+                onChange={() => setPrefs({ ...prefs, seriesSuffix: "price" })}
+              />{" "}
+              Price
+            </label>
+          </fieldset>
+        )}
+        <div className="tr-export__preview">
+          {preview.map((name) => (
+            <code key={name}>{name}</code>
+          ))}
+          {multi && files.length > 3 && <span>… {files.length - 3} more</span>}
+        </div>
+        <div className="tr-export__actions">
+          <button type="button" className="osebe-btn osebe-btn--ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="osebe-btn osebe-btn--green">
+            Download
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function CloudIcon() {
   return (
@@ -291,6 +408,7 @@ export default function TextReplaceMode(props: {
   const [variants, setVariants] = useState<RenderedVariant[]>([]);
   const [lightbox, setLightbox] = useState<RenderedVariant | null>(null);
   const [showPillDebug, setShowPillDebug] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -601,11 +719,13 @@ export default function TextReplaceMode(props: {
     }
   };
 
-  const handleDownload = async () => {
+  const handleDownload = async (naming: ExportNaming) => {
     if (!file || variants.length === 0) return;
+    setExportOpen(false);
     setError(null);
     try {
-      await downloadTextReplaceZip(variants, file.name);
+      await downloadTextReplaceZip(variants, naming);
+      logEvent("export", buildExportNames(variants, naming).files.join(", "));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download failed");
     }
@@ -687,7 +807,7 @@ export default function TextReplaceMode(props: {
             type="button"
             className="osebe-btn osebe-btn--green"
             disabled={busy || variants.length === 0}
-            onClick={() => void handleDownload()}
+            onClick={() => setExportOpen(true)}
           >
             Download {variants.length > 1 ? "ZIP" : "PNG"}
             {variants.length > 0 ? ` (${variants.length})` : ""}
@@ -1051,6 +1171,15 @@ export default function TextReplaceMode(props: {
           )}
         </section>
       </div>
+
+      {exportOpen && file && variants.length > 0 && (
+        <ExportDialog
+          variants={variants}
+          defaultRoot={defaultExportRoot(file.name)}
+          onCancel={() => setExportOpen(false)}
+          onConfirm={(naming) => void handleDownload(naming)}
+        />
+      )}
 
       {lightbox && (
         <div
