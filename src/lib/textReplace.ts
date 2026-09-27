@@ -551,11 +551,77 @@ function luminance(c: { r: number; g: number; b: number }): number {
   return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 }
 
+type Rgb = { r: number; g: number; b: number };
+
+/** Max-min channel chroma (0–255). Yellow/pink chips are high; blue fields lower relative to hue mix. */
+function rgbChroma(c: Rgb): number {
+  return Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b);
+}
+
+/**
+ * Vivid badge/chip fills: yellow, pink, orange, magenta (Telekom ENOTNA CENA etc.).
+ * Not gray, not dark navy banner fields.
+ */
+function isVividChipColor(c: Rgb): boolean {
+  const chroma = rgbChroma(c);
+  const lum = luminance(c);
+  if (chroma < 45 || lum < 40 || lum > 250) return false;
+  // Yellow / gold / amber
+  if (c.r > 160 && c.g > 120 && c.b < 120 && c.r + c.g > c.b * 2.2) return true;
+  // Pink / magenta / coral
+  if (c.r > 160 && c.b > 80 && c.g < c.r * 0.85) return true;
+  // Orange
+  if (c.r > 180 && c.g > 80 && c.g < 180 && c.b < 100) return true;
+  // Bright saturated non-blue (generic chip)
+  if (chroma >= 70 && lum >= 80 && lum <= 230 && !(c.b > c.r && c.b > c.g)) {
+    return true;
+  }
+  return false;
+}
+
 function textBoxHRel(textH: number, padPx: number): number {
   return textH > 0 ? padPx / textH : 0.45;
 }
 
-type Rgb = { r: number; g: number; b: number };
+/**
+ * Chip fill from non-ink pixels *inside* the OCR box.
+ * Critical when the box already fills a yellow/pink pill — outer samples are page blue.
+ */
+function sampleInteriorChipFill(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  box: PxRect,
+  textRgb: Rgb,
+): Rgb | null {
+  const vivid: Rgb[] = [];
+  const other: Rgb[] = [];
+  const step = Math.max(1, Math.floor(Math.min(box.w, box.h) / 14));
+  const insetX = Math.max(1, Math.floor(box.w * 0.06));
+  const insetY = Math.max(1, Math.floor(box.h * 0.18));
+  const y0 = Math.floor(box.y + insetY);
+  const y1 = Math.ceil(box.y + box.h - insetY);
+  const x0 = Math.floor(box.x + insetX);
+  const x1 = Math.ceil(box.x + box.w - insetX);
+  for (let y = y0; y < y1; y += step) {
+    for (let x = x0; x < x1; x += step) {
+      if (x < 0 || y < 0 || x >= imgW || y >= imgH) continue;
+      const i = (y * imgW + x) * 4;
+      const c = { r: data[i], g: data[i + 1], b: data[i + 2] };
+      // Skip glyph ink
+      if (colorDist(c, textRgb) < 36) continue;
+      if (isVividChipColor(c)) vivid.push(c);
+      else other.push(c);
+    }
+  }
+  const pool = vivid.length >= 3 ? vivid : other;
+  if (pool.length < 3) return null;
+  return {
+    r: medianChannel(pool.map((c) => c.r)),
+    g: medianChannel(pool.map((c) => c.g)),
+    b: medianChannel(pool.map((c) => c.b)),
+  };
+}
 
 /**
  * Flood-expand a solid-color plate around a text box (pill chip detection).
@@ -581,6 +647,13 @@ function measurePillPlate(
   /** True if flood hit maxExpand on both left and right (likely full field). */
   hitMaxHorizontal: boolean;
 } | null {
+  const textRgb = {
+    r: parseInt(textColor.slice(1, 3), 16),
+    g: parseInt(textColor.slice(3, 5), 16),
+    b: parseInt(textColor.slice(5, 7), 16),
+  };
+  const interiorFill = sampleInteriorChipFill(data, imgW, imgH, box, textRgb);
+
   const fillPoints: Array<{ x: number; y: number }> = [];
   const inset = Math.max(1, Math.round(box.h * 0.08));
   for (let t = 0; t <= 6; t++) {
@@ -593,13 +666,23 @@ function measurePillPlate(
     );
   }
   const fillCand = sampleMedianRgb(data, imgW, imgH, fillPoints);
-  const textRgb = {
-    r: parseInt(textColor.slice(1, 3), 16),
-    g: parseInt(textColor.slice(3, 5), 16),
-    b: parseInt(textColor.slice(5, 7), 16),
-  };
-  const fillRgb =
-    fillCand && colorDist(fillCand, textRgb) > 20 ? fillCand : nearBg;
+  // Prefer interior vivid chip (yellow) over outer samples (often banner blue)
+  let fillRgb: Rgb = nearBg;
+  if (interiorFill && isVividChipColor(interiorFill)) {
+    fillRgb = interiorFill;
+  } else if (fillCand && isVividChipColor(fillCand)) {
+    fillRgb = fillCand;
+  } else if (interiorFill && colorDist(interiorFill, textRgb) > 20) {
+    fillRgb = interiorFill;
+  } else if (fillCand && colorDist(fillCand, textRgb) > 20) {
+    fillRgb = fillCand;
+  } else if (isVividChipColor(nearBg)) {
+    fillRgb = nearBg;
+  } else if (fillCand) {
+    fillRgb = fillCand;
+  } else if (interiorFill) {
+    fillRgb = interiorFill;
+  }
   const fillHex = rgbToHex(fillRgb.r, fillRgb.g, fillRgb.b);
   const thresh = 38;
 
@@ -675,7 +758,7 @@ function measurePillPlate(
 
 /**
  * Plain → pill when text sits on a compact colored chip (GPT often misses isPill).
- * Allows tiny side pad (OCR box already fills the chip). Rejects full-bleed bars.
+ * Force-promotes vivid yellow/pink/orange chips even when OCR box fills the plate.
  */
 function shouldPromotePlainToPill(
   data: Uint8ClampedArray,
@@ -685,10 +768,8 @@ function shouldPromotePlainToPill(
   plate: NonNullable<ReturnType<typeof measurePillPlate>>,
 ): boolean {
   if (plate.rectPx.h > box.h * 2.4) return false;
-  // Full-width buttons / fields
-  if (plate.hitMaxHorizontal) return false;
-  if (plate.rectPx.w > box.w * 3.0) return false;
-  if (plate.rectPx.w > box.w + box.h * 8) return false;
+  if (plate.rectPx.w > box.w * 4.0) return false;
+  if (plate.rectPx.w > box.w + box.h * 10) return false;
 
   const far = Math.max(10, Math.round(box.h * 1.4));
   const farPoints: Array<{ x: number; y: number }> = [];
@@ -703,16 +784,26 @@ function shouldPromotePlainToPill(
   }
   const farBg = sampleMedianRgb(data, imgW, imgH, farPoints);
   if (!farBg) return false;
-  // Chip fill must differ from the surrounding page / banner field
-  if (colorDist(plate.fillRgb, farBg) < 28) return false;
 
-  // Meaningful chip: some expansion OR vertical pad OR fill already wraps glyphs
+  const fillVsFar = colorDist(plate.fillRgb, farBg);
+
+  // Strong path: vivid chip vs banner field — promote even if flood hit max expand
+  // (wrong outer fill used to flood the whole blue bar; interior yellow fixes that).
+  if (isVividChipColor(plate.fillRgb) && fillVsFar >= 25) {
+    return true;
+  }
+
+  // Full-width buttons / fields (non-vivid)
+  if (plate.hitMaxHorizontal) return false;
+
+  // Fallback: any fill clearly different from far field + some plate extent
+  if (fillVsFar < 28) return false;
   const hasPad =
     plate.padXPx >= 2 ||
     plate.padYPx >= 2 ||
     plate.rectPx.w > box.w + 2 ||
     plate.rectPx.h > box.h + 2;
-  if (!hasPad && colorDist(plate.fillRgb, farBg) < 45) return false;
+  if (!hasPad && fillVsFar < 45) return false;
 
   return true;
 }
@@ -1723,8 +1814,9 @@ function measurePill(
   const ascent =
     newMetrics.ascent > 0 ? newMetrics.ascent : sizePx * 0.8;
 
-  const slack = Math.max(4, 0.08 * h);
-  const w = Math.max(h * 0.8, newInk + 2 * padH + slack);
+  // User-requested ~15% safety margin so glyphs never crowd the plate edge
+  const contentW = (newInk + 2 * padH) * 1.15;
+  const w = Math.max(h * 0.8, contentW, orig.w);
   const radius =
     item.container.radiusPxHint > 0
       ? item.container.radiusPxHint
