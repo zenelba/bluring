@@ -36,7 +36,12 @@ async function render(page: import("@playwright/test").Page, text: string): Prom
   return page.evaluate(() => (window as unknown as { __RESULT__: Result }).__RESULT__);
 }
 
-for (const text of ["SUPER CENA", "BJUUUUTIFUL CENA"]) {
+const cases: Array<{ text: string; grows: boolean }> = [
+  { text: "SUPER CENA", grows: false },
+  { text: "BJUUUUTIFUL CENA", grows: true },
+];
+
+for (const { text, grows } of cases) {
   test(`badge row rebuilt from source pixels: ${text}`, async ({ page }) => {
     const r = await render(page, text);
     expect(r.pillRows.length).toBe(1);
@@ -52,7 +57,9 @@ for (const text of ["SUPER CENA", "BJUUUUTIFUL CENA"]) {
     expect(yellow.mode).toBe("stretch");
     expect(yellow.newRect.x).toBe(yellow.rect.x);
     expect(yellow.newRect.h).toBe(yellow.rect.h);
-    expect(yellow.newRect.w).toBeGreaterThanOrEqual(yellow.rect.w);
+    // Width follows the text: shorter text shrinks the pill, longer grows it.
+    if (grows) expect(yellow.newRect.w).toBeGreaterThan(yellow.rect.w);
+    else expect(yellow.newRect.w).toBeLessThan(yellow.rect.w);
     expect(pink.newRect.h).toBe(pink.rect.h);
     expect(pink.newRect.x).toBeGreaterThan(yellow.newRect.x + yellow.newRect.w);
 

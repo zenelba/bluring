@@ -664,7 +664,9 @@ export function renderPillRow(
       const m = textInkWidth(ctx, texts[i], pill.font.scaleX);
       inkW = m.width;
       inkLeft = m.left;
-      w = Math.max(pill.rect.w, Math.ceil(pill.padL + inkW + pill.padR));
+      // Fit the text exactly (grow or shrink); keep room for both rounded ends.
+      const minW = Math.max(pill.rect.h, 2 * (pill.capW + 1) + 2);
+      w = Math.max(minW, Math.ceil(pill.padL + inkW + pill.padR));
     }
     return { pill, edited, w, inkW, inkLeft, x: 0 };
   });
