@@ -20,6 +20,8 @@ Canonical location (deployed with bluring): `bluring/packages/user-feedback`.
 
 Each app uses **its own** `POSTGRES_URL`, `BLOB_READ_WRITE_TOKEN`, `RESEND_API_KEY`, etc.
 
+Users click the screenshot to pin where the issue is (no free-text “where to focus”). The pin is baked into the uploaded PNG and stored as `pin_x` / `pin_y`.
+
 ## Client
 
 ```tsx

@@ -42,6 +42,8 @@ export type FeedbackBody = {
   toolId?: string;
   toolLabel?: string;
   answers?: { focus?: string; wrong?: string; expected?: string };
+  pinX?: number | null;
+  pinY?: number | null;
   journal?: unknown;
   screenshotPngBase64?: string;
   pageUrl?: string;
@@ -97,6 +99,8 @@ async function sendResendEmail(
     focus: string;
     wrong: string;
     expected: string;
+    pinX?: number | null;
+    pinY?: number | null;
     markdown: string;
     pngBase64: string;
     filenameBase: string;
@@ -127,12 +131,20 @@ async function sendResendEmail(
     ? `<p><a href="${escapeHtml(input.screenshotUrl)}">Open screenshot</a></p>`
     : "";
 
+  const pinLabel =
+    input.pinX != null &&
+    input.pinY != null &&
+    Number.isFinite(input.pinX) &&
+    Number.isFinite(input.pinY)
+      ? `Pinned at ${Math.round(input.pinX * 100)}%, ${Math.round(input.pinY * 100)}%`
+      : input.focus || "—";
+
   const html = `
     <h2>${escapeHtml(opts.appName)} ${escapeHtml(input.kind)}</h2>
     <p><strong>Tool:</strong> ${escapeHtml(input.toolLabel)}</p>
     <p><strong>URL:</strong> ${escapeHtml(input.pageUrl)}</p>
-    <h3>Where to focus</h3>
-    <p>${nl2br(escapeHtml(input.focus || "—"))}</p>
+    <h3>Pin</h3>
+    <p>${nl2br(escapeHtml(pinLabel))}</p>
     <h3>What is wrong</h3>
     <p>${nl2br(escapeHtml(input.wrong || "—"))}</p>
     <h3>What is expected</h3>
@@ -146,8 +158,8 @@ async function sendResendEmail(
     `Tool: ${input.toolLabel}`,
     `URL: ${input.pageUrl}`,
     "",
-    "Where to focus:",
-    input.focus || "—",
+    "Pin:",
+    pinLabel,
     "",
     "What is wrong:",
     input.wrong || "—",
@@ -220,6 +232,14 @@ export function createFeedbackSaveHandler(opts: FeedbackHandlerOptions) {
     const focus = String(answers.focus ?? "");
     const wrong = String(answers.wrong ?? "");
     const expected = String(answers.expected ?? "");
+    const pinX =
+      typeof body.pinX === "number" && Number.isFinite(body.pinX)
+        ? body.pinX
+        : null;
+    const pinY =
+      typeof body.pinY === "number" && Number.isFinite(body.pinY)
+        ? body.pinY
+        : null;
     if (!wrong.trim() && !expected.trim()) {
       res.status(400).json({
         error: "Describe what is wrong or what is expected.",
@@ -241,6 +261,11 @@ export function createFeedbackSaveHandler(opts: FeedbackHandlerOptions) {
         ? body.filenameBase.replace(/[^\w.-]+/g, "_").slice(0, 120)
         : `${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}_${toolId}_${kind}`;
 
+    const pinLine =
+      pinX != null && pinY != null
+        ? `Pinned at ${Math.round(pinX * 100)}%, ${Math.round(pinY * 100)}%`
+        : focus || "—";
+
     const markdown =
       typeof body.markdown === "string" && body.markdown.trim()
         ? body.markdown
@@ -249,8 +274,8 @@ export function createFeedbackSaveHandler(opts: FeedbackHandlerOptions) {
             "",
             `Tool: ${toolLabel}`,
             "",
-            "## Where to focus",
-            focus || "—",
+            "## Pin",
+            pinLine,
             "",
             "## What is wrong",
             wrong || "—",
@@ -293,9 +318,11 @@ export function createFeedbackSaveHandler(opts: FeedbackHandlerOptions) {
           kind,
           toolId,
           toolLabel,
-          focus,
+          focus: focus || pinLine,
           wrong,
           expected,
+          pinX,
+          pinY,
           taskId: typeof body.taskId === "string" ? body.taskId : null,
           taskTitle: typeof body.taskTitle === "string" ? body.taskTitle : null,
           pageUrl: typeof body.pageUrl === "string" ? body.pageUrl : null,
@@ -320,9 +347,11 @@ export function createFeedbackSaveHandler(opts: FeedbackHandlerOptions) {
       emailed = await sendResendEmail(opts, {
         kind,
         toolLabel,
-        focus,
+        focus: focus || pinLine,
         wrong,
         expected,
+        pinX,
+        pinY,
         markdown,
         pngBase64: pngRaw,
         filenameBase,

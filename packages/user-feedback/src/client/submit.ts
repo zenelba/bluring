@@ -16,6 +16,9 @@ export type FeedbackSubmitInput = {
   toolId: string;
   toolLabel: string;
   answers: FeedbackAnswers;
+  /** Normalized pin on screenshot (0–1). */
+  pinX?: number | null;
+  pinY?: number | null;
   /** Opaque session journal JSON (stored in DB). */
   journal?: unknown;
   /** Pre-formatted journal markdown section (host builds this). */
@@ -61,11 +64,70 @@ function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 }
 
+export function formatPinFocus(x: number, y: number): string {
+  const px = Math.round(Math.min(1, Math.max(0, x)) * 100);
+  const py = Math.round(Math.min(1, Math.max(0, y)) * 100);
+  return `Pinned at ${px}%, ${py}%`;
+}
+
+/**
+ * Draw a red pin onto the screenshot so agents see the mark on the Blob URL.
+ * Accepts raw base64 or data URL; returns raw base64 PNG.
+ */
+export async function bakePinOntoPngBase64(
+  screenshotDataUrlOrBase64: string,
+  pin: { x: number; y: number },
+): Promise<string> {
+  const src = screenshotDataUrlOrBase64.startsWith("data:")
+    ? screenshotDataUrlOrBase64
+    : `data:image/png;base64,${screenshotDataUrlOrBase64}`;
+
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error("Failed to load screenshot for pin"));
+    el.src = src;
+  });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth || img.width;
+  canvas.height = img.naturalHeight || img.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas unavailable");
+  ctx.drawImage(img, 0, 0);
+
+  const cx = Math.min(1, Math.max(0, pin.x)) * canvas.width;
+  const cy = Math.min(1, Math.max(0, pin.y)) * canvas.height;
+  const r = Math.max(10, Math.round(Math.min(canvas.width, canvas.height) * 0.012));
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 3, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = "#ef4444";
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 5, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(239,68,68,0.55)";
+  ctx.lineWidth = Math.max(2, Math.round(r * 0.35));
+  ctx.stroke();
+
+  const dataUrl = canvas.toDataURL("image/png");
+  const comma = dataUrl.indexOf(",");
+  return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+}
+
 export function buildFeedbackMarkdown(input: {
   kind: FeedbackKind;
   toolId: string;
   toolLabel: string;
   answers: FeedbackAnswers;
+  pinX?: number | null;
+  pinY?: number | null;
   pageUrl: string;
   userAgent: string;
   taskId?: string | null;
@@ -78,6 +140,13 @@ export function buildFeedbackMarkdown(input: {
     `${stamp()}_${input.toolId}_${input.kind}`;
   const journalMd =
     input.journalMarkdown?.trim() || "_No session journal._";
+  const pinLine =
+    input.pinX != null &&
+    input.pinY != null &&
+    Number.isFinite(input.pinX) &&
+    Number.isFinite(input.pinY)
+      ? formatPinFocus(input.pinX, input.pinY)
+      : input.answers.focus.trim() || "_—_";
   return [
     `# Feedback: ${input.kind}`,
     "",
@@ -88,9 +157,9 @@ export function buildFeedbackMarkdown(input: {
     `- URL: ${input.pageUrl}`,
     `- User-Agent: ${input.userAgent}`,
     "",
-    "## Where to focus",
+    "## Pin",
     "",
-    input.answers.focus.trim() || "_—_",
+    pinLine,
     "",
     "## What is wrong",
     "",
@@ -184,6 +253,8 @@ export async function submitFeedback(
         toolId: input.toolId,
         toolLabel: input.toolLabel,
         answers: input.answers,
+        pinX: input.pinX ?? null,
+        pinY: input.pinY ?? null,
         journal: input.journal ?? null,
         screenshotPngBase64: input.screenshotPngBase64,
         pageUrl: input.pageUrl,

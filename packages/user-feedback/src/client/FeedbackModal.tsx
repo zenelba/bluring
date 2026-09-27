@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import {
+  bakePinOntoPngBase64,
+  formatPinFocus,
   submitFeedback,
   type FeedbackKind,
   type FeedbackSubmitResult,
@@ -21,6 +23,8 @@ export type FeedbackModalProps = {
   onClose: () => void;
 };
 
+type Pin = { x: number; y: number };
+
 export function FeedbackModal({
   open,
   screenshotDataUrl,
@@ -35,19 +39,20 @@ export function FeedbackModal({
   onClose,
 }: FeedbackModalProps) {
   const [kind, setKind] = useState<FeedbackKind>("error");
-  const [focus, setFocus] = useState("");
   const [wrong, setWrong] = useState("");
   const [expected, setExpected] = useState("");
+  const [pin, setPin] = useState<Pin | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<FeedbackSubmitResult | null>(null);
+  const shotRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     setKind("error");
-    setFocus("");
     setWrong("");
     setExpected("");
+    setPin(null);
     setBusy(false);
     setError(null);
     setResult(null);
@@ -57,22 +62,37 @@ export function FeedbackModal({
 
   const canSubmit =
     Boolean(screenshotDataUrl) &&
+    pin != null &&
     (wrong.trim().length > 0 || expected.trim().length > 0) &&
     !busy;
 
+  const handleShotClick = (e: MouseEvent<HTMLDivElement>) => {
+    const el = shotRef.current;
+    if (!el || busy) return;
+    const img = el.querySelector("img");
+    if (!img) return;
+    const rect = img.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
+    setPin({ x, y });
+  };
+
   const handleSubmit = async () => {
-    if (!screenshotDataUrl || !canSubmit) return;
+    if (!screenshotDataUrl || !pin || !canSubmit) return;
     setBusy(true);
     setError(null);
     try {
-      const comma = screenshotDataUrl.indexOf(",");
-      const pngBase64 =
-        comma >= 0 ? screenshotDataUrl.slice(comma + 1) : screenshotDataUrl;
+      const focus = formatPinFocus(pin.x, pin.y);
+      const pngBase64 = await bakePinOntoPngBase64(screenshotDataUrl, pin);
       const res = await submitFeedback({
         kind,
         toolId,
         toolLabel,
         answers: { focus, wrong, expected },
+        pinX: pin.x,
+        pinY: pin.y,
         journal,
         journalMarkdown,
         screenshotPngBase64: pngBase64,
@@ -150,85 +170,117 @@ export function FeedbackModal({
             </button>
           </div>
         ) : (
-          <>
-            <div className="feedback-modal__shot">
-              {screenshotDataUrl ? (
-                <img src={screenshotDataUrl} alt="App screenshot" />
-              ) : (
-                <p>No screenshot</p>
+          <div className="feedback-modal__body">
+            <div className="feedback-modal__shot-col">
+              <p className="feedback-modal__hint">
+                Click the screenshot to mark where the issue is.
+              </p>
+              <div
+                ref={shotRef}
+                className="feedback-modal__shot"
+                onClick={handleShotClick}
+                role="presentation"
+              >
+                {screenshotDataUrl ? (
+                  <div className="feedback-modal__shot-inner">
+                    <img src={screenshotDataUrl} alt="App screenshot" />
+                    {pin && (
+                      <span
+                        className="feedback-modal__pin"
+                        style={{
+                          left: `${pin.x * 100}%`,
+                          top: `${pin.y * 100}%`,
+                        }}
+                        aria-hidden
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <p>No screenshot</p>
+                )}
+              </div>
+              {pin && (
+                <div className="feedback-modal__shot-actions">
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    onClick={() => setPin(null)}
+                    disabled={busy}
+                  >
+                    Clear pin
+                  </button>
+                </div>
               )}
             </div>
 
-            <div className="feedback-modal__kind">
-              <label>
-                <input
-                  type="radio"
-                  name="feedback-kind"
-                  checked={kind === "error"}
-                  onChange={() => setKind("error")}
+            <div className="feedback-modal__form-col">
+              <div className="feedback-modal__kind">
+                <label>
+                  <input
+                    type="radio"
+                    name="feedback-kind"
+                    checked={kind === "error"}
+                    onChange={() => setKind("error")}
+                  />
+                  Error
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="feedback-kind"
+                    checked={kind === "idea"}
+                    onChange={() => setKind("idea")}
+                  />
+                  Idea
+                </label>
+              </div>
+
+              <label className="feedback-modal__field">
+                <span>What is wrong</span>
+                <textarea
+                  rows={4}
+                  value={wrong}
+                  onChange={(e) => setWrong(e.target.value)}
+                  placeholder="What you see that should not happen…"
                 />
-                Error
               </label>
-              <label>
-                <input
-                  type="radio"
-                  name="feedback-kind"
-                  checked={kind === "idea"}
-                  onChange={() => setKind("idea")}
+              <label className="feedback-modal__field">
+                <span>What is expected</span>
+                <textarea
+                  rows={4}
+                  value={expected}
+                  onChange={(e) => setExpected(e.target.value)}
+                  placeholder="What should happen instead…"
                 />
-                Idea
               </label>
+
+              {error && <p className="error-text">{error}</p>}
+              {!pin && screenshotDataUrl && (
+                <p className="feedback-modal__soft">
+                  Mark a point on the screenshot before submitting.
+                </p>
+              )}
+
+              <div className="feedback-modal__actions">
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={onClose}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => void handleSubmit()}
+                  disabled={!canSubmit}
+                >
+                  {busy ? "Sending…" : "Submit"}
+                </button>
+              </div>
             </div>
-
-            <label className="feedback-modal__field">
-              <span>Where to focus on the screen</span>
-              <textarea
-                rows={2}
-                value={focus}
-                onChange={(e) => setFocus(e.target.value)}
-                placeholder="e.g. the pill on the right, Detected text list…"
-              />
-            </label>
-            <label className="feedback-modal__field">
-              <span>What is wrong</span>
-              <textarea
-                rows={3}
-                value={wrong}
-                onChange={(e) => setWrong(e.target.value)}
-                placeholder="What you see that should not happen…"
-              />
-            </label>
-            <label className="feedback-modal__field">
-              <span>What is expected</span>
-              <textarea
-                rows={3}
-                value={expected}
-                onChange={(e) => setExpected(e.target.value)}
-                placeholder="What should happen instead…"
-              />
-            </label>
-
-            {error && <p className="error-text">{error}</p>}
-
-            <div className="feedback-modal__actions">
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={onClose}
-                disabled={busy}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={() => void handleSubmit()}
-                disabled={!canSubmit}
-              >
-                {busy ? "Sending…" : "Submit"}
-              </button>
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>

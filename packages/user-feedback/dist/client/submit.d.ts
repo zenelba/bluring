@@ -10,6 +10,9 @@ export type FeedbackSubmitInput = {
     toolId: string;
     toolLabel: string;
     answers: FeedbackAnswers;
+    /** Normalized pin on screenshot (0–1). */
+    pinX?: number | null;
+    pinY?: number | null;
     /** Opaque session journal JSON (stored in DB). */
     journal?: unknown;
     /** Pre-formatted journal markdown section (host builds this). */
@@ -33,11 +36,22 @@ export type FeedbackSubmitResult = {
     filenameBase?: string;
     error?: string;
 };
+export declare function formatPinFocus(x: number, y: number): string;
+/**
+ * Draw a red pin onto the screenshot so agents see the mark on the Blob URL.
+ * Accepts raw base64 or data URL; returns raw base64 PNG.
+ */
+export declare function bakePinOntoPngBase64(screenshotDataUrlOrBase64: string, pin: {
+    x: number;
+    y: number;
+}): Promise<string>;
 export declare function buildFeedbackMarkdown(input: {
     kind: FeedbackKind;
     toolId: string;
     toolLabel: string;
     answers: FeedbackAnswers;
+    pinX?: number | null;
+    pinY?: number | null;
     pageUrl: string;
     userAgent: string;
     taskId?: string | null;

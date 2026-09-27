@@ -33,6 +33,8 @@ export type FeedbackBody = {
         wrong?: string;
         expected?: string;
     };
+    pinX?: number | null;
+    pinY?: number | null;
     journal?: unknown;
     screenshotPngBase64?: string;
     pageUrl?: string;

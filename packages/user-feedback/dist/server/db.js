@@ -62,10 +62,12 @@ export async function ensureFeedbackTable() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
-    // Migrations for multi-project + resolution tracking
+    // Migrations for multi-project + resolution tracking + pin
     await sql `ALTER TABLE feedback_reports ADD COLUMN IF NOT EXISTS project_id TEXT`;
     await sql `ALTER TABLE feedback_reports ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`;
     await sql `ALTER TABLE feedback_reports ADD COLUMN IF NOT EXISTS resolution_note TEXT`;
+    await sql `ALTER TABLE feedback_reports ADD COLUMN IF NOT EXISTS pin_x REAL`;
+    await sql `ALTER TABLE feedback_reports ADD COLUMN IF NOT EXISTS pin_y REAL`;
     await sql `
     CREATE INDEX IF NOT EXISTS feedback_reports_created_at_idx
     ON feedback_reports (created_at DESC)
@@ -98,11 +100,13 @@ export async function insertFeedbackReport(row) {
     await ensureFeedbackTable();
     const id = row.id || crypto.randomUUID();
     const projectId = row.projectId?.trim() || null;
+    const pinX = row.pinX != null && Number.isFinite(row.pinX) ? row.pinX : null;
+    const pinY = row.pinY != null && Number.isFinite(row.pinY) ? row.pinY : null;
     await sql `
     INSERT INTO feedback_reports (
       id, kind, tool_id, tool_label, focus, wrong, expected,
       task_id, task_title, page_url, user_agent, filename_base,
-      markdown, journal, screenshot_url, project_id
+      markdown, journal, screenshot_url, project_id, pin_x, pin_y
     ) VALUES (
       ${id},
       ${row.kind},
@@ -119,7 +123,9 @@ export async function insertFeedbackReport(row) {
       ${row.markdown ?? null},
       ${row.journal ?? null},
       ${row.screenshotUrl ?? null},
-      ${projectId}
+      ${projectId},
+      ${pinX},
+      ${pinY}
     )
   `;
     return { id };
@@ -140,7 +146,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE (project_id = ${projectId} OR project_id IS NULL)
         AND kind = ${kind}
@@ -154,7 +161,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE (project_id = ${projectId} OR project_id IS NULL)
         AND kind = ${kind}
@@ -168,7 +176,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE (project_id = ${projectId} OR project_id IS NULL)
         AND kind = ${kind}
@@ -181,7 +190,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE (project_id = ${projectId} OR project_id IS NULL)
         AND resolved_at IS NULL
@@ -194,7 +204,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE (project_id = ${projectId} OR project_id IS NULL)
         AND resolved_at IS NOT NULL
@@ -207,7 +218,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE (project_id = ${projectId} OR project_id IS NULL)
       ORDER BY created_at DESC
@@ -219,7 +231,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE kind = ${kind} AND resolved_at IS NULL
       ORDER BY created_at DESC
@@ -231,7 +244,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE kind = ${kind}
       ORDER BY created_at DESC
@@ -243,7 +257,8 @@ export async function listFeedbackReports(options = 50) {
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
         task_id, task_title, page_url, filename_base, screenshot_url,
-        created_at, project_id, resolved_at, resolution_note, journal
+        created_at, project_id, resolved_at, resolution_note, journal,
+        pin_x, pin_y
       FROM feedback_reports
       WHERE resolved_at IS NULL
       ORDER BY created_at DESC
@@ -254,7 +269,8 @@ export async function listFeedbackReports(options = 50) {
     SELECT
       id, kind, tool_id, tool_label, focus, wrong, expected,
       task_id, task_title, page_url, filename_base, screenshot_url,
-      created_at, project_id, resolved_at, resolution_note, journal
+      created_at, project_id, resolved_at, resolution_note, journal,
+      pin_x, pin_y
     FROM feedback_reports
     ORDER BY created_at DESC
     LIMIT ${n}
@@ -309,7 +325,7 @@ export async function listSimilarFeedbackReports(input) {
         return await sql `
       SELECT
         id, kind, tool_id, tool_label, focus, wrong, expected,
-        created_at, resolved_at, resolution_note, project_id
+        created_at, resolved_at, resolution_note, project_id, pin_x, pin_y
       FROM feedback_reports
       WHERE (project_id = ${projectId} OR project_id IS NULL)
         AND tool_id = ${toolId}
@@ -320,7 +336,7 @@ export async function listSimilarFeedbackReports(input) {
     return await sql `
     SELECT
       id, kind, tool_id, tool_label, focus, wrong, expected,
-      created_at, resolved_at, resolution_note, project_id
+      created_at, resolved_at, resolution_note, project_id, pin_x, pin_y
     FROM feedback_reports
     WHERE tool_id = ${toolId}
     ORDER BY created_at DESC

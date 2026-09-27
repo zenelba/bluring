@@ -17,6 +17,8 @@ export type FeedbackReportInsert = {
     focus: string;
     wrong: string;
     expected: string;
+    pinX?: number | null;
+    pinY?: number | null;
     taskId?: string | null;
     taskTitle?: string | null;
     pageUrl?: string | null;

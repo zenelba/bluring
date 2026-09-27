@@ -1,7 +1,9 @@
 export { FeedbackModal, type FeedbackModalProps } from "./FeedbackModal.js";
 export {
+  bakePinOntoPngBase64,
   buildFeedbackMarkdown,
   downloadFeedbackZip,
+  formatPinFocus,
   stashFeedbackLocally,
   submitFeedback,
   type FeedbackAnswers,
