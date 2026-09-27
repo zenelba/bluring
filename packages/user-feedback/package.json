@@ -1,6 +1,6 @@
 {
   "name": "@zenel/user-feedback",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Shared Report error/idea UI + API handlers (Neon, Blob, Resend)",
@@ -19,8 +19,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-css.mjs",
-    "prepare": "npm run build"
+    "build": "tsc -p tsconfig.json && node scripts/copy-css.mjs"
   },
   "peerDependencies": {
     "react": ">=18"
@@ -29,7 +28,8 @@
     "@neondatabase/serverless": "^1.1.0",
     "@vercel/blob": "^2.8.0",
     "file-saver": "^2.0.5",
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "modern-screenshot": "^4.7.0"
   },
   "devDependencies": {
     "@types/file-saver": "^2.0.7",

@@ -204,3 +204,77 @@
   font-size: 0.9rem;
   margin: 0;
 }
+
+/* Header trigger: icon button, label as tooltip */
+
+.ufb-trigger {
+  --ufb-trigger-bg: var(--surface, #fff);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--ufb-trigger-bg);
+  color: var(--text, #0f172a);
+  cursor: pointer;
+  flex: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.ufb-trigger:hover:not(:disabled) {
+  border-color: currentColor;
+}
+
+.ufb-trigger:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.ufb-trigger:disabled {
+  cursor: progress;
+}
+
+/* Right-aligned so it stays on screen when the button sits at the header's end. */
+.ufb-trigger[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  transform: translateY(-2px);
+  white-space: nowrap;
+  padding: 0.3rem 0.55rem;
+  border-radius: 6px;
+  background: #111827;
+  color: #fff;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 90;
+}
+
+.ufb-trigger:hover:not(:disabled)::after,
+.ufb-trigger:focus-visible:not(:disabled)::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.ufb-trigger__spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: ufb-spin 0.7s linear infinite;
+}
+
+@keyframes ufb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

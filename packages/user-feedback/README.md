@@ -1,43 +1,40 @@
 # @zenel/user-feedback
 
-Shared **Report error / idea** stack for Vercel apps: React modal, client submit, Neon + Blob + Resend handlers.
+Shared **Report error / idea** stack for Vercel apps: header icon button with tooltip, page screenshot, pin-and-describe modal, client submit, and Neon + Blob + Resend API handlers.
 
-Canonical location (deployed with bluring): `bluring/packages/user-feedback`.
+Users click the screenshot to pin where the issue is. The pin is baked into the uploaded PNG and stored as `pin_x` / `pin_y`.
 
 ## Install
 
-**Inside bluring** (already wired):
-
 ```json
-"@zenel/user-feedback": "file:./packages/user-feedback"
+"@zenel/user-feedback": "github:zenelba/user-feedback#v0.2.0"
 ```
 
-**Other local apps:**
-
-```json
-"@zenel/user-feedback": "file:../bluring/packages/user-feedback"
-```
-
-Each app uses **its own** `POSTGRES_URL`, `BLOB_READ_WRITE_TOKEN`, `RESEND_API_KEY`, etc.
-
-Users click the screenshot to pin where the issue is (no free-text “where to focus”). The pin is baked into the uploaded PNG and stored as `pin_x` / `pin_y`.
+`dist/` is committed, so git installs need no build step (works on Vercel).
 
 ## Client
 
+Drop the launcher into the header. It renders a round bug icon; the label shows as a tooltip on hover and keyboard focus and is the accessible name.
+
 ```tsx
-import { FeedbackModal } from "@zenel/user-feedback/client";
+import { FeedbackLauncher } from "@zenel/user-feedback/client";
 import "@zenel/user-feedback/styles.css";
 
-<FeedbackModal
-  open={open}
-  screenshotDataUrl={shot}
-  toolId="myTool"
-  toolLabel="My tool"
-  journalMarkdown={formatJournal(...)}
-  journal={snapshot}
-  onClose={...}
+<FeedbackLauncher
+  toolId="map"
+  toolLabel="Map"
+  label={t("reportError")} // optional, default "Report error / idea"
+  captureSelector=".app"   // optional, element to screenshot
+  getJournal={() => journalSnapshot()}
+  getJournalMarkdown={() => journalMarkdown()}
+  idbName="myapp-feedback"
+  onOpen={() => logEvent("feedback_open")}
 />
 ```
+
+Styling uses host CSS variables when present: `--surface`, `--border`, `--text`, `--radius`.
+
+Lower-level pieces are exported too: `FeedbackButton` (icon only) and `FeedbackModal` (modal only).
 
 ## Server (Vercel)
 
@@ -46,9 +43,17 @@ import { createFeedbackSaveHandler } from "@zenel/user-feedback/server";
 
 export default createFeedbackSaveHandler({
   appName: "MyApp",
+  projectId: "myapp",
   authorize: (req) => hasValidAccessCookie(req.headers?.cookie),
   ensureEnv: ensureProjectEnv,
 });
 ```
 
-Same pattern for `createFeedbackListHandler`.
+Same pattern for `createFeedbackListHandler` and `createFeedbackResolveHandler`.
+
+Env: use the **shared** `POSTGRES_URL` and `BLOB_READ_WRITE_TOKEN` (same values as Bluring) so all apps report into one store, separated by `projectId`. `RESEND_API_KEY` is optional (email on submit).
+
+## Updating apps
+
+1. Change the package, bump `version` in `package.json`, run `npm run build`, commit (including `dist/`), tag `vX.Y.Z`, push the tag.
+2. In each app: change the tag in its `package.json` dependency, `npm install`, commit the lockfile, deploy.

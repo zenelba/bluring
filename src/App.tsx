@@ -34,7 +34,7 @@ import AudioVideoMode from "./AudioVideoMode";
 import BrandRemovalMode from "./BrandRemovalMode";
 import TextReplaceMode from "./TextReplaceMode";
 import HomeLanding from "./HomeLanding";
-import { FeedbackModal } from "@zenel/user-feedback/client";
+import { FeedbackLauncher } from "@zenel/user-feedback/client";
 import "@zenel/user-feedback/styles.css";
 import {
   getRestoredTask,
@@ -49,7 +49,6 @@ import {
   logEvent,
   startSession,
 } from "./lib/sessionJournal";
-import { domToPng } from "modern-screenshot";
 import "./App.css";
 
 type ToolMode =
@@ -181,10 +180,6 @@ export default function App() {
     taskId: string | null;
     title: string | null;
   }>({ taskId: null, title: null });
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [feedbackShot, setFeedbackShot] = useState<string | null>(null);
-  const [feedbackBusy, setFeedbackBusy] = useState(false);
-
   useEffect(() => {
     if (mode === "av" && !avAllowed) {
       setMode("home");
@@ -441,29 +436,6 @@ export default function App() {
       /* ignore restore errors */
     }
   }, []);
-
-  const openFeedback = async () => {
-    if (feedbackBusy) return;
-    setFeedbackBusy(true);
-    try {
-      const root =
-        (document.querySelector(".app") as HTMLElement | null) ??
-        document.documentElement;
-      const dataUrl = await domToPng(root, {
-        quality: 0.92,
-        scale: Math.min(2, window.devicePixelRatio || 1),
-      });
-      setFeedbackShot(dataUrl);
-      setFeedbackOpen(true);
-      logEvent("feedback_open");
-    } catch (err) {
-      console.error(err);
-      setFeedbackShot(null);
-      setFeedbackOpen(true);
-    } finally {
-      setFeedbackBusy(false);
-    }
-  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1007,14 +979,23 @@ export default function App() {
           <p className="app-top__sub">{modeSubtitle(mode)}</p>
         </div>
         <div className="app-top__actions">
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={() => void openFeedback()}
-            disabled={feedbackBusy}
-          >
-            {feedbackBusy ? "Capturing…" : "Report error / idea"}
-          </button>
+          <FeedbackLauncher
+            toolId={mode === "home" ? "home" : mode}
+            toolLabel={
+              mode === "home"
+                ? "Home"
+                : (APP_MODES.find((m) => m.id === mode)?.label ?? mode)
+            }
+            taskId={activeTaskRef.current.taskId}
+            taskTitle={activeTaskRef.current.title}
+            getJournal={getJournalSnapshot}
+            getJournalMarkdown={() => {
+              const snap = getJournalSnapshot();
+              return snap ? formatJournalMarkdown(snap) : undefined;
+            }}
+            idbName="bluring-feedback"
+            onOpen={() => logEvent("feedback_open")}
+          />
           {mode !== "home" && (
             <button
               type="button"
@@ -1038,29 +1019,6 @@ export default function App() {
           {modeSelect}
         </div>
       </header>
-
-      <FeedbackModal
-        open={feedbackOpen}
-        screenshotDataUrl={feedbackShot}
-        toolId={mode === "home" ? "home" : mode}
-        toolLabel={
-          mode === "home"
-            ? "Home"
-            : (APP_MODES.find((m) => m.id === mode)?.label ?? mode)
-        }
-        taskId={activeTaskRef.current.taskId}
-        taskTitle={activeTaskRef.current.title}
-        journal={getJournalSnapshot()}
-        journalMarkdown={(() => {
-          const snap = getJournalSnapshot();
-          return snap ? formatJournalMarkdown(snap) : undefined;
-        })()}
-        idbName="bluring-feedback"
-        onClose={() => {
-          setFeedbackOpen(false);
-          setFeedbackShot(null);
-        }}
-      />
 
       {mode === "home" ? (
         <HomeLanding
