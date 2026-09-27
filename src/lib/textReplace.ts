@@ -1790,10 +1790,11 @@ function measurePill(
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
 
-  const h = orig.h;
+  // Keep original plate height & stadium radius — only width may grow.
+  const h = Math.max(1, orig.h);
   const textBox = bboxToPx(item.bbox, imgW, imgH);
-  // Source side pad from plate vs OCR box (stable; ignores flaky measureText).
-  const padH = Math.max(8, (orig.w - textBox.w) / 2);
+  // Horizontal inset from the source plate (same look as the original chip).
+  const padH = Math.max(2, (orig.w - Math.min(textBox.w, orig.w * 0.95)) / 2);
 
   const newMetrics = pillTextInkWidth(ctx, text || "Hg", scaleX);
   const newDrawn = measureDrawnTextWidth(
@@ -1807,12 +1808,10 @@ function measurePill(
   const ascent =
     newMetrics.ascent > 0 ? newMetrics.ascent : sizePx * 0.8;
 
-  // Single model: drawn ink + source pad, then +15% safety.
-  const w = Math.max(orig.w, (newInk + 2 * padH) * 1.15, h * 0.8);
-  const radius =
-    item.container.radiusPxHint > 0
-      ? item.container.radiusPxHint
-      : h / 2;
+  // Same construction as the original: ink + 2*sourcePad. Grow only when text needs it.
+  const w = Math.max(orig.w, newInk + 2 * padH);
+  // Capsule: always half-height corners like the source badges.
+  const radius = h / 2;
   return {
     w,
     h,
@@ -1851,8 +1850,6 @@ function layoutPillGroup(
     gaps.push(Number.isFinite(raw) && raw > 0 ? Math.max(minGap, raw) : minGap);
   }
 
-  const groupY =
-    measured.reduce((s, m) => s + m.orig.y, 0) / measured.length;
   let cursorX = measured[0].orig.x;
 
   const layouts = measured.map((m, i) => {
@@ -1860,7 +1857,8 @@ function layoutPillGroup(
       item: m.item,
       text: m.text,
       x: cursorX,
-      y: groupY,
+      // Keep each chip on its original vertical plate position
+      y: m.orig.y,
       w: m.w,
       h: m.h,
       radius: m.radius,
@@ -1939,16 +1937,6 @@ function pillNormRect(item: DetectedText): TextBBox {
   };
 }
 
-function pillsOnSameRow(a: DetectedText, b: DetectedText): boolean {
-  if (a.container.type !== "pill" || b.container.type !== "pill") return false;
-  const ar = pillNormRect(a);
-  const br = pillNormRect(b);
-  const ay = ar.y + ar.h / 2;
-  const by = br.y + br.h / 2;
-  const avgH = (ar.h + br.h) / 2;
-  return Math.abs(ay - by) <= avgH * 1.0;
-}
-
 /** Chip-like detections that must reflow with a growing pill (even if still "plain"). */
 function isRowChip(item: DetectedText): boolean {
   if (item.container.type === "pill") return true;
@@ -1987,15 +1975,6 @@ function normRectIoU(a: TextBBox, b: TextBBox): number {
   const inter = iw * ih;
   const uni = a.w * a.h + b.w * b.h - inter;
   return uni > 0 ? inter / uni : 0;
-}
-
-function pxRectsIntersect(a: PxRect, b: PxRect, pad = 0): boolean {
-  return !(
-    a.x + a.w + pad < b.x ||
-    b.x + b.w + pad < a.x ||
-    a.y + a.h + pad < b.y ||
-    b.y + b.h + pad < a.y
-  );
 }
 
 function unionPxRects(rects: PxRect[], pad = 0): PxRect | null {
@@ -2355,8 +2334,54 @@ type ChipRowPlan = {
 };
 
 /**
- * Build chip rows for wipe + redraw: expand neighbors, merge co-plate
- * fragments, layout, then pull in any chip whose plate hits the grown AABB.
+ * Expand wipe AABB horizontally to cover any vivid chip pixels still in the
+ * row's vertical band (catches undetected / plain pink remnants).
+ */
+function expandAabbToVividInBand(
+  ctx: CanvasRenderingContext2D,
+  aabb: PxRect,
+  imgW: number,
+  imgH: number,
+): PxRect {
+  const y0 = Math.max(0, Math.floor(aabb.y));
+  const y1 = Math.min(imgH, Math.ceil(aabb.y + aabb.h));
+  if (y1 <= y0) return aabb;
+  // Scan a bit wider than current aabb so leftovers just outside are caught
+  const scanX0 = Math.max(0, Math.floor(aabb.x - aabb.h * 2));
+  const scanX1 = Math.min(imgW, Math.ceil(aabb.x + aabb.w + aabb.h * 4));
+  const rw = scanX1 - scanX0;
+  const rh = y1 - y0;
+  if (rw <= 0 || rh <= 0) return aabb;
+  const imageData = ctx.getImageData(scanX0, y0, rw, rh);
+  const data = imageData.data;
+  let minX = aabb.x;
+  let maxX = aabb.x + aabb.w;
+  let found = false;
+  for (let j = 0; j < rh; j++) {
+    for (let i = 0; i < rw; i++) {
+      const di = (j * rw + i) * 4;
+      const c = { r: data[di], g: data[di + 1], b: data[di + 2] };
+      if (!isVividChipColor(c)) continue;
+      found = true;
+      const gx = scanX0 + i;
+      if (gx < minX) minX = gx;
+      if (gx + 1 > maxX) maxX = gx + 1;
+    }
+  }
+  if (!found) return aabb;
+  const pad = 3;
+  return {
+    x: Math.max(0, minX - pad),
+    y: aabb.y,
+    w: Math.min(imgW, maxX + pad) - Math.max(0, minX - pad),
+    h: aabb.h,
+  };
+}
+
+/**
+ * Build chip rows for wipe + redraw: take the full vertical badge band,
+ * merge co-plate fragments, layout, wipe old+new footprints (plus any vivid
+ * leftovers in the band), then redraw.
  */
 function collectChipRowPlans(
   ctx: CanvasRenderingContext2D,
@@ -2388,6 +2413,8 @@ function collectChipRowPlans(
     baseTexts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
   }
 
+  // Prefer measured chips; also promote any detection in the band so plain
+  // pink/yellow leftovers still reflow.
   const allChips = items.filter(isRowChip).map(asPillForLayout);
   const plans: ChipRowPlan[] = [];
   const globalHandled = new Set<string>();
@@ -2396,44 +2423,42 @@ function collectChipRowPlans(
   for (const seed of seeds) {
     if (globalHandled.has(seed.id)) continue;
 
-    let rowIds = new Set<string>([seed.id]);
-    // Grow row by same-row proximity among chips that are changed or nearby
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const p of allChips) {
-        if (!rowIds.has(p.id)) continue;
-        for (const q of allChips) {
-          if (rowIds.has(q.id)) continue;
-          if (!chipsOnSameRow(p, q) && !pillsOnSameRow(p, q)) continue;
-          const pr = rowChipNormRect(p);
-          const qr = rowChipNormRect(q);
-          const gap =
-            pr.x < qr.x ? qr.x - (pr.x + pr.w) : pr.x - (qr.x + qr.w);
-          const maxGap = Math.max(
-            Math.max(pr.w, qr.w) * 2.5,
-            ((pr.h + qr.h) / 2) * 5,
-            0.18,
-          );
-          // Include if near, or already in changed set
-          if (
-            (gap >= -0.05 && gap <= maxGap) ||
-            changedIds.has(q.id)
-          ) {
-            if (gap >= -0.05 && gap <= maxGap) {
-              rowIds.add(q.id);
-              grew = true;
-            } else if (changedIds.has(q.id) && chipsOnSameRow(p, q)) {
-              rowIds.add(q.id);
-              grew = true;
-            }
-          }
-        }
+    // Full vertical band: every chip on the same badge row (user: remove all
+    // pills, restore background, put them back with original geometry).
+    const seedRect = rowChipNormRect(seed);
+    const seedMid = seedRect.y + seedRect.h / 2;
+    let rowIds = new Set<string>();
+    for (const q of allChips) {
+      const qr = rowChipNormRect(q);
+      const qMid = qr.y + qr.h / 2;
+      const avgH = (seedRect.h + qr.h) / 2;
+      if (Math.abs(qMid - seedMid) <= avgH * 1.25) {
+        rowIds.add(q.id);
       }
     }
+    // Also include non-chip detections in the band that sit on vivid plates
+    for (const q of items) {
+      if (rowIds.has(q.id)) continue;
+      const qr = q.bbox;
+      const qMid = qr.y + qr.h / 2;
+      if (Math.abs(qMid - seedMid) > seedRect.h * 1.25) continue;
+      // Must horizontally sit near the badge cluster
+      const seedPx = pillContainerPx(seed, imgW, imgH);
+      const qPx = bboxToPx(q.bbox, imgW, imgH);
+      if (qPx.x > seedPx.x + seedPx.w + seedPx.h * 8) continue;
+      if (qPx.x + qPx.w < seedPx.x - seedPx.h) continue;
+      rowIds.add(q.id);
+    }
 
-    // Iteratively add chips whose plates intersect grown AABB
-    let members = allChips.filter((c) => rowIds.has(c.id));
+    let members = items
+      .filter((c) => rowIds.has(c.id))
+      .map(asPillForLayout)
+      .filter(isRowChip);
+    // If band pick included plain items, still try asPillForLayout
+    if (members.length === 0) {
+      members = allChips.filter((c) => rowIds.has(c.id));
+    }
+
     let merged = mergeCoPlateMembers(members, baseTexts);
     let layouts = layoutPillGroup(
       ctx,
@@ -2442,58 +2467,33 @@ function collectChipRowPlans(
       imgW,
       imgH,
     );
-    for (let iter = 0; iter < 4; iter++) {
-      const footprint: PxRect[] = [];
-      for (const m of merged.members) {
-        footprint.push(pillContainerPx(m, imgW, imgH));
-      }
-      for (const layout of layouts) {
-        footprint.push({
-          x: layout.x,
-          y: layout.y,
-          w: layout.w,
-          h: layout.h,
-        });
-      }
-      const aabb = unionPxRects(footprint, 4);
-      if (!aabb) break;
-      let added = false;
-      for (const q of allChips) {
-        if (rowIds.has(q.id) || merged.absorbed.has(q.id)) continue;
-        if (!chipsOnSameRow(q, seed) && !members.some((m) => chipsOnSameRow(m, q))) {
-          continue;
-        }
-        const plate = pillContainerPx(q, imgW, imgH);
-        if (pxRectsIntersect(plate, aabb, 2)) {
-          rowIds.add(q.id);
-          added = true;
-        }
-      }
-      if (!added) break;
-      members = allChips.filter((c) => rowIds.has(c.id));
-      merged = mergeCoPlateMembers(members, baseTexts);
-      layouts = layoutPillGroup(
-        ctx,
-        merged.members,
-        merged.texts,
-        imgW,
-        imgH,
-      );
-    }
+    if (layouts.length === 0) continue;
 
     const footprint: PxRect[] = [];
     for (const m of merged.members) {
       footprint.push(pillContainerPx(m, imgW, imgH));
     }
+    // Also cover every original detection bbox in the band (plain leftovers)
+    for (const id of rowIds) {
+      const it = items.find((i) => i.id === id);
+      if (!it) continue;
+      footprint.push(
+        isRowChip(it)
+          ? pillContainerPx(asPillForLayout(it), imgW, imgH)
+          : bboxToPx(it.bbox, imgW, imgH),
+      );
+    }
     for (const layout of layouts) {
       footprint.push({ x: layout.x, y: layout.y, w: layout.w, h: layout.h });
     }
-    const aabb = unionPxRects(footprint, 4);
-    if (!aabb || layouts.length === 0) continue;
+    let aabb = unionPxRects(footprint, 4);
+    if (!aabb) continue;
+    aabb = expandAabbToVividInBand(ctx, aabb, imgW, imgH);
 
     const handledIds = new Set<string>([
       ...merged.members.map((m) => m.id),
       ...merged.absorbed,
+      ...rowIds,
     ]);
     for (const id of handledIds) globalHandled.add(id);
 
