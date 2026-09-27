@@ -7,6 +7,12 @@ import {
   matchFont,
   type FontWeightNum,
 } from "./fontMatch";
+import {
+  drawPillDebugOverlay,
+  measurePillRows,
+  renderPillRow,
+  type PillRowDebug,
+} from "./pillRow";
 
 export type TextBBox = { x: number; y: number; w: number; h: number };
 
@@ -78,6 +84,9 @@ export type RenderedVariant = {
   label: string;
   blob: Blob;
   url: string;
+  /** Result with measured / new pill outlines, T1 and cleared area drawn on top. */
+  debugUrl?: string;
+  pillRows?: PillRowDebug[];
 };
 
 const MAX_API_EDGE = 1536;
@@ -2832,6 +2841,32 @@ export async function renderTextReplaceVariants(input: {
   // Ensure Google Fonts used by pills are ready before measureText / draw
   await ensurePillFontsLoaded(items, imgH);
 
+  // Badge rows are measured fresh from source pixels; stored container
+  // geometry (e.g. from a restored task) is never trusted for them.
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = imgW;
+  srcCanvas.height = imgH;
+  const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
+  if (!srcCtx) throw new Error("Canvas unavailable");
+  srcCtx.drawImage(source, 0, 0);
+  const srcData = srcCtx.getImageData(0, 0, imgW, imgH);
+  const pillRows = measurePillRows(
+    srcData,
+    items
+      .filter((i) => i.kind !== "logo")
+      .map((i) => ({
+        id: i.id,
+        text: i.text,
+        bbox: i.bbox,
+        fontWeight: i.style.fontWeight,
+      })),
+  );
+  const rowIds = new Set(
+    pillRows.flatMap((r) => r.pills.flatMap((p) => p.memberIds)),
+  );
+  const restItems = items.filter((i) => !rowIds.has(i.id));
+  const itemById = new Map(items.map((i) => [i.id, i]));
+
   const seriesItem = series.itemId
     ? items.find((i) => i.id === series.itemId && i.number)
     : null;
@@ -2863,7 +2898,7 @@ export async function renderTextReplaceVariants(input: {
 
   const clean = buildCleanPlate(
     source,
-    items,
+    restItems,
     edits,
     seriesItem?.id ?? null,
     eraseSeriesValue,
@@ -2882,14 +2917,55 @@ export async function renderTextReplaceVariants(input: {
     ctx.drawImage(clean, 0, 0);
     drawAllReplacements(
       ctx,
-      items,
+      restItems,
       edits,
       seriesItem?.id ?? null,
       value,
       imgW,
       imgH,
     );
+    const pillDebug: PillRowDebug[] = [];
+    for (const row of pillRows) {
+      const texts: string[] = [];
+      const changed: boolean[] = [];
+      for (const pill of row.pills) {
+        const members = pill.memberIds
+          .map((id) => itemById.get(id))
+          .filter((m): m is DetectedText => m != null);
+        texts.push(
+          members
+            .map((m) =>
+              resolveItemText(
+                m,
+                edits[m.id],
+                seriesItem?.id === m.id ? value : null,
+              ),
+            )
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim(),
+        );
+        changed.push(
+          members.some((m) =>
+            itemChanged(m, edits[m.id], seriesItem?.id ?? null),
+          ),
+        );
+      }
+      pillDebug.push(renderPillRow(ctx, srcData, row, texts, changed));
+    }
     const blob = await canvasToBlob(canvas, "image/png");
+    let debugUrl: string | undefined;
+    if (pillDebug.length > 0) {
+      const dbg = document.createElement("canvas");
+      dbg.width = imgW;
+      dbg.height = imgH;
+      const dctx = dbg.getContext("2d");
+      if (dctx) {
+        dctx.drawImage(canvas, 0, 0);
+        drawPillDebugOverlay(dctx, pillDebug);
+        debugUrl = URL.createObjectURL(await canvasToBlob(dbg, "image/png"));
+      }
+    }
     const offset = seriesItem ? i - steps : 0;
     const label =
       value == null
@@ -2904,6 +2980,8 @@ export async function renderTextReplaceVariants(input: {
       label,
       blob,
       url: URL.createObjectURL(blob),
+      debugUrl,
+      pillRows: pillDebug,
     });
   }
 
@@ -2932,5 +3010,8 @@ export async function downloadTextReplaceZip(
 }
 
 export function revokeVariants(variants: RenderedVariant[]) {
-  for (const v of variants) URL.revokeObjectURL(v.url);
+  for (const v of variants) {
+    URL.revokeObjectURL(v.url);
+    if (v.debugUrl) URL.revokeObjectURL(v.debugUrl);
+  }
 }

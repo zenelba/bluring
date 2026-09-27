@@ -290,6 +290,7 @@ export default function TextReplaceMode(props: {
   });
   const [variants, setVariants] = useState<RenderedVariant[]>([]);
   const [lightbox, setLightbox] = useState<RenderedVariant | null>(null);
+  const [showPillDebug, setShowPillDebug] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -558,6 +559,33 @@ export default function TextReplaceMode(props: {
         series,
       });
       setVariants(out);
+      const pillRows = out[0]?.pillRows ?? [];
+      if (pillRows.length > 0) {
+        logEvent(
+          "pill_rows",
+          JSON.stringify(
+            pillRows.map((r) => ({
+              T1: r.T1,
+              H1: r.H1,
+              gaps: r.gaps,
+              cleared: r.cleared,
+              pills: r.pills.map((p) => ({
+                text: p.text,
+                newText: p.newText,
+                mode: p.mode,
+                rect: p.rect,
+                newRect: p.newRect,
+                fill: p.fill,
+                textColor: p.textColor,
+                radius: p.radius,
+                padL: p.padL,
+                padR: p.padR,
+                font: p.font,
+              })),
+            })),
+          ),
+        );
+      }
       setLiveNote(
         out.length === 1
           ? "1 image ready."
@@ -982,6 +1010,16 @@ export default function TextReplaceMode(props: {
               {variants.length > 0 && (
                 <div className="tr-results">
                   <span className="osebe-kicker">Results</span>
+                  {variants.some((v) => v.debugUrl) && (
+                    <label className="tr-debug-toggle">
+                      <input
+                        type="checkbox"
+                        checked={showPillDebug}
+                        onChange={(e) => setShowPillDebug(e.target.checked)}
+                      />{" "}
+                      Show pill measurements
+                    </label>
+                  )}
                   <div className="osebe-grid">
                     {variants.map((v) => (
                       <article key={v.index} className="osebe-card">
@@ -991,7 +1029,10 @@ export default function TextReplaceMode(props: {
                           onClick={() => openLightbox(v)}
                           aria-label={`Enlarge ${v.label}`}
                         >
-                          <img src={v.url} alt={v.label} />
+                          <img
+                            src={showPillDebug && v.debugUrl ? v.debugUrl : v.url}
+                            alt={v.label}
+                          />
                         </button>
                         <div className="osebe-card__meta">
                           <div className="osebe-card__name">{v.label}</div>
@@ -1033,7 +1074,11 @@ export default function TextReplaceMode(props: {
             </button>
             <img
               className="tr-lightbox__img"
-              src={lightbox.url}
+              src={
+                showPillDebug && lightbox.debugUrl
+                  ? lightbox.debugUrl
+                  : lightbox.url
+              }
               alt={lightbox.label}
             />
             <p className="tr-lightbox__caption">{lightbox.label}</p>
