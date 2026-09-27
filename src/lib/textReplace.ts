@@ -1668,14 +1668,17 @@ async function ensurePillFontsLoaded(
   const loads: Promise<FontFace[]>[] = [];
   const seen = new Set<string>();
   for (const item of items) {
-    if (item.container.type !== "pill") continue;
+    if (!isRowChip(item) && item.container.type !== "pill") continue;
     const family = item.style.fontFamily || "Montserrat";
     const weight = itemFontWeight(item);
     const sizePx = itemFontSize(item, imgH);
-    const css = fontCss(family, weight, sizePx);
-    if (seen.has(css)) continue;
-    seen.add(css);
-    loads.push(document.fonts.load(css).catch(() => []));
+    // Also load a slightly larger size used by calibrate/fit
+    for (const px of [sizePx, sizePx * 1.15, Math.max(6, sizePx * 0.9)]) {
+      const css = fontCss(family, weight, px);
+      if (seen.has(css)) continue;
+      seen.add(css);
+      loads.push(document.fonts.load(css).catch(() => []));
+    }
   }
   await Promise.all(loads);
   if (document.fonts.ready) {
@@ -1788,6 +1791,7 @@ function measurePill(
   ctx.textBaseline = "alphabetic";
 
   const h = orig.h;
+  const textBox = bboxToPx(item.bbox, imgW, imgH);
   const origMetrics = pillTextInkWidth(ctx, item.text || "Hg", scaleX);
   const origDrawn = measureDrawnTextWidth(
     family,
@@ -1796,11 +1800,22 @@ function measurePill(
     scaleX,
     item.text || "Hg",
   );
-  const origInk = Math.max(origMetrics.width, origDrawn);
+  // Prefer the tighter OCR box as a lower bound on original ink so pad isn't
+  // collapsed when measureText overestimates the source glyphs.
+  const origInk = Math.max(
+    1,
+    Math.min(
+      Math.max(origMetrics.width, origDrawn),
+      textBox.w,
+      orig.w * 0.92,
+    ),
+  );
 
   const fromPlate = (orig.w - origInk) / 2;
   const fromContainer = (item.container.padX || 0.45) * h;
-  const padH = Math.max(0.4 * h, fromContainer, fromPlate, 6);
+  // Keep side pad at least ~half the plate height (chip look) and never below
+  // the measured source inset.
+  const padH = Math.max(0.5 * h, fromContainer, fromPlate, 8);
 
   const newMetrics = pillTextInkWidth(ctx, text || "Hg", scaleX);
   const newDrawn = measureDrawnTextWidth(
@@ -1810,13 +1825,29 @@ function measurePill(
     scaleX,
     text || "Hg",
   );
-  const newInk = Math.max(newMetrics.width, newDrawn);
+  // Unscaled advance as a floor — scaleX can undershoot bold display width.
+  ctx.font = css;
+  const rawAdvance = Math.max(1, ctx.measureText(text || "Hg").width);
+  const newInk = Math.max(newMetrics.width, newDrawn, rawAdvance * scaleX);
   const ascent =
     newMetrics.ascent > 0 ? newMetrics.ascent : sizePx * 0.8;
 
-  // User-requested ~15% safety margin so glyphs never crowd the plate edge
-  const contentW = (newInk + 2 * padH) * 1.15;
-  const w = Math.max(h * 0.8, contentW, orig.w);
+  // Character-count floor: bold caps are ~0.62em; stops "GARANCIJA CENE" from
+  // keeping the old "ENOTNA CENA" plate when metrics under-read.
+  const origLen = Math.max(1, (item.text || "").trim().length);
+  const newLen = Math.max(1, (text || "").trim().length);
+  const lenRatio = Math.max(1, newLen / origLen);
+  const charFloor = newLen * sizePx * 0.58 * Math.min(1, scaleX) + 2 * padH;
+  const grownFromOrig = orig.w * lenRatio;
+  const inkFloor = newInk + 2 * padH;
+  // User-requested ~15% safety *after* width math so glyphs never crowd edges.
+  const contentW = Math.max(inkFloor, charFloor, grownFromOrig) * 1.15;
+  let w = Math.max(h * 0.8, contentW, orig.w);
+
+  // Final guard: plate must fit rasterized ink + pad (+15%).
+  const fitted = (newInk + 2 * padH) * 1.15;
+  if (w < fitted) w = fitted;
+
   const radius =
     item.container.radiusPxHint > 0
       ? item.container.radiusPxHint
@@ -1848,19 +1879,23 @@ function layoutPillGroup(
     return { item, text, ...m };
   });
 
-  // Original gaps between consecutive pills (container edges)
+  // Original gaps between consecutive pills (container edges).
+  // When OCR splits one chip ("2"+"LETI") both may share nearly the same plate —
+  // use a small positive gap instead of stacking them on the same x.
   const gaps: number[] = [];
   for (let i = 0; i < measured.length - 1; i++) {
     const a = measured[i].orig;
     const b = measured[i + 1].orig;
-    gaps.push(Math.max(4, b.x - (a.x + a.w)));
+    const raw = b.x - (a.x + a.w);
+    const minGap = Math.max(4, Math.round(measured[i].h * 0.2));
+    gaps.push(Number.isFinite(raw) && raw > 0 ? Math.max(minGap, raw) : minGap);
   }
 
   const groupY =
     measured.reduce((s, m) => s + m.orig.y, 0) / measured.length;
   let cursorX = measured[0].orig.x;
 
-  return measured.map((m, i) => {
+  const layouts = measured.map((m, i) => {
     const layout: PillLayout = {
       item: m.item,
       text: m.text,
@@ -1878,6 +1913,15 @@ function layoutPillGroup(
     cursorX += m.w + (gaps[i] ?? 0);
     return layout;
   });
+
+  // Hard no-overlap pass: a grown plate must push everything to its right.
+  for (let i = 1; i < layouts.length; i++) {
+    const prev = layouts[i - 1];
+    const minGap = Math.max(4, Math.round(prev.h * 0.2));
+    const minX = prev.x + prev.w + minGap;
+    if (layouts[i].x < minX) layouts[i].x = minX;
+  }
+  return layouts;
 }
 
 function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
@@ -1886,18 +1930,28 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   roundRectPath(ctx, layout.x, layout.y, layout.w, layout.h, layout.radius);
   ctx.fill();
 
-  // Same font + scaleX as measurePill
+  // Same font + scaleX as measurePill; center using max(metrics, drawn ink)
   ctx.save();
   ctx.font = layout.fontCss;
   ctx.fillStyle = layout.item.style.color;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   const ink = pillTextInkWidth(ctx, layout.text, layout.scaleX);
+  const weight = itemFontWeight(layout.item);
+  const family = layout.item.style.fontFamily || "Montserrat";
+  const drawn = measureDrawnTextWidth(
+    family,
+    weight,
+    layout.fontSize,
+    layout.scaleX,
+    layout.text,
+  );
+  const inkW = Math.max(ink.width, drawn);
   const m = ctx.measureText(layout.text || "Hg");
   const leftBearing =
     (Number.isFinite(m.actualBoundingBoxLeft) ? m.actualBoundingBoxLeft : 0) *
     layout.scaleX;
-  const textX = layout.x + (layout.w - ink.width) / 2 - leftBearing;
+  const textX = layout.x + (layout.w - inkW) / 2 - leftBearing;
   const midY = layout.y + layout.h / 2;
   const ascent =
     ink.ascent > 0
@@ -1936,31 +1990,55 @@ function pillsOnSameRow(a: DetectedText, b: DetectedText): boolean {
   return Math.abs(ay - by) <= avgH * 1.0;
 }
 
-/** Expand changed pill ids to include same-row neighbors so chips reflow together. */
+/** Chip-like detections that must reflow with a growing pill (even if still "plain"). */
+function isRowChip(item: DetectedText): boolean {
+  if (item.container.type === "pill") return true;
+  if (item.container.rect) return true;
+  if (item.container.fill) return true;
+  return false;
+}
+
+function rowChipNormRect(item: DetectedText): TextBBox {
+  if (item.container.type === "pill" || item.container.rect) {
+    return pillNormRect(item);
+  }
+  return item.bbox;
+}
+
+function chipsOnSameRow(a: DetectedText, b: DetectedText): boolean {
+  const ar = rowChipNormRect(a);
+  const br = rowChipNormRect(b);
+  const ay = ar.y + ar.h / 2;
+  const by = br.y + br.h / 2;
+  const avgH = (ar.h + br.h) / 2;
+  return Math.abs(ay - by) <= avgH * 1.15;
+}
+
+/** Expand changed ids to same-row chip neighbors so plates reflow together. */
 function expandPillRowIds(
   items: DetectedText[],
   changedIds: Set<string>,
 ): Set<string> {
   const out = new Set(changedIds);
-  const pills = items.filter((i) => i.container.type === "pill");
+  const chips = items.filter(isRowChip);
   let grew = true;
   while (grew) {
     grew = false;
-    for (const p of pills) {
+    for (const p of chips) {
       if (!out.has(p.id)) continue;
-      for (const q of pills) {
+      for (const q of chips) {
         if (out.has(q.id)) continue;
-        if (!pillsOnSameRow(p, q)) continue;
-        const pr = pillNormRect(p);
-        const qr = pillNormRect(q);
+        if (!chipsOnSameRow(p, q)) continue;
+        const pr = rowChipNormRect(p);
+        const qr = rowChipNormRect(q);
         const gap =
           pr.x < qr.x ? qr.x - (pr.x + pr.w) : pr.x - (qr.x + qr.w);
         const maxGap = Math.max(
-          Math.max(pr.w, qr.w) * 2.0,
-          ((pr.h + qr.h) / 2) * 4,
-          0.15,
+          Math.max(pr.w, qr.w) * 2.5,
+          ((pr.h + qr.h) / 2) * 5,
+          0.18,
         );
-        if (gap >= -0.02 && gap <= maxGap) {
+        if (gap >= -0.05 && gap <= maxGap) {
           out.add(q.id);
           grew = true;
         }
@@ -1968,6 +2046,22 @@ function expandPillRowIds(
     }
   }
   return out;
+}
+
+/** Treat fill/rect plain chips as pills for erase + redraw layout. */
+function asPillForLayout(item: DetectedText): DetectedText {
+  if (item.container.type === "pill") return item;
+  if (!item.container.fill && !item.container.rect) return item;
+  return {
+    ...item,
+    container: {
+      ...item.container,
+      type: "pill",
+      fill: item.container.fill ?? "#FFD400",
+      padX: item.container.padX || 0.45,
+      padY: item.container.padY || 0.35,
+    },
+  };
 }
 
 function collectEraseTargets(
@@ -1988,7 +2082,7 @@ function collectEraseTargets(
   // If any member of a pill group changes, erase the whole group
   const groupMembers = new Map<string, DetectedText[]>();
   for (const item of items) {
-    if (item.container.type !== "pill" || !item.layoutGroupId) continue;
+    if (!isRowChip(item) || !item.layoutGroupId) continue;
     const list = groupMembers.get(item.layoutGroupId) ?? [];
     list.push(item);
     groupMembers.set(item.layoutGroupId, list);
@@ -2011,9 +2105,9 @@ function collectEraseTargets(
 
   const rects: PxRect[] = [];
   const pillHandled = new Set<string>();
-  const pillChanged = items.filter(
-    (i) => i.container.type === "pill" && changedIds.has(i.id),
-  );
+  const pillChanged = items
+    .filter((i) => isRowChip(i) && changedIds.has(i.id))
+    .map(asPillForLayout);
 
   for (const seed of pillChanged) {
     if (pillHandled.has(seed.id)) continue;
@@ -2021,6 +2115,7 @@ function collectEraseTargets(
       (p) =>
         p.id === seed.id ||
         (p.layoutGroupId && p.layoutGroupId === seed.layoutGroupId) ||
+        chipsOnSameRow(p, seed) ||
         pillsOnSameRow(p, seed),
     );
     for (const m of row) pillHandled.add(m.id);
@@ -2036,7 +2131,7 @@ function collectEraseTargets(
   }
 
   for (const item of items) {
-    if (!changedIds.has(item.id) || item.container.type === "pill") continue;
+    if (!changedIds.has(item.id) || isRowChip(item)) continue;
     const box = bboxToPx(item.bbox, imgW, imgH);
     rects.push({
       x: box.x - 2,
@@ -2112,10 +2207,10 @@ function drawAllReplacements(
 
   const handled = new Set<string>();
 
-  // Build row clusters among pills that need redraw
-  const pillRedraw = items.filter(
-    (i) => i.container.type === "pill" && redrawIds.has(i.id),
-  );
+  // Build row clusters among chip-like items that need redraw
+  const pillRedraw = items
+    .filter((i) => isRowChip(i) && redrawIds.has(i.id))
+    .map(asPillForLayout);
   const clustered = new Set<string>();
   for (const seed of pillRedraw) {
     if (clustered.has(seed.id)) continue;
@@ -2124,14 +2219,16 @@ function drawAllReplacements(
         !clustered.has(p.id) &&
         (p.id === seed.id ||
           p.layoutGroupId === seed.layoutGroupId ||
+          chipsOnSameRow(p, seed) ||
           pillsOnSameRow(p, seed)),
     );
-    // Expand to full same-row set among redraw pills
+    // Expand to full same-row set among redraw chips
     const row = pillRedraw.filter((p) =>
       members.some(
         (m) =>
           p.id === m.id ||
           (p.layoutGroupId && p.layoutGroupId === m.layoutGroupId) ||
+          chipsOnSameRow(p, m) ||
           pillsOnSameRow(p, m),
       ),
     );
@@ -2147,8 +2244,14 @@ function drawAllReplacements(
   for (const item of items) {
     if (handled.has(item.id) || !redrawIds.has(item.id)) continue;
     const text = texts.get(item.id) ?? item.text;
-    if (item.container.type === "pill") {
-      const layouts = layoutPillGroup(ctx, [item], texts, imgW, imgH);
+    if (isRowChip(item)) {
+      const layouts = layoutPillGroup(
+        ctx,
+        [asPillForLayout(item)],
+        texts,
+        imgW,
+        imgH,
+      );
       drawPill(ctx, layouts[0]);
     } else {
       drawPlainText(ctx, item, text, imgW, imgH, items);
