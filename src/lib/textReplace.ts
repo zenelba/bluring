@@ -323,7 +323,9 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
       color: raw.style?.color ?? "#000000",
       fontWeight: raw.style?.fontWeight === "normal" ? "normal" : "bold",
       align:
-        raw.style?.align === "left" || raw.style?.align === "right"
+        raw.style?.align === "left" ||
+        raw.style?.align === "right" ||
+        raw.style?.align === "center"
           ? raw.style.align
           : "left",
       fontFamily: raw.style?.fontFamily ?? "Montserrat",
@@ -490,17 +492,15 @@ function inferAlignments(items: DetectedText[]): DetectedText[] {
         },
       };
     }
-    // Solo: keep explicit model left/right. Only mark center when both side
-    // margins match (true centered headline), not merely cx ≈ 0.5.
-    if (item.style.align === "left" || item.style.align === "right") {
+    // Solo: trust model left/right/center. Do not infer center from
+    // image-mid geometry — short left-column words on a centered card
+    // also have near-equal side margins (neomejeno, brezskrbno, …).
+    if (
+      item.style.align === "left" ||
+      item.style.align === "right" ||
+      item.style.align === "center"
+    ) {
       return item;
-    }
-    const leftGap = item.bbox.x;
-    const rightGap = 1 - (item.bbox.x + item.bbox.w);
-    const marginDelta = Math.abs(leftGap - rightGap);
-    const nearlyFullWidth = item.bbox.w > 0.55;
-    if (!nearlyFullWidth && marginDelta < 0.06 && leftGap > 0.12) {
-      return { ...item, style: { ...item.style, align: "center" } };
     }
     return { ...item, style: { ...item.style, align: "left" } };
   });
