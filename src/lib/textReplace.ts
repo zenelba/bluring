@@ -1754,17 +1754,17 @@ function itemScaleX(item: DetectedText): number {
   return Number.isFinite(s) && s > 0 ? s : 1;
 }
 
-/** Available width for plain (non-pill) text: at most to the start of the
- * nearest right-hand detection that shares this vertical band, minus a gap
- * of half the width of "0" in that right-hand word's font. */
-function plainMaxWidth(
+/**
+ * Right clear edge for plain text beside a vertically overlapping neighbor:
+ * neighborLeft − ½×width("0") in that neighbor's font. Null when none.
+ */
+function plainRightClearEdge(
   ctx: CanvasRenderingContext2D,
   item: DetectedText,
   allItems: DetectedText[],
   imgW: number,
   imgH: number,
-): number {
-  const box = bboxToPx(item.bbox, imgW, imgH);
+): { edge: number; gap: number; neighbor: DetectedText } | null {
   let rightLimit = imgW;
   let rightNeighbor: DetectedText | null = null;
   for (const other of allItems) {
@@ -1784,22 +1784,37 @@ function plainMaxWidth(
       rightNeighbor = other;
     }
   }
-  let gap = Math.max(4, Math.round(box.h * 0.15));
-  if (rightNeighbor) {
-    const nSize = itemFontSize(rightNeighbor, imgH);
-    const nScale = itemScaleX(rightNeighbor);
-    ctx.font = fontCss(
-      rightNeighbor.style.fontFamily || "Montserrat",
-      itemFontWeight(rightNeighbor),
-      nSize,
-    );
-    gap = 0.5 * ctx.measureText("0").width * nScale;
+  if (!rightNeighbor || rightLimit >= imgW) return null;
+  const nSize = itemFontSize(rightNeighbor, imgH);
+  const nScale = itemScaleX(rightNeighbor);
+  ctx.font = fontCss(
+    rightNeighbor.style.fontFamily || "Montserrat",
+    itemFontWeight(rightNeighbor),
+    nSize,
+  );
+  const gap = 0.5 * ctx.measureText("0").width * nScale;
+  return {
+    edge: rightLimit - gap,
+    gap,
+    neighbor: rightNeighbor,
+  };
+}
+
+/** Available width for plain (non-pill) text: at most to the shared right clear edge. */
+function plainMaxWidth(
+  ctx: CanvasRenderingContext2D,
+  item: DetectedText,
+  allItems: DetectedText[],
+  imgW: number,
+  imgH: number,
+): number {
+  const box = bboxToPx(item.bbox, imgW, imgH);
+  const clear = plainRightClearEdge(ctx, item, allItems, imgW, imgH);
+  if (clear) {
+    return Math.max(4, clear.edge - box.x);
   }
-  const toRight = rightLimit - box.x - gap;
-  // Hard cap at the right placeholder start — never keep original box.w if it spills
-  if (rightLimit < imgW) {
-    return Math.max(4, toRight);
-  }
+  const gap = Math.max(4, Math.round(box.h * 0.15));
+  const toRight = imgW - box.x - gap;
   return Math.max(box.w, toRight);
 }
 
@@ -2774,6 +2789,7 @@ function collectChipRowPlans(
 }
 
 function collectPlainEraseTargets(
+  ctx: CanvasRenderingContext2D,
   items: DetectedText[],
   edits: TextReplaceEdits,
   seriesItemId: string | null,
@@ -2787,10 +2803,14 @@ function collectPlainEraseTargets(
     if (isRowChip(item)) continue;
     if (!itemChanged(item, edits[item.id], seriesItemId)) continue;
     const box = bboxToPx(item.bbox, imgW, imgH);
+    const left = box.x - 2;
+    const rawRight = box.x + box.w + 2;
+    const clear = plainRightClearEdge(ctx, item, items, imgW, imgH);
+    const right = clear ? Math.min(rawRight, clear.edge) : rawRight;
     rects.push({
-      x: box.x - 2,
+      x: left,
       y: box.y - 2,
-      w: box.w + 4,
+      w: Math.max(4, right - left),
       h: box.h + 4,
     });
   }
@@ -2829,6 +2849,7 @@ function buildCleanPlate(
   }
 
   const plainRects = collectPlainEraseTargets(
+    ctx,
     items,
     edits,
     seriesItemId,
