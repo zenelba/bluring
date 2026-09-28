@@ -1013,15 +1013,15 @@
   justify-content: center;
   background: #f3f4f6;
   padding: 0.75rem;
-  max-height: min(75vh, 960px);
+  max-height: min(70vh, 720px);
   overflow: auto;
 }
 
 .tr-series-strip__frame img {
   display: block;
   width: auto;
-  max-width: min(100%, 320px);
-  max-height: min(72vh, 920px);
+  max-width: 100%;
+  max-height: min(65vh, 680px);
   height: auto;
   object-fit: contain;
 }

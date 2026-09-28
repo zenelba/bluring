@@ -26,7 +26,7 @@ test("series strip stacks −min…+max and each result has Download", async ({
   expect(r.sortedOffsets).toEqual([-2, -1, 0, 1, 2]);
   expect(r.strip).not.toBeNull();
   expect(r.strip!.hasUrl).toBe(true);
-  expect(r.strip!.height).toBeGreaterThan(r.strip!.width);
+  expect(r.strip!.width).toBeGreaterThan(r.strip!.height);
   // strip + 5 variants
   expect(r.downloadButtons).toBe(6);
 

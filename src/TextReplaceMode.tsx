@@ -1259,7 +1259,7 @@ export default function TextReplaceMode(props: {
                       <div className="tr-series-strip__frame">
                         <img
                           src={seriesStrip.url}
-                          alt="Series strip from lowest to highest offset"
+                          alt="Series strip from lowest to highest offset (left to right)"
                         />
                       </div>
                     </article>

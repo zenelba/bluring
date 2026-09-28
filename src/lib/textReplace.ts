@@ -3174,7 +3174,7 @@ export function downloadTextReplaceOne(
   saveAs(variant.blob, `${root}${stamp}${suffix}.png`);
 }
 
-/** Download the stacked series strip (all variants top→bottom). */
+/** Download the series strip (all variants left→right). */
 export function downloadSeriesStripBlob(
   blob: Blob,
   naming: ExportNaming,
@@ -3186,7 +3186,7 @@ export function downloadSeriesStripBlob(
 }
 
 /**
- * Vertical strip of series variants from −N (top) to +N (bottom).
+ * Horizontal strip of series variants from −N (left) to +N (right).
  * Returns null when there is only one image.
  */
 export async function buildSeriesStrip(
@@ -3197,18 +3197,18 @@ export async function buildSeriesStrip(
   const images = await Promise.all(
     sorted.map((v) => loadImageFromBlob(v.blob)),
   );
-  const width = Math.max(...images.map((img) => img.naturalWidth));
-  const height = images.reduce((sum, img) => sum + img.naturalHeight, 0);
+  const width = images.reduce((sum, img) => sum + img.naturalWidth, 0);
+  const height = Math.max(...images.map((img) => img.naturalHeight));
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas unavailable");
-  let y = 0;
+  let x = 0;
   for (const img of images) {
-    const x = Math.round((width - img.naturalWidth) / 2);
+    const y = Math.round((height - img.naturalHeight) / 2);
     ctx.drawImage(img, x, y);
-    y += img.naturalHeight;
+    x += img.naturalWidth;
   }
   const blob = await canvasToBlob(canvas, "image/png");
   return {
