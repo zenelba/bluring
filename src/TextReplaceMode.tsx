@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import {
   buildExportNames,
   buildSeries,
+  commitNumberEdit,
   defaultEdits,
   defaultExportRoot,
   detectTexts,
   downloadTextReplaceZip,
   formatNumber,
+  numberMetaForEdit,
   parseEditNumber,
   renderTextReplaceVariants,
   revokeVariants,
@@ -687,13 +689,8 @@ export default function TextReplaceMode(props: {
         if (!item.number) continue;
         const edit = committed[item.id];
         if (!edit) continue;
-        const n = parseEditNumber(edit.replaceText);
-        if (n != null) {
-          committed[item.id] = {
-            replaceText: formatNumber(n, item.number),
-            replaceValue: n,
-          };
-        }
+        const next = commitNumberEdit(item, edit.replaceText, edit);
+        if (next) committed[item.id] = next;
       }
       setEdits(committed);
 
@@ -922,14 +919,18 @@ export default function TextReplaceMode(props: {
                             {item.number.suffix || item.number.prefix
                               ? ` → ${
                                   (() => {
-                                    const v = parseEditNumber(
+                                    const committed = commitNumberEdit(
+                                      item,
                                       edit?.replaceText ?? "",
+                                      edit,
                                     );
+                                    if (committed) return committed.replaceText;
+                                    const meta =
+                                      numberMetaForEdit(item, edit) ??
+                                      item.number;
                                     const num =
-                                      v ??
-                                      edit?.replaceValue ??
-                                      item.number.value;
-                                    return formatNumber(num, item.number);
+                                      edit?.replaceValue ?? item.number.value;
+                                    return formatNumber(num, meta);
                                   })()
                                 }`
                               : ""}
@@ -954,20 +955,22 @@ export default function TextReplaceMode(props: {
                                     n ??
                                     prev[item.id]?.replaceValue ??
                                     item.number!.value,
+                                  numberPrefix: prev[item.id]?.numberPrefix,
+                                  numberSuffix: prev[item.id]?.numberSuffix,
                                 },
                               }));
                             }}
                             onBlur={(e) => {
                               const raw = e.target.value;
-                              const n = parseEditNumber(raw);
-                              if (n == null || !item.number) return;
-                              const formatted = formatNumber(n, item.number);
+                              const next = commitNumberEdit(
+                                item,
+                                raw,
+                                edits[item.id],
+                              );
+                              if (!next) return;
                               setEdits((prev) => ({
                                 ...prev,
-                                [item.id]: {
-                                  replaceText: formatted,
-                                  replaceValue: n,
-                                },
+                                [item.id]: next,
                               }));
                             }}
                             onKeyDown={(e) => {
@@ -1080,16 +1083,22 @@ export default function TextReplaceMode(props: {
                                 item.number
                                   ? `: ${seriesPreview
                                       .map((v) =>
-                                        formatNumber(v, item.number!),
+                                        formatNumber(
+                                          v,
+                                          numberMetaForEdit(item, edit) ??
+                                            item.number!,
+                                        ),
                                       )
                                       .join(" · ")}`
                                   : seriesPreview.length > 11 && item.number
                                     ? `: ${formatNumber(
                                         seriesPreview[0]!,
-                                        item.number,
+                                        numberMetaForEdit(item, edit) ??
+                                          item.number,
                                       )} · … · ${formatNumber(
                                         seriesPreview[seriesPreview.length - 1]!,
-                                        item.number,
+                                        numberMetaForEdit(item, edit) ??
+                                          item.number,
                                       )}`
                                     : ""}
                               </p>

@@ -67,6 +67,9 @@ export type TextEdit = {
   replaceText: string;
   /** For number fields: numeric value driving formatNumber */
   replaceValue: number | null;
+  /** Typed affixes — override item.number when set (allows dropping trailing `/`). */
+  numberPrefix?: string;
+  numberSuffix?: string;
 };
 
 export type TextReplaceEdits = Record<string, TextEdit>;
@@ -1281,6 +1284,71 @@ export function formatNumber(value: number, meta: TextNumberMeta): string {
   return `${meta.prefix}${sign}${numeric}${meta.suffix}`;
 }
 
+/** Number meta with any typed prefix/suffix overrides from the edit. */
+export function numberMetaForEdit(
+  item: DetectedText,
+  edit: TextEdit | undefined,
+): TextNumberMeta | null {
+  if (!item.number) return null;
+  if (
+    edit?.numberPrefix === undefined &&
+    edit?.numberSuffix === undefined
+  ) {
+    return item.number;
+  }
+  return {
+    ...item.number,
+    prefix:
+      edit.numberPrefix !== undefined ? edit.numberPrefix : item.number.prefix,
+    suffix:
+      edit.numberSuffix !== undefined ? edit.numberSuffix : item.number.suffix,
+  };
+}
+
+/**
+ * Commit a typed number field: keep the prefix/suffix the user typed
+ * (e.g. drop trailing `/` from `10,99 € /` → `11,99 €`).
+ */
+export function commitNumberEdit(
+  item: DetectedText,
+  raw: string,
+  previous?: TextEdit,
+): TextEdit | null {
+  if (!item.number) return null;
+  const structured = parseNumberFromText(raw);
+  const n =
+    structured && Number.isFinite(structured.value)
+      ? structured.value
+      : parseEditNumber(raw);
+  if (n == null) return null;
+
+  const numberPrefix =
+    structured != null
+      ? structured.prefix
+      : previous?.numberPrefix !== undefined
+        ? previous.numberPrefix
+        : item.number.prefix;
+  const numberSuffix =
+    structured != null
+      ? structured.suffix
+      : previous?.numberSuffix !== undefined
+        ? previous.numberSuffix
+        : item.number.suffix;
+
+  const meta: TextNumberMeta = {
+    ...item.number,
+    prefix: numberPrefix,
+    suffix: numberSuffix,
+    value: n,
+  };
+  return {
+    replaceText: formatNumber(n, meta),
+    replaceValue: n,
+    numberPrefix,
+    numberSuffix,
+  };
+}
+
 /** Parse a number from user-typed replace text ( tolerates €, spaces, EU decimals ). */
 export function parseEditNumber(raw: string): number | null {
   const fromStructured = parseNumberFromText(raw);
@@ -1373,13 +1441,14 @@ export function resolveItemText(
   edit: TextEdit | undefined,
   seriesValue: number | null,
 ): string {
-  if (seriesValue != null && item.number) {
-    return formatNumber(seriesValue, item.number);
+  const meta = numberMetaForEdit(item, edit);
+  if (seriesValue != null && meta) {
+    return formatNumber(seriesValue, meta);
   }
   if (!edit) return item.text;
-  if (item.number) {
+  if (meta) {
     const v = effectiveNumberValue(item, edit);
-    if (v != null) return formatNumber(v, item.number);
+    if (v != null) return formatNumber(v, meta);
   }
   return edit.replaceText;
 }
@@ -1393,8 +1462,11 @@ function itemChanged(
   if (!edit) return false;
   if (item.number) {
     const v = effectiveNumberValue(item, edit);
+    const meta = numberMetaForEdit(item, edit) ?? item.number;
     if (v == null) return edit.replaceText !== item.text;
-    return Math.abs(v - item.number.value) > 1e-9;
+    if (Math.abs(v - item.number.value) > 1e-9) return true;
+    // Same digits but different prefix/suffix (e.g. dropped trailing /)
+    return formatNumber(v, meta) !== formatNumber(item.number.value, item.number);
   }
   return edit.replaceText !== item.text;
 }
@@ -2879,10 +2951,12 @@ export async function renderTextReplaceVariants(input: {
   // Erase using the widest series label so longer prices clear the plate
   let eraseSeriesValue: number | null = null;
   if (seriesItem?.number) {
+    const seriesMeta =
+      numberMetaForEdit(seriesItem, edits[seriesItem.id]) ?? seriesItem.number;
     let bestLen = -1;
     for (const v of values) {
       if (v == null) continue;
-      const len = formatNumber(v, seriesItem.number).length;
+      const len = formatNumber(v, seriesMeta).length;
       if (len > bestLen) {
         bestLen = len;
         eraseSeriesValue = v;
@@ -2975,7 +3049,11 @@ export async function renderTextReplaceVariants(input: {
       value == null
         ? "result"
         : seriesItem
-          ? formatNumber(value, seriesItem.number!)
+          ? formatNumber(
+              value,
+              numberMetaForEdit(seriesItem, edits[seriesItem.id]) ??
+                seriesItem.number!,
+            )
           : String(value);
     variants.push({
       index: i,
