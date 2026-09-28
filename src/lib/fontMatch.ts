@@ -93,6 +93,8 @@ type Box = { x: number; y: number; w: number; h: number };
  * Glyph ink height from canvas text metrics.
  * Do NOT invent a descent when the face reports 0 — that undersizes
  * all-caps / no-descender lines (NAJCENEJE, neomejeno, brezskrbno, …).
+ * Also ignore residual descent (&lt; 8% of ascent) from cap bowls (J etc.)
+ * so the fitted size fills the OCR box with the visible letterforms.
  */
 export function inkHeightFromMetrics(
   ascent: number,
@@ -101,8 +103,9 @@ export function inkHeightFromMetrics(
 ): number {
   const a = ascent > 0 ? ascent : 0;
   const d = descent > 0 ? descent : 0;
-  if (a > 0 || d > 0) return Math.max(1, a + d);
-  return Math.max(1, probe * 0.8);
+  if (a <= 0 && d <= 0) return Math.max(1, probe * 0.8);
+  if (a > 0 && d > 0 && d < a * 0.08) return Math.max(1, a);
+  return Math.max(1, a + d);
 }
 
 /**
@@ -245,11 +248,10 @@ export function matchFont(
     }
   }
   const origMask = buildInkMask(crop, bw, bh, bg);
-  // Prefer tight pixel ink over OCR box padding so size matches visible glyphs
+  // Align IoU draws to pixel ink origin when present, but calibrate size to the
+  // full OCR box — ink-tight height undersizes replacements users already call small.
   const ink = inkBounds(origMask, bw, bh);
-  const fitBox: Box = ink
-    ? { x: 0, y: 0, w: Math.max(1, ink.w), h: Math.max(1, ink.h) }
-    : { x: 0, y: 0, w: bw, h: bh };
+  const fitBox: Box = { x: 0, y: 0, w: bw, h: bh };
   const drawOriginX = ink ? ink.x : 0;
   const drawOriginY = ink ? ink.y : 0;
 

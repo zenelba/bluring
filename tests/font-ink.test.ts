@@ -19,7 +19,13 @@ function assert(cond: unknown, msg: string) {
   assert(h < oldBug, "must not pad zero descent");
 }
 
-// With real descent
+// Residual cap descent (e.g. J bowl) ignored
+{
+  const h = inkHeightFromMetrics(72, 2, 100);
+  assert(h === 72, `expected 72 ignoring residual descent, got ${h}`);
+}
+
+// Real descenders kept
 {
   const h = inkHeightFromMetrics(70, 20, 100);
   assert(h === 90, `expected 90, got ${h}`);
