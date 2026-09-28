@@ -98,6 +98,20 @@ function isVividChipColor(c: Rgb): boolean {
   return false;
 }
 
+/** Pale / ice / light-cyan badge plates on dark banners (e.g. DO 1 GBIT/S). */
+function isLightBadgePlateColor(c: Rgb): boolean {
+  const chroma = Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b);
+  const lum = luminance(c);
+  if (lum < 200 || lum > 252) return false;
+  if (chroma <= 55) return true;
+  if (chroma < 70 && c.b >= 170 && c.g >= 160 && c.r >= 140) return true;
+  return false;
+}
+
+function isChipPlateColor(c: Rgb): boolean {
+  return isVividChipColor(c) || isLightBadgePlateColor(c);
+}
+
 function toHex(c: Rgb): string {
   const h = (v: number) => Math.round(v).toString(16).padStart(2, "0");
   return `#${h(c.r)}${h(c.g)}${h(c.b)}`.toUpperCase();
@@ -164,13 +178,13 @@ class Pixels {
   }
 }
 
-/** Most frequent vivid color inside the OCR box (the plate between glyphs). */
+/** Most frequent chip plate color inside the OCR box (vivid or pale badge). */
 function dominantVividColor(px: Pixels, box: PxRect): Rgb | null {
   const bins = new Map<number, { n: number; r: number; g: number; b: number }>();
   for (let y = box.y; y < box.y + box.h; y++) {
     for (let x = box.x; x < box.x + box.w; x++) {
       const c = px.at(x, y);
-      if (!isVividChipColor(c)) continue;
+      if (!isChipPlateColor(c)) continue;
       const key = ((c.r >> 3) << 10) | ((c.g >> 3) << 5) | (c.b >> 3);
       const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
       bin.n++;
@@ -562,7 +576,7 @@ function rebuildBackground(
       const y = yStart + dir * k;
       if (y < 0 || y >= source.h) break;
       const c = source.at(x, y);
-      if (!isVividChipColor(c)) return c;
+      if (!isChipPlateColor(c)) return c;
     }
     return null;
   };

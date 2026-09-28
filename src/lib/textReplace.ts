@@ -293,7 +293,6 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
       : raw.number
         ? "number"
         : "text";
-  if (kind === "logo") return null;
 
   const container = raw.container ?? {
     type: "plain" as const,
@@ -306,12 +305,14 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
 
   let number: TextNumberMeta | null =
     kind === "number" ? raw.number ?? null : null;
-  if (!number) {
+  // Don't invent numbers from logo marks like "5G" / single letters
+  if (!number && kind !== "logo") {
     number = parseNumberFromText(raw.text);
   }
 
   return {
     ...raw,
+    // Keep logo marks editable in the UI (map to text)
     kind: number ? "number" : "text",
     number,
     container: {
@@ -598,6 +599,33 @@ function isVividChipColor(c: Rgb): boolean {
   return false;
 }
 
+/**
+ * Pale / ice / light-cyan badge plates on dark banners (e.g. "DO 1 GBIT/S").
+ * Excludes mid gray UI chrome and saturated cyan logos like "5G".
+ */
+function isLightBadgePlateColor(c: Rgb): boolean {
+  const chroma = rgbChroma(c);
+  const lum = luminance(c);
+  if (lum < 200 || lum > 252) return false;
+  // Off-white / ice
+  if (chroma <= 55) return true;
+  // Very pale cyan / light blue-green chip (high lum, low–mid chroma)
+  if (
+    chroma < 70 &&
+    c.b >= 170 &&
+    c.g >= 160 &&
+    c.r >= 140
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Any compact badge plate fill we should reflow as a chip. */
+function isChipPlateColor(c: Rgb): boolean {
+  return isVividChipColor(c) || isLightBadgePlateColor(c);
+}
+
 function textBoxHRel(textH: number, padPx: number): number {
   return textH > 0 ? padPx / textH : 0.45;
 }
@@ -629,7 +657,7 @@ function sampleInteriorChipFill(
       const c = { r: data[i], g: data[i + 1], b: data[i + 2] };
       // Skip glyph ink
       if (colorDist(c, textRgb) < 36) continue;
-      if (isVividChipColor(c)) vivid.push(c);
+      if (isChipPlateColor(c)) vivid.push(c);
       else other.push(c);
     }
   }
@@ -728,17 +756,17 @@ function measurePillPlate(
     );
   }
   const fillCand = sampleMedianRgb(data, imgW, imgH, fillPoints);
-  // Prefer interior vivid chip (yellow) over outer samples (often banner blue)
+  // Prefer interior chip fill (yellow / pale cyan) over outer samples (often banner blue)
   let fillRgb: Rgb = nearBg;
-  if (interiorFill && isVividChipColor(interiorFill)) {
+  if (interiorFill && isChipPlateColor(interiorFill)) {
     fillRgb = interiorFill;
-  } else if (fillCand && isVividChipColor(fillCand)) {
+  } else if (fillCand && isChipPlateColor(fillCand)) {
     fillRgb = fillCand;
   } else if (interiorFill && colorDist(interiorFill, textRgb) > 20) {
     fillRgb = interiorFill;
   } else if (fillCand && colorDist(fillCand, textRgb) > 20) {
     fillRgb = fillCand;
-  } else if (isVividChipColor(nearBg)) {
+  } else if (isChipPlateColor(nearBg)) {
     fillRgb = nearBg;
   } else if (fillCand) {
     fillRgb = fillCand;
@@ -898,6 +926,14 @@ function shouldPromotePlainToPill(
   if (isVividChipColor(plate.fillRgb) && fillVsFar >= 25) {
     return true;
   }
+  // Pale ice/cyan chips: promote only when flood stayed compact (not a full-width field)
+  if (
+    isLightBadgePlateColor(plate.fillRgb) &&
+    fillVsFar >= 35 &&
+    !plate.hitMaxHorizontal
+  ) {
+    return true;
+  }
 
   // Full-width buttons / fields (non-vivid)
   if (plate.hitMaxHorizontal) return false;
@@ -1008,7 +1044,7 @@ export async function measureStyles(
     if (plate) {
       // A "pill" whose plate is just the banner field (e.g. a 5G logo) is not a chip.
       const bannerField =
-        plate.hitMaxHorizontal && !isVividChipColor(plate.fillRgb);
+        plate.hitMaxHorizontal && !isChipPlateColor(plate.fillRgb);
       const asPill = item.container.type === "pill" && !bannerField;
       const promote =
         !asPill &&
@@ -2512,7 +2548,7 @@ function wipeChipRowGradient(
     for (let y = lo; y <= hi; y += step) {
       const c = readRgb(gx, y);
       if (!c) continue;
-      if (isVividChipColor(c)) continue;
+      if (isChipPlateColor(c)) continue;
       // Skip near-white flecks / UI chrome
       if (c.r > 230 && c.g > 230 && c.b > 230) continue;
       pool.push(c);
@@ -2640,7 +2676,7 @@ function expandAabbToVividInBand(
     for (let i = 0; i < rw; i++) {
       const di = (j * rw + i) * 4;
       const c = { r: data[di], g: data[di + 1], b: data[di + 2] };
-      if (!isVividChipColor(c)) continue;
+      if (!isChipPlateColor(c)) continue;
       found = true;
       const gx = scanX0 + i;
       if (gx < minX) minX = gx;

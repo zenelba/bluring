@@ -50,9 +50,13 @@ for (const { text, grows } of cases) {
     // Measured procedure values
     expect(Math.abs(row.T1 - 61)).toBeLessThanOrEqual(2);
     expect(Math.abs(row.H1 - 45)).toBeLessThanOrEqual(2);
-    expect(row.pills.map((p) => p.text)).toEqual(["ENOTNA CENA", "2 LETI"]);
+    expect(row.pills.map((p) => p.text)).toEqual([
+      "ENOTNA CENA",
+      "2 LETI",
+      "5G",
+    ]);
 
-    const [yellow, pink] = row.pills;
+    const [yellow, pink, fiveG] = row.pills;
     expect(yellow.newText).toBe(text);
     expect(yellow.mode).toBe("stretch");
     expect(yellow.newRect.x).toBe(yellow.rect.x);
@@ -60,8 +64,11 @@ for (const { text, grows } of cases) {
     // Width follows the text: shorter text shrinks the pill, longer grows it.
     if (grows) expect(yellow.newRect.w).toBeGreaterThan(yellow.rect.w);
     else expect(yellow.newRect.w).toBeLessThan(yellow.rect.w);
+    expect(pink.mode).toBe("move");
+    expect(fiveG.mode).toBe("move");
     expect(pink.newRect.h).toBe(pink.rect.h);
     expect(pink.newRect.x).toBeGreaterThan(yellow.newRect.x + yellow.newRect.w);
+    expect(fiveG.newRect.x).toBeGreaterThan(pink.newRect.x + pink.newRect.w);
 
     // No blue band inside the new yellow pill (the reported failure)
     const ny = yellow.newRect;
