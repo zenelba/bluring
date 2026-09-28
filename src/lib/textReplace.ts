@@ -1755,16 +1755,18 @@ function itemScaleX(item: DetectedText): number {
 }
 
 /** Available width for plain (non-pill) text: at most to the start of the
- * nearest right-hand detection that shares this vertical band. */
+ * nearest right-hand detection that shares this vertical band, minus a gap
+ * of half the width of "0" in that right-hand word's font. */
 function plainMaxWidth(
+  ctx: CanvasRenderingContext2D,
   item: DetectedText,
   allItems: DetectedText[],
   imgW: number,
   imgH: number,
 ): number {
   const box = bboxToPx(item.bbox, imgW, imgH);
-  const gap = Math.max(4, Math.round(box.h * 0.15));
   let rightLimit = imgW;
+  let rightNeighbor: DetectedText | null = null;
   for (const other of allItems) {
     if (other.id === item.id) continue;
     if (other.kind === "logo") continue;
@@ -1777,7 +1779,21 @@ function plainMaxWidth(
       other.bbox.y - pad < item.bbox.y + item.bbox.h;
     if (!overlapsY) continue;
     const ox = other.bbox.x * imgW;
-    if (ox < rightLimit) rightLimit = ox;
+    if (ox < rightLimit) {
+      rightLimit = ox;
+      rightNeighbor = other;
+    }
+  }
+  let gap = Math.max(4, Math.round(box.h * 0.15));
+  if (rightNeighbor) {
+    const nSize = itemFontSize(rightNeighbor, imgH);
+    const nScale = itemScaleX(rightNeighbor);
+    ctx.font = fontCss(
+      rightNeighbor.style.fontFamily || "Montserrat",
+      itemFontWeight(rightNeighbor),
+      nSize,
+    );
+    gap = 0.5 * ctx.measureText("0").width * nScale;
   }
   const toRight = rightLimit - box.x - gap;
   // Hard cap at the right placeholder start — never keep original box.w if it spills
@@ -1828,7 +1844,7 @@ function drawPlainText(
   const box = bboxToPx(item.bbox, imgW, imgH);
   let size = itemFontSize(item, imgH);
   let scaleX = itemScaleX(item);
-  const maxW = plainMaxWidth(item, allItems, imgW, imgH);
+  const maxW = plainMaxWidth(ctx, item, allItems, imgW, imgH);
 
   // Shrink only if text would exceed available width
   let width = measureScaledWidth(ctx, text, item, size, scaleX);
