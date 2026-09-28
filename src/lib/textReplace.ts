@@ -1754,7 +1754,97 @@ function itemScaleX(item: DetectedText): number {
   return Number.isFinite(s) && s > 0 ? s : 1;
 }
 
-/** Available width for plain text: to next same-row item or image edge. */
+/** True when two normalized bboxes overlap on the Y axis (with pad fraction of height). */
+function bboxVertOverlap(
+  a: TextBBox,
+  b: TextBBox,
+  padFrac = 0.15,
+): boolean {
+  const ap = Math.max(a.h, b.h) * padFrac;
+  const a0 = a.y - ap;
+  const a1 = a.y + a.h + ap;
+  return a0 < b.y + b.h && b.y < a1;
+}
+
+/** True when two normalized bboxes overlap on the X axis. */
+function bboxHorizOverlap(
+  a: TextBBox,
+  b: TextBBox,
+  padFrac = 0.05,
+): boolean {
+  const ap = Math.max(a.w, b.w) * padFrac;
+  const a0 = a.x - ap;
+  const a1 = a.x + a.w + ap;
+  return a0 < b.x + b.w && b.x < a1;
+}
+
+function pxRectsOverlap(a: PxRect, b: PxRect, pad = 2): boolean {
+  return (
+    a.x - pad < b.x + b.w &&
+    b.x - pad < a.x + a.w &&
+    a.y - pad < b.y + b.h &&
+    b.y - pad < a.y + a.h
+  );
+}
+
+/**
+ * Safe drawing bounds for a plain item: stay clear of every other detection
+ * that shares the row (H) or column (V). Gap scales with text height so
+ * short replacements cannot sprawl into neighbors.
+ */
+function plainNeighborBounds(
+  item: DetectedText,
+  allItems: DetectedText[],
+  imgW: number,
+  imgH: number,
+): { left: number; right: number; top: number; bottom: number; gap: number } {
+  const box = bboxToPx(item.bbox, imgW, imgH);
+  const gap = Math.max(6, Math.round(box.h * 0.22));
+  let left = 0;
+  let right = imgW;
+  let top = 0;
+  let bottom = imgH;
+
+  for (const other of allItems) {
+    if (other.id === item.id) continue;
+    // Skip logos — decorative, not copy placeholders
+    if (other.kind === "logo") continue;
+    const o = bboxToPx(other.bbox, imgW, imgH);
+
+    if (bboxVertOverlap(item.bbox, other.bbox)) {
+      if (other.bbox.x >= item.bbox.x + item.bbox.w * 0.5) {
+        // Neighbor to the right
+        right = Math.min(right, o.x - gap);
+      } else if (other.bbox.x + other.bbox.w <= item.bbox.x + item.bbox.w * 0.5) {
+        // Neighbor to the left
+        left = Math.max(left, o.x + o.w + gap);
+      } else if (o.x >= box.x + box.w * 0.25) {
+        // Nested / overlapping box — still treat as right obstacle
+        right = Math.min(right, o.x - gap);
+      }
+    }
+
+    if (bboxHorizOverlap(item.bbox, other.bbox)) {
+      if (other.bbox.y >= item.bbox.y + item.bbox.h * 0.5) {
+        bottom = Math.min(bottom, o.y - gap);
+      } else if (other.bbox.y + other.bbox.h <= item.bbox.y + item.bbox.h * 0.5) {
+        top = Math.max(top, o.y + o.h + gap);
+      }
+    }
+  }
+
+  // Never expand past a modest growth over the original box toward neighbors
+  const maxGrow = Math.max(box.w * 0.12, box.h * 0.8);
+  right = Math.min(right, box.x + box.w + maxGrow);
+  left = Math.max(left, box.x - maxGrow);
+
+  if (right <= left + 4) {
+    right = left + Math.max(4, box.w);
+  }
+  return { left, right, top, bottom, gap };
+}
+
+/** Available width for plain text: to next same-row item or modest growth cap. */
 function plainMaxWidth(
   item: DetectedText,
   allItems: DetectedText[],
@@ -1762,20 +1852,9 @@ function plainMaxWidth(
   imgH: number,
 ): number {
   const box = bboxToPx(item.bbox, imgW, imgH);
-  const midY = item.bbox.y + item.bbox.h / 2;
-  let rightLimit = imgW;
-  for (const other of allItems) {
-    if (other.id === item.id) continue;
-    const oMid = other.bbox.y + other.bbox.h / 2;
-    if (Math.abs(oMid - midY) > Math.max(item.bbox.h, other.bbox.h) * 0.55) {
-      continue;
-    }
-    if (other.bbox.x <= item.bbox.x) continue;
-    const ox = other.bbox.x * imgW;
-    if (ox < rightLimit) rightLimit = ox;
-  }
-  // Leave a small gap before the next element
-  return Math.max(box.w, rightLimit - box.x - 4);
+  const bounds = plainNeighborBounds(item, allItems, imgW, imgH);
+  // Left-aligned text starts at box.x; must not cross the right bound
+  return Math.max(4, bounds.right - box.x);
 }
 
 function drawScaledText(
@@ -1817,14 +1896,22 @@ function drawPlainText(
   allItems: DetectedText[] = [],
 ) {
   const box = bboxToPx(item.bbox, imgW, imgH);
+  const bounds = plainNeighborBounds(item, allItems, imgW, imgH);
   let size = itemFontSize(item, imgH);
   let scaleX = itemScaleX(item);
+  // Hard cap: never draw past the right neighbor / growth limit
   const maxW = plainMaxWidth(item, allItems, imgW, imgH);
 
-  // Shrink only if text would exceed available width
+  // Shrink if text would exceed available width
   let width = measureScaledWidth(ctx, text, item, size, scaleX);
   while (size > 6 && width > maxW) {
     size -= 0.5;
+    width = measureScaledWidth(ctx, text, item, size, scaleX);
+  }
+  // Shorter copy must not be horizontally stretched past the original box
+  if (width > box.w + 0.5 && text.length <= (item.text?.length ?? 0)) {
+    const fit = box.w / Math.max(width / scaleX, 1);
+    scaleX = Math.min(scaleX, Math.max(0.75, fit));
     width = measureScaledWidth(ctx, text, item, size, scaleX);
   }
 
@@ -1839,6 +1926,37 @@ function drawPlainText(
     metrics.actualBoundingBoxAscent > 0
       ? metrics.actualBoundingBoxAscent
       : size * 0.8;
+  const descent =
+    metrics.actualBoundingBoxDescent > 0
+      ? metrics.actualBoundingBoxDescent
+      : size * 0.15;
+
+  // Vertical: keep ink inside [top, bottom] neighbor bounds
+  const maxInkH = Math.max(4, bounds.bottom - bounds.top);
+  while (size > 6 && ascent + descent > maxInkH) {
+    size -= 0.5;
+    ctx.font = fontCss(
+      item.style.fontFamily || "Montserrat",
+      itemFontWeight(item),
+      size,
+    );
+    const m2 = ctx.measureText(text || "Hg");
+    const a2 =
+      m2.actualBoundingBoxAscent > 0 ? m2.actualBoundingBoxAscent : size * 0.8;
+    const d2 =
+      m2.actualBoundingBoxDescent > 0
+        ? m2.actualBoundingBoxDescent
+        : size * 0.15;
+    if (a2 + d2 <= maxInkH) {
+      width = measureScaledWidth(ctx, text, item, size, scaleX);
+      break;
+    }
+  }
+  const metrics2 = ctx.measureText(text || "Hg");
+  const ascent2 =
+    metrics2.actualBoundingBoxAscent > 0
+      ? metrics2.actualBoundingBoxAscent
+      : size * 0.8;
 
   let x = box.x;
   if (item.style.align === "center") {
@@ -1846,7 +1964,18 @@ function drawPlainText(
   } else if (item.style.align === "right") {
     x = box.x + box.w - width;
   }
-  const baselineY = box.y + ascent;
+  // Clamp so the drawn span stays inside neighbor bounds
+  if (x < bounds.left) x = bounds.left;
+  if (x + width > bounds.right) x = Math.max(bounds.left, bounds.right - width);
+
+  let baselineY = box.y + ascent2;
+  if (baselineY - ascent2 < bounds.top) {
+    baselineY = bounds.top + ascent2;
+  }
+  if (baselineY + (size * 0.2) > bounds.bottom) {
+    baselineY = Math.max(bounds.top + ascent2, bounds.bottom - size * 0.2);
+  }
+
   drawScaledText(ctx, text, item, size, scaleX, x, baselineY);
 }
 
@@ -2762,11 +2891,18 @@ function collectPlainEraseTargets(
     if (isRowChip(item)) continue;
     if (!itemChanged(item, edits[item.id], seriesItemId)) continue;
     const box = bboxToPx(item.bbox, imgW, imgH);
+    const bounds = plainNeighborBounds(item, items, imgW, imgH);
+    // Clip erase to neighbor-safe bounds so a longer original box cannot
+    // wipe a right/below placeholder when the new copy is shorter.
+    const x0 = Math.max(box.x - 2, bounds.left);
+    const y0 = Math.max(box.y - 2, bounds.top);
+    const x1 = Math.min(box.x + box.w + 2, bounds.right);
+    const y1 = Math.min(box.y + box.h + 2, bounds.bottom);
     rects.push({
-      x: box.x - 2,
-      y: box.y - 2,
-      w: box.w + 4,
-      h: box.h + 4,
+      x: x0,
+      y: y0,
+      w: Math.max(2, x1 - x0),
+      h: Math.max(2, y1 - y0),
     });
   }
   return rects;
@@ -2844,6 +2980,7 @@ function drawAllReplacements(
     for (const id of row.handledIds) handled.add(id);
   }
 
+  const changedPlain: DetectedText[] = [];
   for (const item of items) {
     if (handled.has(item.id)) continue;
     if (!itemChanged(item, edits[item.id], seriesItemId)) continue;
@@ -2861,12 +2998,33 @@ function drawAllReplacements(
         imgH,
       );
       if (layouts[0]) drawPill(ctx, layouts[0]);
+      handled.add(item.id);
       continue;
     }
+    changedPlain.push(item);
     const seriesVal =
       seriesItemId === item.id && seriesValue != null ? seriesValue : null;
     const text = resolveItemText(item, edits[item.id], seriesVal);
     drawPlainText(ctx, item, text, imgW, imgH, items);
+    handled.add(item.id);
+  }
+
+  // Re-draw unchanged plain neighbors whose boxes touch a changed erase zone,
+  // so a shorter left replacement cannot leave a wiped hole over the right text.
+  if (changedPlain.length > 0) {
+    const eraseRects = changedPlain.map((item) => {
+      const box = bboxToPx(item.bbox, imgW, imgH);
+      return { x: box.x - 2, y: box.y - 2, w: box.w + 4, h: box.h + 4 };
+    });
+    for (const item of items) {
+      if (handled.has(item.id)) continue;
+      if (item.kind === "logo") continue;
+      if (isRowChip(item)) continue;
+      const box = bboxToPx(item.bbox, imgW, imgH);
+      const hit = eraseRects.some((r) => pxRectsOverlap(r, box, 3));
+      if (!hit) continue;
+      drawPlainText(ctx, item, item.text, imgW, imgH, items);
+    }
   }
 }
 
