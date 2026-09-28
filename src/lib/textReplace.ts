@@ -87,7 +87,11 @@ export type RenderedVariant = {
   /** Result with measured / new pill outlines, T1 and cleared area drawn on top. */
   debugUrl?: string;
   pillRows?: PillRowDebug[];
+  /** Replacements applied in this variant, in reading order. */
+  changes: TextChange[];
 };
+
+export type TextChange = { id: string; from: string; to: string };
 
 const MAX_API_EDGE = 1536;
 const MAX_BODY_BYTES = 3.5 * 1024 * 1024;
@@ -2924,6 +2928,16 @@ export async function renderTextReplaceVariants(input: {
       imgW,
       imgH,
     );
+    const changes: TextChange[] = [...items]
+      .filter((it) => it.kind !== "logo")
+      .sort((a, b) => a.bbox.y - b.bbox.y || a.bbox.x - b.bbox.x)
+      .filter((it) => itemChanged(it, edits[it.id], seriesItem?.id ?? null))
+      .map((it) => ({
+        id: it.id,
+        from: it.text,
+        to: resolveItemText(it, edits[it.id], seriesItem?.id === it.id ? value : null),
+      }))
+      .filter((c) => c.from !== c.to);
     const pillDebug: PillRowDebug[] = [];
     for (const row of pillRows) {
       const texts: string[] = [];
@@ -2982,6 +2996,7 @@ export async function renderTextReplaceVariants(input: {
       url: URL.createObjectURL(blob),
       debugUrl,
       pillRows: pillDebug,
+      changes,
     });
   }
 

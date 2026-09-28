@@ -992,6 +992,29 @@
   gap: 0.5rem;
 }
 
+.tr-changes {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: #f8fafc;
+  border: 1px solid var(--osebe-line);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #1f2937;
+}
+
+.tr-changes q {
+  font-weight: 600;
+}
+
+.tr-lightbox__panel .tr-changes {
+  align-self: stretch;
+  background: #fff;
+}
+
 .tr-debug-toggle {
   display: inline-flex;
   align-items: center;

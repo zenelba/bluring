@@ -139,6 +139,33 @@ function ExportDialog(props: {
   );
 }
 
+/** "from" → "to" per replaced text; a series lists every value it took. */
+function ChangeList({ variants }: { variants: RenderedVariant[] }) {
+  const rows = new Map<string, { from: string; to: string[] }>();
+  for (const v of variants) {
+    for (const c of v.changes) {
+      const row = rows.get(c.id) ?? { from: c.from, to: [] };
+      if (!row.to.includes(c.to)) row.to.push(c.to);
+      rows.set(c.id, row);
+    }
+  }
+  if (rows.size === 0) return null;
+  return (
+    <ul className="tr-changes">
+      {[...rows.values()].map((r, i) => (
+        <li key={i}>
+          <q>{r.from}</q> → {r.to.map((t, j) => (
+            <span key={j}>
+              {j > 0 && " · "}
+              <q>{t}</q>
+            </span>
+          ))}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function CloudIcon() {
   return (
     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -1140,6 +1167,7 @@ export default function TextReplaceMode(props: {
                       Show pill measurements
                     </label>
                   )}
+                  <ChangeList variants={variants} />
                   <div className="osebe-grid">
                     {variants.map((v) => (
                       <article key={v.index} className="osebe-card">
@@ -1211,6 +1239,7 @@ export default function TextReplaceMode(props: {
               alt={lightbox.label}
             />
             <p className="tr-lightbox__caption">{lightbox.label}</p>
+            <ChangeList variants={[lightbox]} />
           </div>
         </div>
       )}
