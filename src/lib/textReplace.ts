@@ -1754,7 +1754,8 @@ function itemScaleX(item: DetectedText): number {
   return Number.isFinite(s) && s > 0 ? s : 1;
 }
 
-/** Available width for plain text: to next same-row item or image edge. */
+/** Available width for plain (non-pill) text: at most to the start of the
+ * nearest right-hand detection that shares this vertical band. */
 function plainMaxWidth(
   item: DetectedText,
   allItems: DetectedText[],
@@ -1762,20 +1763,28 @@ function plainMaxWidth(
   imgH: number,
 ): number {
   const box = bboxToPx(item.bbox, imgW, imgH);
-  const midY = item.bbox.y + item.bbox.h / 2;
+  const gap = Math.max(4, Math.round(box.h * 0.15));
   let rightLimit = imgW;
   for (const other of allItems) {
     if (other.id === item.id) continue;
-    const oMid = other.bbox.y + other.bbox.h / 2;
-    if (Math.abs(oMid - midY) > Math.max(item.bbox.h, other.bbox.h) * 0.55) {
-      continue;
-    }
+    if (other.kind === "logo") continue;
+    // Must sit to the right of this box's left edge
     if (other.bbox.x <= item.bbox.x) continue;
+    // Vertical overlap (not midY-only) so a short "mesec" beside a tall price counts
+    const pad = Math.max(item.bbox.h, other.bbox.h) * 0.15;
+    const overlapsY =
+      item.bbox.y - pad < other.bbox.y + other.bbox.h &&
+      other.bbox.y - pad < item.bbox.y + item.bbox.h;
+    if (!overlapsY) continue;
     const ox = other.bbox.x * imgW;
     if (ox < rightLimit) rightLimit = ox;
   }
-  // Leave a small gap before the next element
-  return Math.max(box.w, rightLimit - box.x - 4);
+  const toRight = rightLimit - box.x - gap;
+  // Hard cap at the right placeholder start — never keep original box.w if it spills
+  if (rightLimit < imgW) {
+    return Math.max(4, toRight);
+  }
+  return Math.max(box.w, toRight);
 }
 
 function drawScaledText(
