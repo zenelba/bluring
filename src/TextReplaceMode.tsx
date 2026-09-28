@@ -892,6 +892,12 @@ export default function TextReplaceMode(props: {
                               {item.textBlockId.replace("blok_", "blok ")}
                             </span>
                           )}
+                          <span
+                            className="osebe-brand-chip"
+                            title={`Detected alignment: ${item.style.align}`}
+                          >
+                            {item.style.align}
+                          </span>
                           {item.style.fontFamily && (
                             <span
                               className="osebe-brand-chip"

@@ -442,7 +442,8 @@ function assignTextBlocks(items: DetectedText[]): DetectedText[] {
 
 /**
  * Infer align from text blocks (edge spread) and solo geometry.
- * Pills are always center.
+ * Pills are always center. Prefer left — promo cards left-align copy next to
+ * icons even when the glyph center sits near the image midline.
  */
 function inferAlignments(items: DetectedText[]): DetectedText[] {
   const byBlock = new Map<string, DetectedText[]>();
@@ -464,13 +465,10 @@ function inferAlignments(items: DetectedText[]): DetectedText[] {
     const centerSpread = spread(centers);
     const rightSpread = spread(rights);
     let align: "left" | "center" | "right" = "left";
-    let best = leftSpread;
-    // Prefer left on ties
-    if (centerSpread + 1e-9 < best) {
-      best = centerSpread;
+    // Center/right only when clearly tighter than left (not a near-tie)
+    if (centerSpread < leftSpread * 0.7 && centerSpread <= rightSpread) {
       align = "center";
-    }
-    if (rightSpread + 1e-9 < best) {
+    } else if (rightSpread < leftSpread * 0.7 && rightSpread < centerSpread) {
       align = "right";
     }
     blockAlign.set(blockId, align);
@@ -492,11 +490,16 @@ function inferAlignments(items: DetectedText[]): DetectedText[] {
         },
       };
     }
-    // Solo: keep explicit right; center only if clearly mid-frame
-    if (item.style.align === "right") return item;
-    const cx = item.bbox.x + item.bbox.w / 2;
+    // Solo: keep explicit model left/right. Only mark center when both side
+    // margins match (true centered headline), not merely cx ≈ 0.5.
+    if (item.style.align === "left" || item.style.align === "right") {
+      return item;
+    }
+    const leftGap = item.bbox.x;
+    const rightGap = 1 - (item.bbox.x + item.bbox.w);
+    const marginDelta = Math.abs(leftGap - rightGap);
     const nearlyFullWidth = item.bbox.w > 0.55;
-    if (Math.abs(cx - 0.5) < 0.04 && !nearlyFullWidth) {
+    if (!nearlyFullWidth && marginDelta < 0.06 && leftGap > 0.12) {
       return { ...item, style: { ...item.style, align: "center" } };
     }
     return { ...item, style: { ...item.style, align: "left" } };
@@ -1044,7 +1047,7 @@ export async function measureStyles(
   ];
   const blockWinner = new Map<
     string,
-    { family: string; weight: FontWeightNum; sizeRel: number; scaleX: number }
+    { family: string; weight: FontWeightNum }
   >();
 
   for (const blockId of blockIds) {
@@ -1071,24 +1074,9 @@ export async function measureStyles(
       pipe >= 0 && bestKey.slice(pipe + 1) === "400" ? 400 : 700
     ) as FontWeightNum;
 
-    // Recalibrate each member with the winning font, then take medians
-    const sizeRels: number[] = [];
-    const scaleXs: number[] = [];
-    for (const m of members) {
-      const box = bboxToPx(m.item.bbox, imgW, imgH);
-      const cal = calibrate(ctx, m.item.text, family, weight, box);
-      sizeRels.push(cal.size / imgH);
-      scaleXs.push(cal.scaleX);
-    }
-    sizeRels.sort((a, b) => a - b);
-    scaleXs.sort((a, b) => a - b);
-    const mid = Math.floor(sizeRels.length / 2);
-    blockWinner.set(blockId, {
-      family,
-      weight,
-      sizeRel: sizeRels[mid] ?? 0.04,
-      scaleX: scaleXs[mid] ?? 1,
-    });
+    // Share family/weight only — each line keeps its own calibrated size so
+    // a slightly taller headline is not median-shrunk toward fine print.
+    blockWinner.set(blockId, { family, weight });
   }
 
   return pass1.map((p) => {
@@ -1099,6 +1087,8 @@ export async function measureStyles(
         : undefined;
 
     if (winner) {
+      const box = bboxToPx(p.item.bbox, imgW, imgH);
+      const cal = calibrate(ctx, p.item.text, winner.family, winner.weight, box);
       return {
         ...p.item,
         container: p.container,
@@ -1109,8 +1099,8 @@ export async function measureStyles(
             | "bold",
           align: p.item.style.align,
           fontFamily: winner.family,
-          fontSizeRel: winner.sizeRel,
-          scaleX: winner.scaleX,
+          fontSizeRel: cal.size / imgH,
+          scaleX: cal.scaleX,
         },
       };
     }

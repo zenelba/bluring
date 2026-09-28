@@ -81,7 +81,7 @@ Rules:
 - kind "text": everything else (headlines, labels, buttons like SKLENI, non-numeric phrases).
 - isPill: true for any text sitting inside a compact rounded colored badge/chip — especially yellow, pink, or orange price/label chips (e.g. yellow "ENOTNA CENA", pink "2 LETI", "HITROST" chips). Set isPill true even when kind is "text". Not for full-width bars/buttons like SKLENI, and not for headlines painted directly on the page/banner background.
 - layoutGroupId: SAME id for horizontally adjacent pills in one row that should reflow together. null otherwise.
-- fontWeight / align: best guess from the image. Prefer "left" for headlines and body on the left side of banners; use "center" only when text is clearly centered in the frame.
+- fontWeight / align: best guess from the image. Prefer "left" for headlines, body copy, and any text in a column next to icons (feature lists, plan cards). Use "center" only when the line is clearly centered in the frame with equal left/right margins (hero titles, button labels like SKLENI). When unsure, choose "left".
 - number must be null when kind is not "number".
 
 Detected lines:
