@@ -198,6 +198,20 @@ function dominantVividColor(px: Pixels, box: PxRect): Rgb | null {
   for (const bin of bins.values()) if (!best || bin.n > best.n) best = bin;
   if (!best) return null;
   const seed = { r: best.r / best.n, g: best.g / best.n, b: best.b / best.n };
+  // Light ice seed only if the box also has darker ink than the plate
+  // (real pale chip). White glyphs on a dark banner are not a plate.
+  if (isLightBadgePlateColor(seed)) {
+    const seedLum = luminance(seed);
+    let darker = 0;
+    let total = 0;
+    for (let y = box.y; y < box.y + box.h; y++) {
+      for (let x = box.x; x < box.x + box.w; x++) {
+        total++;
+        if (luminance(px.at(x, y)) < seedLum - 45) darker++;
+      }
+    }
+    if (total === 0 || darker / total < 0.06) return null;
+  }
   // Plate color is spread over neighbouring bins; count the whole cluster.
   let n = 0;
   let sr = 0;
@@ -214,7 +228,9 @@ function dominantVividColor(px: Pixels, box: PxRect): Rgb | null {
     }
   }
   // Plate must be a real share of the box, not a vivid glyph color.
-  if (n < box.w * box.h * 0.2) return null;
+  // Light plates need a larger share (pad around dark ink); white glyphs are sparse.
+  const minShare = isLightBadgePlateColor(seed) ? 0.35 : 0.2;
+  if (n < box.w * box.h * minShare) return null;
   return { r: sr / n, g: sg / n, b: sb / n };
 }
 

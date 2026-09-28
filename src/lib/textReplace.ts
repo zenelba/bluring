@@ -890,6 +890,51 @@ function measurePillPlate(
 }
 
 /**
+ * Real tablets need fill≠banner and text≠fill. Light ice chips need dark ink
+ * on the light plate (rejects white prices on a gradient mistaken for ice fill).
+ */
+function hasPillLikeContrast(
+  textRgb: Rgb,
+  fillRgb: Rgb,
+  farBg: Rgb,
+): boolean {
+  const fillVsFar = colorDist(fillRgb, farBg);
+  const textVsFill = colorDist(textRgb, fillRgb);
+  if (textVsFill < 80) return false;
+  if (isLightBadgePlateColor(fillRgb)) {
+    if (fillVsFar < 35) return false;
+    // Dark ink on light plate
+    if (luminance(textRgb) + 40 >= luminance(fillRgb)) return false;
+    return true;
+  }
+  if (isVividChipColor(fillRgb)) {
+    return fillVsFar >= 25;
+  }
+  return fillVsFar >= 28 && textVsFill >= 80;
+}
+
+function samplePlateFarBg(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  box: PxRect,
+  plateRect: PxRect,
+): Rgb | null {
+  const far = Math.max(10, Math.round(box.h * 1.4));
+  const farPoints: Array<{ x: number; y: number }> = [];
+  for (let t = 0; t <= 4; t++) {
+    const u = t / 4;
+    farPoints.push(
+      { x: box.x + box.w * u, y: plateRect.y - far },
+      { x: box.x + box.w * u, y: plateRect.y + plateRect.h + far },
+      { x: plateRect.x - far, y: box.y + box.h * u },
+      { x: plateRect.x + plateRect.w + far, y: box.y + box.h * u },
+    );
+  }
+  return sampleMedianRgb(data, imgW, imgH, farPoints);
+}
+
+/**
  * Plain → pill when text sits on a compact colored chip (GPT often misses isPill).
  * Force-promotes vivid yellow/pink/orange chips even when OCR box fills the plate.
  */
@@ -899,34 +944,25 @@ function shouldPromotePlainToPill(
   imgH: number,
   box: PxRect,
   plate: NonNullable<ReturnType<typeof measurePillPlate>>,
+  textRgb: Rgb,
 ): boolean {
   // Real badge plates are often ~3x cap height once the flood wraps the text.
   if (plate.rectPx.h > box.h * 3.6) return false;
   if (plate.rectPx.w > box.w * 4.0) return false;
   if (plate.rectPx.w > box.w + box.h * 10) return false;
 
-  const far = Math.max(10, Math.round(box.h * 1.4));
-  const farPoints: Array<{ x: number; y: number }> = [];
-  for (let t = 0; t <= 4; t++) {
-    const u = t / 4;
-    farPoints.push(
-      { x: box.x + box.w * u, y: plate.rectPx.y - far },
-      { x: box.x + box.w * u, y: plate.rectPx.y + plate.rectPx.h + far },
-      { x: plate.rectPx.x - far, y: box.y + box.h * u },
-      { x: plate.rectPx.x + plate.rectPx.w + far, y: box.y + box.h * u },
-    );
-  }
-  const farBg = sampleMedianRgb(data, imgW, imgH, farPoints);
+  const farBg = samplePlateFarBg(data, imgW, imgH, box, plate.rectPx);
   if (!farBg) return false;
+  if (!isChipPlateColor(plate.fillRgb)) return false;
+  if (!hasPillLikeContrast(textRgb, plate.fillRgb, farBg)) return false;
 
   const fillVsFar = colorDist(plate.fillRgb, farBg);
 
   // Strong path: vivid chip vs banner field — promote even if flood hit max expand
-  // (wrong outer fill used to flood the whole blue bar; interior yellow fixes that).
   if (isVividChipColor(plate.fillRgb) && fillVsFar >= 25) {
     return true;
   }
-  // Pale ice/cyan chips: promote only when flood stayed compact (not a full-width field)
+  // Pale ice/cyan chips: compact flood + dark-on-light (checked above)
   if (
     isLightBadgePlateColor(plate.fillRgb) &&
     fillVsFar >= 35 &&
@@ -935,19 +971,7 @@ function shouldPromotePlainToPill(
     return true;
   }
 
-  // Full-width buttons / fields (non-vivid)
-  if (plate.hitMaxHorizontal) return false;
-
-  // Fallback: any fill clearly different from far field + some plate extent
-  if (fillVsFar < 28) return false;
-  const hasPad =
-    plate.padXPx >= 2 ||
-    plate.padYPx >= 2 ||
-    plate.rectPx.w > box.w + 2 ||
-    plate.rectPx.h > box.h + 2;
-  if (!hasPad && fillVsFar < 45) return false;
-
-  return true;
+  return false;
 }
 
 /**
@@ -1039,16 +1063,34 @@ export async function measureStyles(
       item.style.fontWeight,
     );
 
-    let container: TextContainer = { ...item.container, rect: null };
+    let container: TextContainer = {
+      ...item.container,
+      type: "plain",
+      fill: null,
+      rect: null,
+    };
     const plate = measurePillPlate(data, imgW, imgH, box, textColor, bg);
+    const textRgb = {
+      r: parseInt(textColor.slice(1, 3), 16),
+      g: parseInt(textColor.slice(3, 5), 16),
+      b: parseInt(textColor.slice(5, 7), 16),
+    };
     if (plate) {
       // A "pill" whose plate is just the banner field (e.g. a 5G logo) is not a chip.
       const bannerField =
         plate.hitMaxHorizontal && !isChipPlateColor(plate.fillRgb);
-      const asPill = item.container.type === "pill" && !bannerField;
+      const farBg = samplePlateFarBg(data, imgW, imgH, box, plate.rectPx);
+      const contrastOk =
+        !!farBg &&
+        isChipPlateColor(plate.fillRgb) &&
+        hasPillLikeContrast(textRgb, plate.fillRgb, farBg);
+      // GPT isPill only sticks when the plate has real tablet-like contrast
+      const asPill =
+        item.container.type === "pill" && !bannerField && contrastOk;
       const promote =
         !asPill &&
-        shouldPromotePlainToPill(data, imgW, imgH, box, plate);
+        contrastOk &&
+        shouldPromotePlainToPill(data, imgW, imgH, box, plate, textRgb);
       if (asPill || promote) {
         container = {
           ...item.container,
@@ -1059,8 +1101,6 @@ export async function measureStyles(
           padY: plate.padY,
           rect: plate.rect,
         };
-      } else if (bannerField) {
-        container = { ...container, type: "plain", fill: null };
       }
     }
 
