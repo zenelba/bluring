@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Series strip Results harness</title>
+  <link rel="stylesheet" href="/src/osebe.css" />
+  <style>
+    body { margin: 1rem; font-family: system-ui, sans-serif; background: #f8fafc; }
+    .wrap { max-width: 920px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="root" class="tr-results"></div>
+  </div>
+  <script type="module">
+    import {
+      buildSeriesStrip,
+      downloadTextReplaceOne,
+      renderTextReplaceVariants,
+    } from "/src/lib/textReplace.ts";
+
+    const style = (color) => ({
+      color,
+      fontWeight: "bold",
+      align: "center",
+      fontFamily: "Titillium Web",
+      fontSizeRel: 0.0122,
+      scaleX: 1,
+    });
+    const stalePill = (bbox, fill) => ({
+      type: "pill",
+      fill,
+      radiusPxHint: 8,
+      padX: 0.1,
+      padY: 0.05,
+      rect: bbox,
+    });
+    const yellowBox = { x: 0.1357, y: 0.05099, w: 0.26786, h: 0.01218 };
+    const twoBox = { x: 0.46964, y: 0.05099, w: 0.026786, h: 0.01218 };
+    const letiBox = { x: 0.50357, y: 0.05099, w: 0.083929, h: 0.01218 };
+    const fiveGBox = { x: 0.83214, y: 0.04414, w: 0.07321, h: 0.01979 };
+    const items = [
+      { id: "yellow", text: "ENOTNA CENA", bbox: yellowBox, kind: "text",
+        container: stalePill(yellowBox, "#B1D61E"), layoutGroupId: "g", textBlockId: null,
+        style: style("#31352A"), number: null },
+      { id: "two", text: "2", bbox: twoBox, kind: "number",
+        container: stalePill(twoBox, "#EA4E8F"), layoutGroupId: "g", textBlockId: null,
+        style: style("#FFFFFF"),
+        number: { value: 2, decimalSep: null, thousandSep: null, decimals: 0, prefix: "", suffix: "", rawNumeric: "2" } },
+      { id: "leti", text: "LETI", bbox: letiBox, kind: "text",
+        container: stalePill(letiBox, "#EA5292"), layoutGroupId: "g", textBlockId: null,
+        style: style("#FFFFFF"), number: null },
+      { id: "5g", text: "5G", bbox: fiveGBox, kind: "text",
+        container: stalePill(fiveGBox, "#3AB9EC"), layoutGroupId: "g", textBlockId: null,
+        style: style("#FFFFFF"), number: null },
+    ];
+
+    const blob = await (await fetch("/tests/pill-row/telekom.png")).blob();
+    const file = new File([blob], "telekom.png", { type: "image/png" });
+    const variants = await renderTextReplaceVariants({
+      file,
+      items,
+      edits: {},
+      series: { itemId: "two", steps: 2, step: 1 },
+    });
+    const strip = await buildSeriesStrip(variants);
+    const offsets = variants.map((v) => v.offset);
+    const sortedOffsets = [...variants].sort((a, b) => a.offset - b.offset).map((v) => v.offset);
+
+    const root = document.getElementById("root");
+    const fmt = (n) => (n > 0 ? `+${n}` : String(n));
+    const min = Math.min(...offsets);
+    const max = Math.max(...offsets);
+
+    const naming = {
+      root: "telekom",
+      addDate: false,
+      addTime: false,
+      seriesSuffix: "price",
+    };
+
+    let html = `<span class="osebe-kicker">Results</span>`;
+    if (strip) {
+      html += `
+        <article class="tr-series-strip" data-testid="series-strip">
+          <div class="tr-series-strip__head">
+            <div>
+              <div class="osebe-card__name">Series strip</div>
+              <div class="osebe-card__dims">${fmt(min)} → ${fmt(max)}</div>
+            </div>
+            <button type="button" class="osebe-btn osebe-btn--ghost tr-card-download" data-testid="strip-download">Download</button>
+          </div>
+          <div class="tr-series-strip__frame">
+            <img src="${strip.url}" alt="Series strip from lowest to highest offset" />
+          </div>
+        </article>`;
+    }
+    html += `<div class="osebe-grid">`;
+    for (const v of variants) {
+      html += `
+        <article class="osebe-card" data-testid="variant-${v.offset}">
+          <div class="osebe-card__photo tr-result-thumb">
+            <img src="${v.url}" alt="${v.label}" />
+          </div>
+          <div class="osebe-card__meta">
+            <div class="tr-card-meta-row">
+              <div class="tr-card-meta-text">
+                <div class="osebe-card__name">${v.label}</div>
+                <div class="osebe-card__dims">offset ${fmt(v.offset)}</div>
+              </div>
+              <button type="button" class="osebe-btn osebe-btn--ghost tr-card-download" data-offset="${v.offset}" data-testid="download-${v.offset}">Download</button>
+            </div>
+          </div>
+        </article>`;
+    }
+    html += `</div>`;
+    root.innerHTML = html;
+
+    root.querySelector("[data-testid='strip-download']")?.addEventListener("click", () => {
+      window.__STRIP_CLICKED__ = true;
+    });
+    root.querySelectorAll("button[data-offset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const offset = Number(btn.getAttribute("data-offset"));
+        const variant = variants.find((v) => v.offset === offset);
+        if (variant) {
+          downloadTextReplaceOne(variant, naming);
+          window.__LAST_DOWNLOAD__ = offset;
+        }
+      });
+    });
+
+    window.__RESULT__ = {
+      count: variants.length,
+      offsets,
+      sortedOffsets,
+      strip: strip
+        ? { width: strip.width, height: strip.height, hasUrl: Boolean(strip.url) }
+        : null,
+      downloadButtons: root.querySelectorAll(".tr-card-download").length,
+    };
+  </script>
+</body>
+</html>

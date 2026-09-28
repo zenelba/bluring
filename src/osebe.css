@@ -1012,15 +1012,18 @@
   display: flex;
   justify-content: center;
   background: #f3f4f6;
-  max-height: min(70vh, 900px);
+  padding: 0.75rem;
+  max-height: min(75vh, 960px);
   overflow: auto;
 }
 
 .tr-series-strip__frame img {
   display: block;
-  width: 100%;
-  max-width: 520px;
+  width: auto;
+  max-width: min(100%, 320px);
+  max-height: min(72vh, 920px);
   height: auto;
+  object-fit: contain;
 }
 
 .tr-card-meta-row {
