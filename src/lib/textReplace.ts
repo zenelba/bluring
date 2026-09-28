@@ -3159,6 +3159,66 @@ export async function downloadTextReplaceZip(
   saveAs(out, zipName);
 }
 
+/** Download one variant with a series-style suffix in the file name. */
+export function downloadTextReplaceOne(
+  variant: RenderedVariant,
+  naming: ExportNaming,
+  now: Date = new Date(),
+): void {
+  const root = safeFilePart(naming.root) || "export";
+  const stamp = exportStamp(naming, now);
+  const suffix =
+    naming.seriesSuffix === "price"
+      ? `_${safeFilePart(variant.label)}`
+      : `_${variant.offset > 0 ? `+${variant.offset}` : String(variant.offset)}`;
+  saveAs(variant.blob, `${root}${stamp}${suffix}.png`);
+}
+
+/** Download the stacked series strip (all variants top→bottom). */
+export function downloadSeriesStripBlob(
+  blob: Blob,
+  naming: ExportNaming,
+  now: Date = new Date(),
+): void {
+  const root = safeFilePart(naming.root) || "export";
+  const stamp = exportStamp(naming, now);
+  saveAs(blob, `${root}${stamp}_series.png`);
+}
+
+/**
+ * Vertical strip of series variants from −N (top) to +N (bottom).
+ * Returns null when there is only one image.
+ */
+export async function buildSeriesStrip(
+  variants: RenderedVariant[],
+): Promise<{ blob: Blob; url: string; width: number; height: number } | null> {
+  if (variants.length < 2) return null;
+  const sorted = [...variants].sort((a, b) => a.offset - b.offset);
+  const images = await Promise.all(
+    sorted.map((v) => loadImageFromBlob(v.blob)),
+  );
+  const width = Math.max(...images.map((img) => img.naturalWidth));
+  const height = images.reduce((sum, img) => sum + img.naturalHeight, 0);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas unavailable");
+  let y = 0;
+  for (const img of images) {
+    const x = Math.round((width - img.naturalWidth) / 2);
+    ctx.drawImage(img, x, y);
+    y += img.naturalHeight;
+  }
+  const blob = await canvasToBlob(canvas, "image/png");
+  return {
+    blob,
+    url: URL.createObjectURL(blob),
+    width,
+    height,
+  };
+}
+
 export function revokeVariants(variants: RenderedVariant[]) {
   for (const v of variants) {
     URL.revokeObjectURL(v.url);

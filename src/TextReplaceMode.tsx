@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import {
   buildExportNames,
   buildSeries,
+  buildSeriesStrip,
   commitNumberEdit,
   defaultEdits,
   defaultExportRoot,
   detectTexts,
+  downloadSeriesStripBlob,
+  downloadTextReplaceOne,
   downloadTextReplaceZip,
   formatNumber,
   numberMetaForEdit,
@@ -435,6 +438,10 @@ export default function TextReplaceMode(props: {
     step: 1,
   });
   const [variants, setVariants] = useState<RenderedVariant[]>([]);
+  const [seriesStrip, setSeriesStrip] = useState<{
+    blob: Blob;
+    url: string;
+  } | null>(null);
   const [lightbox, setLightbox] = useState<RenderedVariant | null>(null);
   const [showPillDebug, setShowPillDebug] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -468,9 +475,17 @@ export default function TextReplaceMode(props: {
     return () => {
       if (thumbUrl) URL.revokeObjectURL(thumbUrl);
       revokeVariants(variants);
+      if (seriesStrip) URL.revokeObjectURL(seriesStrip.url);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const revokeSeriesStrip = () => {
+    setSeriesStrip((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+  };
 
   useEffect(() => {
     if (!initialTask || initialTask.record.toolId !== "textReplace") return;
@@ -484,6 +499,7 @@ export default function TextReplaceMode(props: {
       new File([], payload.fileName, { type: payload.mimeType });
     if (thumbUrl) URL.revokeObjectURL(thumbUrl);
     revokeVariants(variants);
+    revokeSeriesStrip();
     setVariants([]);
     setFile(nextFile);
     setThumbUrl(URL.createObjectURL(nextFile));
@@ -529,6 +545,7 @@ export default function TextReplaceMode(props: {
   const setImageFile = (next: File | null) => {
     if (thumbUrl) URL.revokeObjectURL(thumbUrl);
     revokeVariants(variants);
+    revokeSeriesStrip();
     setVariants([]);
     setItems([]);
     setEdits({});
@@ -639,6 +656,7 @@ export default function TextReplaceMode(props: {
     setError(null);
     setLiveNote("Detecting text…");
     revokeVariants(variants);
+    revokeSeriesStrip();
     setVariants([]);
     setSelectedId(null);
     try {
@@ -680,6 +698,7 @@ export default function TextReplaceMode(props: {
     setError(null);
     setLiveNote("Rendering…");
     revokeVariants(variants);
+    revokeSeriesStrip();
     setVariants([]);
     setLightbox(null);
     try {
@@ -701,6 +720,14 @@ export default function TextReplaceMode(props: {
         series,
       });
       setVariants(out);
+      if (out.length >= 2) {
+        try {
+          const strip = await buildSeriesStrip(out);
+          setSeriesStrip(strip);
+        } catch {
+          setSeriesStrip(null);
+        }
+      }
       const pillRows = out[0]?.pillRows ?? [];
       if (pillRows.length > 0) {
         logEvent(
@@ -741,6 +768,25 @@ export default function TextReplaceMode(props: {
       setBusy(false);
       setPhase("idle");
     }
+  };
+
+  const currentExportNaming = (): ExportNaming | null => {
+    if (!file) return null;
+    return { root: defaultExportRoot(file.name), ...loadExportPrefs() };
+  };
+
+  const handleOneDownload = (variant: RenderedVariant) => {
+    const naming = currentExportNaming();
+    if (!naming) return;
+    downloadTextReplaceOne(variant, naming);
+    logEvent("export_one", variant.label);
+  };
+
+  const handleStripDownload = () => {
+    const naming = currentExportNaming();
+    if (!naming || !seriesStrip) return;
+    downloadSeriesStripBlob(seriesStrip.blob, naming);
+    logEvent("export_series_strip", `${variants.length} variants`);
   };
 
   const handleDownload = async (naming: ExportNaming) => {
@@ -1183,6 +1229,41 @@ export default function TextReplaceMode(props: {
                     </label>
                   )}
                   <ChangeList variants={variants} />
+                  {seriesStrip && (
+                    <article className="tr-series-strip">
+                      <div className="tr-series-strip__head">
+                        <div>
+                          <div className="osebe-card__name">Series strip</div>
+                          <div className="osebe-card__dims">
+                            {(() => {
+                              const min = Math.min(
+                                ...variants.map((v) => v.offset),
+                              );
+                              const max = Math.max(
+                                ...variants.map((v) => v.offset),
+                              );
+                              const fmt = (n: number) =>
+                                n > 0 ? `+${n}` : String(n);
+                              return `${fmt(min)} → ${fmt(max)}`;
+                            })()}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="osebe-btn osebe-btn--ghost tr-card-download"
+                          onClick={handleStripDownload}
+                        >
+                          Download
+                        </button>
+                      </div>
+                      <div className="tr-series-strip__frame">
+                        <img
+                          src={seriesStrip.url}
+                          alt="Series strip from lowest to highest offset"
+                        />
+                      </div>
+                    </article>
+                  )}
                   <div className="osebe-grid">
                     {variants.map((v) => (
                       <article key={v.index} className="osebe-card">
@@ -1198,12 +1279,24 @@ export default function TextReplaceMode(props: {
                           />
                         </button>
                         <div className="osebe-card__meta">
-                          <div className="osebe-card__name">{v.label}</div>
-                          {v.offset !== 0 && (
-                            <div className="osebe-card__dims">
-                              offset {v.offset > 0 ? `+${v.offset}` : v.offset}
+                          <div className="tr-card-meta-row">
+                            <div className="tr-card-meta-text">
+                              <div className="osebe-card__name">{v.label}</div>
+                              {v.offset !== 0 && (
+                                <div className="osebe-card__dims">
+                                  offset{" "}
+                                  {v.offset > 0 ? `+${v.offset}` : v.offset}
+                                </div>
+                              )}
                             </div>
-                          )}
+                            <button
+                              type="button"
+                              className="osebe-btn osebe-btn--ghost tr-card-download"
+                              onClick={() => handleOneDownload(v)}
+                            >
+                              Download
+                            </button>
+                          </div>
                         </div>
                       </article>
                     ))}
@@ -1255,6 +1348,13 @@ export default function TextReplaceMode(props: {
             />
             <p className="tr-lightbox__caption">{lightbox.label}</p>
             <ChangeList variants={[lightbox]} />
+            <button
+              type="button"
+              className="osebe-btn osebe-btn--dark tr-lightbox__download"
+              onClick={() => handleOneDownload(lightbox)}
+            >
+              Download
+            </button>
           </div>
         </div>
       )}
