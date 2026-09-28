@@ -3,6 +3,7 @@ import {
   buildExportNames,
   buildSeries,
   buildSeriesStrip,
+  canSplitDetectedText,
   commitNumberEdit,
   defaultEdits,
   defaultExportRoot,
@@ -15,6 +16,7 @@ import {
   parseEditNumber,
   renderTextReplaceVariants,
   revokeVariants,
+  splitDetectedTextBySpaces,
   type DetectedText,
   type ExportNaming,
   type RenderedVariant,
@@ -225,6 +227,32 @@ function boxStroke(
   return "#3b82f6";
 }
 
+function SplitGlyph({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+    >
+      <path
+        d="M8 4v16M16 4v16M4 12h4M16 12h4"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M10 9l-2 3 2 3M14 9l2 3-2 3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function TextBBoxOverlay(props: {
   items: DetectedText[];
   selectedId: string | null;
@@ -234,6 +262,7 @@ function TextBBoxOverlay(props: {
   onSelect: (id: string | null) => void;
   onHover: (id: string | null) => void;
   onBBoxChange: (id: string, bbox: TextBBox) => void;
+  onSplit: (item: DetectedText) => void;
 }) {
   const {
     items,
@@ -244,6 +273,7 @@ function TextBBoxOverlay(props: {
     onSelect,
     onHover,
     onBBoxChange,
+    onSplit,
   } = props;
   const rootRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragMode | null>(null);
@@ -412,6 +442,25 @@ function TextBBoxOverlay(props: {
                       onPointerDown={(e) => startResize(e, item, c)}
                     />
                   ))}
+                  {canSplitDetectedText(item) && (
+                    <button
+                      type="button"
+                      className="tr-bbox__split"
+                      title="Split"
+                      aria-label="Split"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onSplit(item);
+                      }}
+                    >
+                      <SplitGlyph size={12} />
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -642,6 +691,27 @@ export default function TextReplaceMode(props: {
           : item,
       ),
     );
+  };
+
+  const onSplit = (item: DetectedText) => {
+    if (busy || !canSplitDetectedText(item)) return;
+    const parts = splitDetectedTextBySpaces(item);
+    if (!parts || parts.length < 2) return;
+    setItems((prev) => {
+      const idx = prev.findIndex((i) => i.id === item.id);
+      if (idx < 0) return prev;
+      return [...prev.slice(0, idx), ...parts, ...prev.slice(idx + 1)];
+    });
+    setEdits((prev) => {
+      const next = { ...prev };
+      delete next[item.id];
+      return { ...next, ...defaultEdits(parts) };
+    });
+    setSeries((s) =>
+      s.itemId === item.id ? { ...s, itemId: null } : s,
+    );
+    setSelectedId(parts[0].id);
+    setHoveredId(null);
   };
 
   const visibleItems = useMemo(
@@ -960,26 +1030,43 @@ export default function TextReplaceMode(props: {
                           className="osebe-field"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <span className="osebe-field__label">
-                            New value
-                            {item.number.suffix || item.number.prefix
-                              ? ` → ${
-                                  (() => {
-                                    const committed = commitNumberEdit(
-                                      item,
-                                      edit?.replaceText ?? "",
-                                      edit,
-                                    );
-                                    if (committed) return committed.replaceText;
-                                    const meta =
-                                      numberMetaForEdit(item, edit) ??
-                                      item.number;
-                                    const num =
-                                      edit?.replaceValue ?? item.number.value;
-                                    return formatNumber(num, meta);
-                                  })()
-                                }`
-                              : ""}
+                          <span className="tr-field-label-row">
+                            <span className="osebe-field__label">
+                              New value
+                              {item.number.suffix || item.number.prefix
+                                ? ` → ${
+                                    (() => {
+                                      const committed = commitNumberEdit(
+                                        item,
+                                        edit?.replaceText ?? "",
+                                        edit,
+                                      );
+                                      if (committed) return committed.replaceText;
+                                      const meta =
+                                        numberMetaForEdit(item, edit) ??
+                                        item.number;
+                                      const num =
+                                        edit?.replaceValue ?? item.number.value;
+                                      return formatNumber(num, meta);
+                                    })()
+                                  }`
+                                : ""}
+                            </span>
+                            {canSplitDetectedText(item) && (
+                              <button
+                                type="button"
+                                className="tr-split-btn"
+                                title="Split"
+                                aria-label="Split"
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSplit(item);
+                                }}
+                              >
+                                <SplitGlyph />
+                              </button>
+                            )}
                           </span>
                           <input
                             className="osebe-input"
@@ -1031,7 +1118,26 @@ export default function TextReplaceMode(props: {
                           className="osebe-field"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <span className="osebe-field__label">Replace with</span>
+                          <span className="tr-field-label-row">
+                            <span className="osebe-field__label">
+                              Replace with
+                            </span>
+                            {canSplitDetectedText(item) && (
+                              <button
+                                type="button"
+                                className="tr-split-btn"
+                                title="Split"
+                                aria-label="Split"
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSplit(item);
+                                }}
+                              >
+                                <SplitGlyph />
+                              </button>
+                            )}
+                          </span>
                           <input
                             className="osebe-input"
                             type="text"
@@ -1209,6 +1315,7 @@ export default function TextReplaceMode(props: {
                       onSelect={setSelectedId}
                       onHover={setHoveredId}
                       onBBoxChange={patchBBox}
+                      onSplit={onSplit}
                     />
                   )}
                 </div>

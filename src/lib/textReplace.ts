@@ -13,6 +13,7 @@ import {
   renderPillRow,
   type PillRowDebug,
 } from "./pillRow";
+import { splitDetectedTextBySpaces as splitDetectedTextBySpacesCore } from "./splitDetectedText";
 
 export type TextBBox = { x: number; y: number; w: number; h: number };
 
@@ -1510,6 +1511,17 @@ export function defaultEdits(items: DetectedText[]): TextReplaceEdits {
     };
   }
   return edits;
+}
+
+export { canSplitDetectedText } from "./splitDetectedText";
+
+export function splitDetectedTextBySpaces(
+  item: DetectedText,
+): DetectedText[] | null {
+  return splitDetectedTextBySpacesCore(
+    item,
+    parseNumberFromText,
+  ) as DetectedText[] | null;
 }
 
 export function resolveItemText(
