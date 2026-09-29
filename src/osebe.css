@@ -1222,6 +1222,10 @@ button.tr-result-thumb:focus-visible {
   background: #f3f4f6;
 }
 
+.tr-export-prefix {
+  margin: 0.15rem 0 0.35rem;
+}
+
 .tr-export {
   position: fixed;
   inset: 0;

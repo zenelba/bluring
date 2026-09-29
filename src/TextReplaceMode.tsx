@@ -34,10 +34,21 @@ import "./osebe.css";
 
 const EXPORT_PREFS_KEY = "tr-export-naming";
 
-type ExportPrefs = Omit<ExportNaming, "root">;
+type ExportPrefs = {
+  addDate: boolean;
+  addTime: boolean;
+  seriesSuffix: "step" | "price";
+  /** Last custom file-name prefix; empty means fall back to source basename. */
+  root: string;
+};
 
 function loadExportPrefs(): ExportPrefs {
-  const fallback: ExportPrefs = { addDate: true, addTime: false, seriesSuffix: "price" };
+  const fallback: ExportPrefs = {
+    addDate: true,
+    addTime: false,
+    seriesSuffix: "price",
+    root: "",
+  };
   try {
     const raw = localStorage.getItem(EXPORT_PREFS_KEY);
     return raw ? { ...fallback, ...(JSON.parse(raw) as Partial<ExportPrefs>) } : fallback;
@@ -46,22 +57,31 @@ function loadExportPrefs(): ExportPrefs {
   }
 }
 
+function saveExportPrefs(prefs: ExportPrefs) {
+  localStorage.setItem(EXPORT_PREFS_KEY, JSON.stringify(prefs));
+}
+
 function ExportDialog(props: {
   variants: RenderedVariant[];
-  defaultRoot: string;
+  root: string;
+  onRootChange: (root: string) => void;
   onCancel: () => void;
   onConfirm: (naming: ExportNaming) => void;
 }) {
-  const { variants, defaultRoot, onCancel, onConfirm } = props;
-  const [root, setRoot] = useState(defaultRoot);
-  const [prefs, setPrefs] = useState<ExportPrefs>(loadExportPrefs);
-  const naming: ExportNaming = { root, ...prefs };
+  const { variants, root, onRootChange, onCancel, onConfirm } = props;
+  const [prefs, setPrefs] = useState<ExportPrefs>(() => loadExportPrefs());
+  const naming: ExportNaming = {
+    root,
+    addDate: prefs.addDate,
+    addTime: prefs.addTime,
+    seriesSuffix: prefs.seriesSuffix,
+  };
   const multi = variants.length > 1;
   const { files, zip } = buildExportNames(variants, naming);
   const preview = multi ? [zip, ...files.slice(0, 3)] : files;
 
   const confirm = () => {
-    localStorage.setItem(EXPORT_PREFS_KEY, JSON.stringify(prefs));
+    saveExportPrefs({ ...prefs, root: root.trim() });
     onConfirm(naming);
   };
 
@@ -77,11 +97,12 @@ function ExportDialog(props: {
       >
         <h3 className="tr-export__title">Export {multi ? `${variants.length} images` : "image"}</h3>
         <label className="tr-export__field">
-          <span className="osebe-kicker">File name</span>
+          <span className="osebe-kicker">File name prefix</span>
           <input
             className="tr-export__input"
             value={root}
-            onChange={(e) => setRoot(e.target.value)}
+            onChange={(e) => onRootChange(e.target.value)}
+            placeholder="e.g. telekom_naj_c"
             autoFocus
           />
         </label>
@@ -494,6 +515,7 @@ export default function TextReplaceMode(props: {
   const [lightbox, setLightbox] = useState<RenderedVariant | null>(null);
   const [showPillDebug, setShowPillDebug] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [exportRoot, setExportRoot] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -552,6 +574,10 @@ export default function TextReplaceMode(props: {
     setVariants([]);
     setFile(nextFile);
     setThumbUrl(URL.createObjectURL(nextFile));
+    {
+      const prefs = loadExportPrefs();
+      setExportRoot(prefs.root.trim() || defaultExportRoot(nextFile.name));
+    }
     setItems(payload.items as DetectedText[]);
     setEdits(payload.edits);
     setSeries(payload.series);
@@ -604,6 +630,12 @@ export default function TextReplaceMode(props: {
     setHoveredId(null);
     setFile(next);
     setThumbUrl(next ? URL.createObjectURL(next) : null);
+    const prefs = loadExportPrefs();
+    setExportRoot(
+      next
+        ? (prefs.root.trim() || defaultExportRoot(next.name))
+        : "",
+    );
     setError(null);
     setLiveNote(next ? "Image loaded — click Detect text." : "");
     historyIdRef.current = null;
@@ -842,7 +874,19 @@ export default function TextReplaceMode(props: {
 
   const currentExportNaming = (): ExportNaming | null => {
     if (!file) return null;
-    return { root: defaultExportRoot(file.name), ...loadExportPrefs() };
+    const prefs = loadExportPrefs();
+    return {
+      root: exportRoot.trim() || defaultExportRoot(file.name),
+      addDate: prefs.addDate,
+      addTime: prefs.addTime,
+      seriesSuffix: prefs.seriesSuffix,
+    };
+  };
+
+  const persistExportRoot = (next: string) => {
+    setExportRoot(next);
+    const prefs = loadExportPrefs();
+    saveExportPrefs({ ...prefs, root: next.trim() });
   };
 
   const handleOneDownload = (variant: RenderedVariant) => {
@@ -862,6 +906,7 @@ export default function TextReplaceMode(props: {
   const handleDownload = async (naming: ExportNaming) => {
     if (!file || variants.length === 0) return;
     setExportOpen(false);
+    persistExportRoot(naming.root);
     setError(null);
     try {
       await downloadTextReplaceZip(variants, naming);
@@ -943,6 +988,20 @@ export default function TextReplaceMode(props: {
           >
             {phase === "generate" ? "Generating…" : "Generate"}
           </button>
+          {file && (
+            <label className="osebe-field tr-export-prefix">
+              <span className="osebe-field__label">File name prefix</span>
+              <input
+                className="osebe-input"
+                type="text"
+                disabled={busy}
+                value={exportRoot}
+                placeholder={defaultExportRoot(file.name)}
+                onChange={(e) => setExportRoot(e.target.value)}
+                onBlur={(e) => persistExportRoot(e.target.value)}
+              />
+            </label>
+          )}
           <button
             type="button"
             className="osebe-btn osebe-btn--green"
@@ -1418,7 +1477,8 @@ export default function TextReplaceMode(props: {
       {exportOpen && file && variants.length > 0 && (
         <ExportDialog
           variants={variants}
-          defaultRoot={defaultExportRoot(file.name)}
+          root={exportRoot || defaultExportRoot(file.name)}
+          onRootChange={setExportRoot}
           onCancel={() => setExportOpen(false)}
           onConfirm={(naming) => void handleDownload(naming)}
         />
