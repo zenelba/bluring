@@ -19,6 +19,7 @@ import {
   type ImageCropMode,
   type ImageSearchBrief,
   type ImageSearchProviderChoice,
+  type ImageSearchSkip,
   type SearchPhoto,
 } from "./lib/imageSearch";
 import {
@@ -83,6 +84,7 @@ export default function ImageSearchMode(props: {
   >("idle");
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
+  const [exportSkips, setExportSkips] = useState<ImageSearchSkip[]>([]);
   const hydratedRef = useRef<string | null>(null);
   const historyIdRef = useRef<string | null>(null);
   const historyTimerRef = useRef<number | null>(null);
@@ -236,6 +238,7 @@ export default function ImageSearchMode(props: {
     setBusy(true);
     setPhase("search");
     setError(null);
+    setExportSkips([]);
     setCandidates([]);
     setSelectedIds(new Set());
     setLabelsById({});
@@ -334,11 +337,18 @@ export default function ImageSearchMode(props: {
     });
   };
 
+  const skipById = useMemo(() => {
+    const map = new Map<string, ImageSearchSkip>();
+    for (const s of exportSkips) map.set(s.id, s);
+    return map;
+  }, [exportSkips]);
+
   const runDownload = async () => {
     if (selectedPhotos.length === 0 || busy) return;
     setBusy(true);
     setPhase("export");
     setError(null);
+    setExportSkips([]);
     try {
       localStorage.setItem(PREFIX_KEY, prefix.trim() || "isci_slike");
       localStorage.setItem(RECOG_KEY, useRecognitionNames ? "1" : "0");
@@ -357,12 +367,13 @@ export default function ImageSearchMode(props: {
             setLiveNote(`Pripravljam ZIP… ${done}/${total}`),
         },
       );
+      setExportSkips(result.skips);
       if (result.skipped > 0) {
         setLiveNote(
-          `ZIP pripravljen (${result.exported}/${selectedPhotos.length} slik; ${result.skipped} ni bilo mogoče prenesti).`,
+          `ZIP: ${result.exported} vključenih, ${result.skipped} manjka — glej seznam spodaj (tudi skipped.txt v ZIP).`,
         );
         setError(
-          `${result.skipped} slik ni bilo mogoče prenesti (npr. hotlink / HTML namesto slike). Ostale so v ZIP.`,
+          `Manjka ${result.skipped} od ${selectedPhotos.length} izbranih slik. Vzroki so navedeni spodaj.`,
         );
       } else {
         setLiveNote(`ZIP pripravljen (${result.exported} slik).`);
@@ -372,8 +383,20 @@ export default function ImageSearchMode(props: {
         `${result.exported} files, ${result.skipped} skipped`,
       );
     } catch (err) {
+      const skips =
+        err &&
+        typeof err === "object" &&
+        "skips" in err &&
+        Array.isArray((err as { skips: unknown }).skips)
+          ? ((err as { skips: ImageSearchSkip[] }).skips)
+          : [];
+      setExportSkips(skips);
       setError(err instanceof Error ? err.message : "Download ni uspel");
-      setLiveNote("");
+      setLiveNote(
+        skips.length > 0
+          ? `Nobena slika ni v ZIP — ${skips.length} napak (glej seznam).`
+          : "",
+      );
     } finally {
       setBusy(false);
       setPhase("idle");
@@ -388,6 +411,7 @@ export default function ImageSearchMode(props: {
     setLabelsById({});
     setError(null);
     setLiveNote("");
+    setExportSkips([]);
     historyIdRef.current = null;
   };
 
@@ -666,6 +690,39 @@ export default function ImageSearchMode(props: {
 
           {error && <p className="osebe-error">{error}</p>}
           {liveNote && <p className="osebe-hint">{liveNote}</p>}
+
+          {exportSkips.length > 0 && (
+            <div className="imgsearch-skips" role="status">
+              <p className="imgsearch-skips__title">
+                Manjkajoče slike ({exportSkips.length})
+              </p>
+              <ul className="imgsearch-skips__list">
+                {exportSkips.map((s) => (
+                  <li key={s.id} className="imgsearch-skips__item">
+                    <span className="imgsearch-skips__name">{s.title}</span>
+                    <span className="imgsearch-skips__meta">
+                      {s.source}
+                      {s.query ? ` · ${s.query}` : ""}
+                    </span>
+                    <span className="imgsearch-skips__reason">{s.reason}</span>
+                    {s.detail && s.detail !== s.reason && (
+                      <span className="imgsearch-skips__detail">{s.detail}</span>
+                    )}
+                    {s.link ? (
+                      <a
+                        className="imgsearch-skips__link"
+                        href={s.link}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Odpri vir
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </aside>
 
         <section className="osebe-main">
@@ -681,6 +738,19 @@ export default function ImageSearchMode(props: {
               </span>
             </div>
             {liveNote && <p className="osebe-status__note">{liveNote}</p>}
+            {exportSkips.length > 0 && (
+              <p className="osebe-status__note imgsearch-skips-status">
+                Manjka {exportSkips.length}:{" "}
+                {exportSkips
+                  .slice(0, 3)
+                  .map((s) => s.title)
+                  .join(", ")}
+                {exportSkips.length > 3
+                  ? ` (+${exportSkips.length - 3})`
+                  : ""}
+                . Podrobnosti v stranski vrstici / skipped.txt.
+              </p>
+            )}
           </div>
 
           {candidates.length === 0 ? (
@@ -692,25 +762,35 @@ export default function ImageSearchMode(props: {
             <div className="imgsearch-grid">
               {candidates.map((photo) => {
                 const selected = selectedIds.has(photo.id);
+                const skip = skipById.get(photo.id);
                 return (
                   <article
                     key={photo.id}
-                    className={`imgsearch-card${selected ? " imgsearch-card--selected" : ""}`}
+                    className={`imgsearch-card${selected ? " imgsearch-card--selected" : ""}${skip ? " imgsearch-card--skipped" : ""}`}
                   >
                     <button
                       type="button"
                       className="imgsearch-card__hit"
                       onClick={() => toggleSelect(photo.id)}
                       disabled={busy}
-                      title={photo.description || photo.query}
+                      title={
+                        skip
+                          ? `Manjka v ZIP: ${skip.reason}`
+                          : photo.description || photo.query
+                      }
                     >
                       <img
                         src={photo.thumb}
                         alt={photo.description || photo.query}
                       />
-                      {selected && (
+                      {selected && !skip && (
                         <span className="imgsearch-card__check" aria-hidden>
                           ✓
+                        </span>
+                      )}
+                      {skip && (
+                        <span className="imgsearch-card__skip" aria-hidden>
+                          Manjka
                         </span>
                       )}
                     </button>
@@ -721,6 +801,11 @@ export default function ImageSearchMode(props: {
                       <span className="imgsearch-card__by">
                         {photo.photographer}
                       </span>
+                      {skip && (
+                        <span className="imgsearch-card__skip-reason">
+                          {skip.reason}
+                        </span>
+                      )}
                       {useRecognitionNames && selected && (
                         <input
                           className="imgsearch-card__label"

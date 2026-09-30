@@ -522,6 +522,70 @@ export type ImageSearchZipLabelRow = {
   id: string;
 };
 
+/** One selected photo that could not be included in the ZIP. */
+export type ImageSearchSkip = {
+  id: string;
+  title: string;
+  query: string;
+  source: ImageSearchProvider;
+  link: string;
+  /** Short user-facing reason (Slovenian). */
+  reason: string;
+  /** Raw technical detail from the fetch/crop step. */
+  detail: string;
+};
+
+export type ImageSearchZipResult = {
+  exported: number;
+  skipped: number;
+  skips: ImageSearchSkip[];
+};
+
+/** Map proxy/crop failures to a clear Slovenian reason. */
+export function humanizeImageFetchReason(detail: string): string {
+  const d = detail.trim();
+  const lower = d.toLowerCase();
+  if (/not an image\s*\(\s*text\/html/i.test(d)) {
+    return "Strežnik je vrnil spletno stran (HTML) namesto slike — pogosto hotlink zaščita";
+  }
+  if (/not an image/i.test(d)) {
+    const m = /not an image\s*\(([^)]+)\)/i.exec(d);
+    return m
+      ? `Odgovor ni bil slika (tip: ${m[1]})`
+      : "Odgovor ni bil slika";
+  }
+  if (/upstream image failed\s*\(\s*403\s*\)/i.test(d)) {
+    return "Dostop do slike zavrnjen (403)";
+  }
+  if (/upstream image failed\s*\(\s*404\s*\)/i.test(d)) {
+    return "Slika ni najdena (404)";
+  }
+  if (/upstream image failed\s*\(\s*(\d+)\s*\)/i.test(d)) {
+    const status = /upstream image failed\s*\(\s*(\d+)\s*\)/i.exec(d)?.[1];
+    return `Prenos slike ni uspel (HTTP ${status})`;
+  }
+  if (/empty image/i.test(d)) return "Prazna datoteka";
+  if (/image too large/i.test(d)) return "Slika je prevelika";
+  if (/failed to load image/i.test(d)) return "Slike ni bilo mogoče naložiti v brskalnik";
+  if (/no image url/i.test(d)) return "Manjka URL slike";
+  if (/canvas unavailable|encode failed/i.test(d)) {
+    return "Izrez / kodiranje ni uspelo";
+  }
+  if (/access code|401/i.test(lower)) return "Seja je potekla — znova vnesi access code";
+  if (d) return d;
+  return "Neznan vzrok";
+}
+
+function skipTitle(photo: SearchPhoto, label: string): string {
+  const recog = label.trim();
+  if (recog) return recog;
+  if (photo.description?.trim()) return photo.description.trim().slice(0, 80);
+  if (photo.photographer?.trim()) {
+    return `${photo.photographer.trim()} · ${photo.query}`.slice(0, 80);
+  }
+  return photo.query || photo.id.slice(0, 8);
+}
+
 export async function downloadImageSearchZip(
   photos: SearchPhoto[],
   brief: ImageSearchBrief,
@@ -531,7 +595,7 @@ export async function downloadImageSearchZip(
     labelsById?: Record<string, string>;
     onProgress?: (done: number, total: number) => void;
   },
-): Promise<{ exported: number; skipped: number; errors: string[] }> {
+): Promise<ImageSearchZipResult> {
   if (photos.length === 0) throw new Error("Ni izbranih slik");
   const useRecognitionNames = Boolean(options?.useRecognitionNames);
   const labelsById = options?.labelsById ?? {};
@@ -552,7 +616,7 @@ export async function downloadImageSearchZip(
 
   const labelRows: ImageSearchZipLabelRow[] = [];
   const usedNames = new Map<string, number>();
-  const errors: string[] = [];
+  const skips: ImageSearchSkip[] = [];
   let exported = 0;
   let fileIndex = 0;
 
@@ -564,14 +628,25 @@ export async function downloadImageSearchZip(
     try {
       blob = await renderCroppedBlob(photo, brief);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Download failed";
-      errors.push(`${photo.id.slice(0, 8)}: ${msg}`);
+      const detail = err instanceof Error ? err.message : "Download failed";
+      const reason = humanizeImageFetchReason(detail);
+      const skip: ImageSearchSkip = {
+        id: photo.id,
+        title: skipTitle(photo, label),
+        query: photo.query,
+        source: photo.source,
+        link: photo.link || photo.raw || photo.url,
+        reason,
+        detail,
+      };
+      skips.push(skip);
       credits.push(
-        `SKIPPED ${photo.id}`,
-        `  Reason: ${msg}`,
+        `SKIPPED ${skip.title}`,
+        `  Reason: ${reason}`,
+        `  Detail: ${detail}`,
         `  Source: ${photo.source}`,
-        `  ${photo.link || photo.raw}`,
         `  Query: ${photo.query}`,
+        `  ${skip.link}`,
         "",
       );
       onProgress?.(i + 1, photos.length);
@@ -610,21 +685,41 @@ export async function downloadImageSearchZip(
     onProgress?.(i + 1, photos.length);
   }
 
-  if (exported === 0) {
-    const sample = errors.slice(0, 3).join("; ");
-    throw new Error(
-      sample
-        ? `Nobene slike ni bilo mogoče prenesti. ${sample}`
-        : "Nobene slike ni bilo mogoče prenesti",
+  if (skips.length > 0) {
+    const skippedLines = [
+      "Skipped images (not included in ZIP)",
+      `Total skipped: ${skips.length}`,
+      "",
+      ...skips.flatMap((s, idx) => [
+        `${idx + 1}. ${s.title}`,
+        `   Reason: ${s.reason}`,
+        `   Detail: ${s.detail}`,
+        `   Source: ${s.source}`,
+        `   Query: ${s.query}`,
+        `   Link: ${s.link}`,
+        "",
+      ]),
+    ];
+    zip.file("skipped.txt", skippedLines.join("\n"));
+    credits.push(
+      "Skipped images",
+      ...skips.map((s) => `  ${s.title}: ${s.reason}`),
+      "",
     );
   }
 
-  if (errors.length > 0) {
-    credits.push(
-      "Skipped images",
-      ...errors.map((e) => `  ${e}`),
-      "",
-    );
+  if (exported === 0) {
+    const sample = skips
+      .slice(0, 5)
+      .map((s) => `${s.title}: ${s.reason}`)
+      .join(" · ");
+    const err = new Error(
+      sample
+        ? `Nobene slike ni bilo mogoče prenesti. ${sample}`
+        : "Nobene slike ni bilo mogoče prenesti",
+    ) as Error & { skips?: ImageSearchSkip[] };
+    err.skips = skips;
+    throw err;
   }
 
   zip.file(
@@ -637,7 +732,7 @@ export async function downloadImageSearchZip(
   const out = await zip.generateAsync({ type: "blob" });
   const zipName = `${safeFilePart(prefix) || "isci_slike"}_${brief.aspect.replace(":", "x")}.zip`;
   saveAs(out, zipName);
-  return { exported, skipped: errors.length, errors };
+  return { exported, skipped: skips.length, skips };
 }
 
 /** Merge search pages and drop duplicate photo ids. */
