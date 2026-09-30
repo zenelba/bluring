@@ -7,6 +7,7 @@ import {
   downloadImageSearchZip,
   orientationForAspect,
   parseQueriesText,
+  proposeRecognitionLabels,
   proposeSearchQueries,
   providerLabel,
   resolveImageSearchProvider,
@@ -26,12 +27,23 @@ import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
 
 const PREFIX_KEY = "imgsearch-export-prefix";
+const RECOG_KEY = "imgsearch-use-recognition-names";
 
 function loadPrefix(): string {
   try {
     return localStorage.getItem(PREFIX_KEY) ?? "isci_slike";
   } catch {
     return "isci_slike";
+  }
+}
+
+function loadUseRecognition(): boolean {
+  try {
+    const raw = localStorage.getItem(RECOG_KEY);
+    if (raw == null) return true;
+    return raw === "1" || raw === "true";
+  } catch {
+    return true;
   }
 }
 
@@ -43,11 +55,15 @@ export default function ImageSearchMode(props: {
   const [brief, setBrief] = useState<ImageSearchBrief>({ ...DEFAULT_BRIEF });
   const [queriesText, setQueriesText] = useState("");
   const [prefix, setPrefix] = useState(loadPrefix);
+  const [useRecognitionNames, setUseRecognitionNames] = useState(
+    loadUseRecognition,
+  );
+  const [labelsById, setLabelsById] = useState<Record<string, string>>({});
   const [candidates, setCandidates] = useState<SearchPhoto[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<
-    "idle" | "queries" | "search" | "export"
+    "idle" | "queries" | "search" | "labels" | "export"
   >("idle");
   const [error, setError] = useState<string | null>(null);
   const [liveNote, setLiveNote] = useState("");
@@ -85,6 +101,7 @@ export default function ImageSearchMode(props: {
       count: next.count,
       queries: next.queries,
       prefix,
+      useRecognitionNames,
     };
     try {
       const id = await upsertTask({
@@ -113,7 +130,7 @@ export default function ImageSearchMode(props: {
     if (!brief.context.trim() && brief.queries.length === 0) return;
     schedulePersist(brief);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brief, prefix]);
+  }, [brief, prefix, useRecognitionNames]);
 
   useEffect(() => {
     return () => {
@@ -142,6 +159,9 @@ export default function ImageSearchMode(props: {
     setBrief(next);
     setQueriesText(payload.queries.join("\n"));
     if (payload.prefix) setPrefix(payload.prefix);
+    if (typeof payload.useRecognitionNames === "boolean") {
+      setUseRecognitionNames(payload.useRecognitionNames);
+    }
     setLiveNote("Restored brief.");
     onInitialConsumed?.();
   }, [initialTask, onInitialConsumed]);
@@ -150,6 +170,10 @@ export default function ImageSearchMode(props: {
     setQueriesText(text);
     const queries = parseQueriesText(text);
     patchBrief({ queries });
+  };
+
+  const setLabel = (id: string, label: string) => {
+    setLabelsById((prev) => ({ ...prev, [id]: label }));
   };
 
   const runPropose = async () => {
@@ -189,6 +213,7 @@ export default function ImageSearchMode(props: {
     setError(null);
     setCandidates([]);
     setSelectedIds(new Set());
+    setLabelsById({});
     const nextBrief = { ...brief, queries };
     setBrief(nextBrief);
     const orientation = orientationForAspect(brief.aspect);
@@ -229,6 +254,46 @@ export default function ImageSearchMode(props: {
     }
   };
 
+  const ensureRecognitionLabels = async (
+    photos: SearchPhoto[],
+  ): Promise<Record<string, string>> => {
+    const missing = photos.filter((p) => !(labelsById[p.id] || "").trim());
+    if (missing.length === 0) return labelsById;
+    setLiveNote(`Predlagam prepoznavna imena (${missing.length})…`);
+    const proposed = await proposeRecognitionLabels({
+      context: brief.context,
+      criteria: brief.criteria,
+      provider,
+      items: missing.map((p) => ({
+        id: p.id,
+        query: p.query,
+        title: p.description || undefined,
+        description: p.description || undefined,
+      })),
+    });
+    const merged = { ...labelsById, ...proposed };
+    setLabelsById(merged);
+    logEvent("image_search_labels", `${Object.keys(proposed).length} labels`);
+    return merged;
+  };
+
+  const runProposeLabels = async () => {
+    if (selectedPhotos.length === 0 || busy) return;
+    setBusy(true);
+    setPhase("labels");
+    setError(null);
+    try {
+      await ensureRecognitionLabels(selectedPhotos);
+      setLiveNote("Prepoznavna imena pripravljena — uredi po potrebi.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Predlog imen ni uspel");
+      setLiveNote("");
+    } finally {
+      setBusy(false);
+      setPhase("idle");
+    }
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -251,11 +316,21 @@ export default function ImageSearchMode(props: {
     setError(null);
     try {
       localStorage.setItem(PREFIX_KEY, prefix.trim() || "isci_slike");
+      localStorage.setItem(RECOG_KEY, useRecognitionNames ? "1" : "0");
+      let labels = labelsById;
+      if (useRecognitionNames) {
+        labels = await ensureRecognitionLabels(selectedPhotos);
+      }
       await downloadImageSearchZip(
         selectedPhotos,
         { ...brief, queries: parseQueriesText(queriesText) },
         prefix,
-        (done, total) => setLiveNote(`Pripravljam ZIP… ${done}/${total}`),
+        {
+          useRecognitionNames,
+          labelsById: labels,
+          onProgress: (done, total) =>
+            setLiveNote(`Pripravljam ZIP… ${done}/${total}`),
+        },
       );
       setLiveNote(`ZIP pripravljen (${selectedPhotos.length} slik).`);
       logEvent("image_search_export", `${selectedPhotos.length} files`);
@@ -273,6 +348,7 @@ export default function ImageSearchMode(props: {
     setQueriesText("");
     setCandidates([]);
     setSelectedIds(new Set());
+    setLabelsById({});
     setError(null);
     setLiveNote("");
     historyIdRef.current = null;
@@ -455,6 +531,48 @@ export default function ImageSearchMode(props: {
             />
           </label>
 
+          <label className="osebe-toggle-row imgsearch-recog-toggle">
+            <span>
+              <span className="osebe-toggle-row__title">
+                Prepoznavno ime v datoteki
+              </span>
+              <span className="osebe-hint">
+                Oseba, žival (EN), filmska vloga — tudi za podpis pod sliko
+              </span>
+            </span>
+            <button
+              type="button"
+              className={`osebe-switch ${useRecognitionNames ? "osebe-switch--on" : ""}`}
+              role="switch"
+              aria-checked={useRecognitionNames}
+              disabled={busy}
+              onClick={() => {
+                setUseRecognitionNames((v) => {
+                  const next = !v;
+                  try {
+                    localStorage.setItem(RECOG_KEY, next ? "1" : "0");
+                  } catch {
+                    /* ignore */
+                  }
+                  return next;
+                });
+              }}
+            />
+          </label>
+
+          {useRecognitionNames && (
+            <button
+              type="button"
+              className="osebe-btn osebe-btn--ghost"
+              disabled={busy || selectedPhotos.length === 0}
+              onClick={() => void runProposeLabels()}
+            >
+              {phase === "labels"
+                ? "Predlagam imena…"
+                : "Predlagaj prepoznavna imena"}
+            </button>
+          )}
+
           <button
             type="button"
             className="osebe-btn osebe-btn--green"
@@ -504,27 +622,47 @@ export default function ImageSearchMode(props: {
               {candidates.map((photo) => {
                 const selected = selectedIds.has(photo.id);
                 return (
-                  <button
+                  <article
                     key={photo.id}
-                    type="button"
                     className={`imgsearch-card${selected ? " imgsearch-card--selected" : ""}`}
-                    onClick={() => toggleSelect(photo.id)}
-                    disabled={busy}
-                    title={photo.description || photo.query}
                   >
-                    <img src={photo.thumb} alt={photo.description || photo.query} />
+                    <button
+                      type="button"
+                      className="imgsearch-card__hit"
+                      onClick={() => toggleSelect(photo.id)}
+                      disabled={busy}
+                      title={photo.description || photo.query}
+                    >
+                      <img
+                        src={photo.thumb}
+                        alt={photo.description || photo.query}
+                      />
+                      {selected && (
+                        <span className="imgsearch-card__check" aria-hidden>
+                          ✓
+                        </span>
+                      )}
+                    </button>
                     <div className="imgsearch-card__meta">
-                      <span className="imgsearch-card__query">{photo.query}</span>
+                      <span className="imgsearch-card__query">
+                        {photo.query}
+                      </span>
                       <span className="imgsearch-card__by">
                         {photo.photographer}
                       </span>
+                      {useRecognitionNames && selected && (
+                        <input
+                          className="imgsearch-card__label"
+                          type="text"
+                          disabled={busy}
+                          placeholder="Prepoznavno ime"
+                          value={labelsById[photo.id] ?? ""}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setLabel(photo.id, e.target.value)}
+                        />
+                      )}
                     </div>
-                    {selected && (
-                      <span className="imgsearch-card__check" aria-hidden>
-                        ✓
-                      </span>
-                    )}
-                  </button>
+                  </article>
                 );
               })}
             </div>

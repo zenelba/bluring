@@ -178,6 +178,31 @@ export async function proposeSearchQueries(input: {
   return (data.queries ?? []).map((q) => String(q).trim()).filter(Boolean);
 }
 
+export async function proposeRecognitionLabels(input: {
+  context: string;
+  criteria: string;
+  provider: ImageSearchProvider;
+  items: Array<{
+    id: string;
+    query: string;
+    title?: string;
+    description?: string;
+  }>;
+}): Promise<Record<string, string>> {
+  const data = await apiFetch<{
+    labels: Array<{ id: string; label: string }>;
+  }>("/api/image-search-labels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const out: Record<string, string> = {};
+  for (const row of data.labels ?? []) {
+    if (row?.id && row?.label) out[row.id] = String(row.label).trim();
+  }
+  return out;
+}
+
 export async function searchPhotos(input: {
   query: string;
   perPage?: number;
@@ -374,26 +399,55 @@ function safeFilePart(s: string): string {
     .slice(0, 48);
 }
 
+/** Recognition caption → filesystem-safe token (max ~40). */
+export function safeRecognitionLabel(label: string): string {
+  return safeFilePart(label).slice(0, 40);
+}
+
 export function exportFileName(
   photo: SearchPhoto,
   brief: ImageSearchBrief,
   prefix: string,
   index: number,
+  options?: { useRecognitionNames?: boolean; label?: string },
 ): string {
   const root = safeFilePart(prefix) || "isci_slike";
   const aspect = brief.aspect.replace(":", "x");
   const crop = brief.cropMode;
+  const nn = String(index + 1).padStart(2, "0");
+  const recog =
+    options?.useRecognitionNames && options.label
+      ? safeRecognitionLabel(options.label)
+      : "";
+  if (recog) {
+    return `${root}_${recog}_${nn}_${aspect}_${crop}.jpg`;
+  }
   const id = photo.id.slice(0, 8);
-  return `${root}_${String(index + 1).padStart(2, "0")}_${aspect}_${crop}_${id}.jpg`;
+  return `${root}_${nn}_${aspect}_${crop}_${id}.jpg`;
 }
+
+export type ImageSearchZipLabelRow = {
+  file: string;
+  label: string;
+  query: string;
+  source: ImageSearchProvider;
+  id: string;
+};
 
 export async function downloadImageSearchZip(
   photos: SearchPhoto[],
   brief: ImageSearchBrief,
   prefix: string,
-  onProgress?: (done: number, total: number) => void,
+  options?: {
+    useRecognitionNames?: boolean;
+    labelsById?: Record<string, string>;
+    onProgress?: (done: number, total: number) => void;
+  },
 ): Promise<void> {
   if (photos.length === 0) throw new Error("Ni izbranih slik");
+  const useRecognitionNames = Boolean(options?.useRecognitionNames);
+  const labelsById = options?.labelsById ?? {};
+  const onProgress = options?.onProgress;
   const zip = new JSZip();
   const hasSerper = photos.some((p) => p.source === "serper");
   const hasUnsplash = photos.some((p) => p.source !== "serper");
@@ -408,13 +462,35 @@ export async function downloadImageSearchZip(
     "",
   ].filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== ""));
 
+  const labelRows: ImageSearchZipLabelRow[] = [];
+  const usedNames = new Map<string, number>();
+
   for (let i = 0; i < photos.length; i++) {
     const photo = photos[i];
+    const label = (labelsById[photo.id] || "").trim();
     const blob = await renderCroppedBlob(photo, brief);
-    const name = exportFileName(photo, brief, prefix, i);
+    let name = exportFileName(photo, brief, prefix, i, {
+      useRecognitionNames,
+      label,
+    });
+    const n = usedNames.get(name) ?? 0;
+    usedNames.set(name, n + 1);
+    if (n > 0) {
+      name = name.replace(/\.jpg$/i, `_${n + 1}.jpg`);
+    }
     zip.file(name, blob);
+    if (label) {
+      labelRows.push({
+        file: name,
+        label,
+        query: photo.query,
+        source: photo.source,
+        id: photo.id,
+      });
+    }
     credits.push(
       `${name}`,
+      label ? `  Label: ${label}` : "",
       `  Source: ${photo.source}`,
       `  Credit: ${photo.photographer}${photo.photographerUrl ? ` (${photo.photographerUrl})` : ""}`,
       `  ${photo.link}`,
@@ -423,7 +499,13 @@ export async function downloadImageSearchZip(
     );
     onProgress?.(i + 1, photos.length);
   }
-  zip.file("credits.txt", credits.join("\n"));
+  zip.file(
+    "credits.txt",
+    credits.filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== "")).join("\n"),
+  );
+  if (useRecognitionNames) {
+    zip.file("labels.json", JSON.stringify(labelRows, null, 2));
+  }
   const out = await zip.generateAsync({ type: "blob" });
   const zipName = `${safeFilePart(prefix) || "isci_slike"}_${brief.aspect.replace(":", "x")}.zip`;
   saveAs(out, zipName);

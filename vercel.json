@@ -63,6 +63,10 @@
       "includeFiles": "api/helpers/**",
       "memory": 1024
     },
+    "api/image-search-labels.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
     "api/feedback-save.ts": {
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"

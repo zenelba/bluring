@@ -151,6 +151,7 @@ export type ImageSearchPayload = {
   count: number;
   queries: string[];
   prefix: string;
+  useRecognitionNames: boolean;
 };
 
 export type TaskPayload =
