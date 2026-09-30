@@ -7,15 +7,18 @@ import {
   downloadImageSearchZip,
   orientationForAspect,
   parseQueriesText,
+  PROVIDER_CHOICE_OPTIONS,
   proposeRecognitionLabels,
   proposeSearchQueries,
+  providerChoiceLabel,
   providerLabel,
-  resolveImageSearchProvider,
+  resolveProviderChoice,
   searchPhotos,
   targetSize,
   type ImageAspect,
   type ImageCropMode,
   type ImageSearchBrief,
+  type ImageSearchProviderChoice,
   type SearchPhoto,
 } from "./lib/imageSearch";
 import {
@@ -28,6 +31,7 @@ import "./osebe.css";
 
 const PREFIX_KEY = "imgsearch-export-prefix";
 const RECOG_KEY = "imgsearch-use-recognition-names";
+const PROVIDER_KEY = "imgsearch-provider-choice";
 
 function loadPrefix(): string {
   try {
@@ -47,6 +51,16 @@ function loadUseRecognition(): boolean {
   }
 }
 
+function loadProviderChoice(): ImageSearchProviderChoice {
+  try {
+    const raw = localStorage.getItem(PROVIDER_KEY);
+    if (raw === "unsplash" || raw === "serper" || raw === "auto") return raw;
+  } catch {
+    /* ignore */
+  }
+  return "auto";
+}
+
 export default function ImageSearchMode(props: {
   initialTask?: RestoredTask | null;
   onInitialConsumed?: () => void;
@@ -58,6 +72,8 @@ export default function ImageSearchMode(props: {
   const [useRecognitionNames, setUseRecognitionNames] = useState(
     loadUseRecognition,
   );
+  const [providerChoice, setProviderChoice] =
+    useState<ImageSearchProviderChoice>(loadProviderChoice);
   const [labelsById, setLabelsById] = useState<Record<string, string>>({});
   const [candidates, setCandidates] = useState<SearchPhoto[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -77,8 +93,9 @@ export default function ImageSearchMode(props: {
   );
 
   const provider = useMemo(
-    () => resolveImageSearchProvider(brief.context, brief.criteria),
-    [brief.context, brief.criteria],
+    () =>
+      resolveProviderChoice(providerChoice, brief.context, brief.criteria),
+    [providerChoice, brief.context, brief.criteria],
   );
 
   const selectedPhotos = useMemo(
@@ -102,6 +119,7 @@ export default function ImageSearchMode(props: {
       queries: next.queries,
       prefix,
       useRecognitionNames,
+      providerChoice,
     };
     try {
       const id = await upsertTask({
@@ -130,7 +148,7 @@ export default function ImageSearchMode(props: {
     if (!brief.context.trim() && brief.queries.length === 0) return;
     schedulePersist(brief);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brief, prefix, useRecognitionNames]);
+  }, [brief, prefix, useRecognitionNames, providerChoice]);
 
   useEffect(() => {
     return () => {
@@ -161,6 +179,13 @@ export default function ImageSearchMode(props: {
     if (payload.prefix) setPrefix(payload.prefix);
     if (typeof payload.useRecognitionNames === "boolean") {
       setUseRecognitionNames(payload.useRecognitionNames);
+    }
+    if (
+      payload.providerChoice === "auto" ||
+      payload.providerChoice === "unsplash" ||
+      payload.providerChoice === "serper"
+    ) {
+      setProviderChoice(payload.providerChoice);
     }
     setLiveNote("Restored brief.");
     onInitialConsumed?.();
@@ -361,13 +386,16 @@ export default function ImageSearchMode(props: {
           <div className="osebe-brand">
             <h2>Išči slike</h2>
             <p>
-              Brief → predlog poizvedb → iskanje → izbor → izrez → ZIP.
-              Osebe/ljudi gredo prek Serperja, ostalo prek Unsplasha.
+              Brief → predlog poizvedb → izberi vir → iskanje → izbor → izrez →
+              ZIP.
             </p>
           </div>
 
           <p className="osebe-hint imgsearch-provider">
-            Vir: <strong>{providerLabel(provider)}</strong>
+            Aktivni vir:{" "}
+            <strong>
+              {providerChoiceLabel(providerChoice, provider)}
+            </strong>
           </p>
 
           <label className="osebe-field">
@@ -500,6 +528,37 @@ export default function ImageSearchMode(props: {
               onChange={(e) => syncQueriesFromText(e.target.value)}
             />
           </label>
+
+          <fieldset className="osebe-field imgsearch-provider-pick">
+            <legend className="osebe-field__label">Kje naj išče</legend>
+            <div className="imgsearch-crop__list">
+              {PROVIDER_CHOICE_OPTIONS.map((o) => (
+                <label key={o.id} className="imgsearch-crop__option">
+                  <input
+                    type="radio"
+                    name="imgsearch-provider"
+                    disabled={busy}
+                    checked={providerChoice === o.id}
+                    onChange={() => {
+                      setProviderChoice(o.id);
+                      try {
+                        localStorage.setItem(PROVIDER_KEY, o.id);
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                  />
+                  <span>
+                    <strong>{o.label}</strong>
+                    <span className="osebe-hint">{o.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="osebe-hint" style={{ marginTop: "0.35rem" }}>
+              Zdaj: {providerLabel(provider)}
+            </p>
+          </fieldset>
 
           <button
             type="button"

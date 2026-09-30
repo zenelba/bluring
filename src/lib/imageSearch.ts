@@ -16,6 +16,9 @@ export type ImageCropMode =
 
 export type ImageSearchProvider = "unsplash" | "serper";
 
+/** Explicit UI choice; `auto` follows people-detection heuristics. */
+export type ImageSearchProviderChoice = "auto" | ImageSearchProvider;
+
 export type ImageSearchBrief = {
   context: string;
   criteria: string;
@@ -108,11 +111,52 @@ export function resolveImageSearchProvider(
   return PEOPLE_RE.test(blob) ? "serper" : "unsplash";
 }
 
+export function resolveProviderChoice(
+  choice: ImageSearchProviderChoice,
+  context: string,
+  criteria = "",
+): ImageSearchProvider {
+  if (choice === "unsplash" || choice === "serper") return choice;
+  return resolveImageSearchProvider(context, criteria);
+}
+
 export function providerLabel(provider: ImageSearchProvider): string {
   return provider === "serper"
-    ? "Serper (Google Images — osebe)"
+    ? "Serper (Google Images)"
     : "Unsplash";
 }
+
+export function providerChoiceLabel(
+  choice: ImageSearchProviderChoice,
+  resolved: ImageSearchProvider,
+): string {
+  if (choice === "auto") {
+    return `Samodejno → ${providerLabel(resolved)}`;
+  }
+  return providerLabel(choice);
+}
+
+export const PROVIDER_CHOICE_OPTIONS: Array<{
+  id: ImageSearchProviderChoice;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: "auto",
+    label: "Samodejno",
+    hint: "Osebe/ljudi → Serper, sicer Unsplash",
+  },
+  {
+    id: "unsplash",
+    label: "Unsplash",
+    hint: "Licenčno varne stock fotografije",
+  },
+  {
+    id: "serper",
+    label: "Serper (Google Images)",
+    hint: "Širše spletno iskanje — preveri licence",
+  },
+];
 
 export function aspectRatioValue(aspect: ImageAspect): number {
   switch (aspect) {

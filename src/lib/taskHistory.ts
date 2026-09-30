@@ -152,6 +152,7 @@ export type ImageSearchPayload = {
   queries: string[];
   prefix: string;
   useRecognitionNames: boolean;
+  providerChoice: "auto" | "unsplash" | "serper";
 };
 
 export type TaskPayload =

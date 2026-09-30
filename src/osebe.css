@@ -1323,6 +1323,12 @@ button.tr-result-thumb:focus-visible {
   margin: 0 0 0.35rem;
 }
 
+.imgsearch-provider-pick {
+  border: none;
+  margin: 0.15rem 0 0.35rem;
+  padding: 0;
+}
+
 .imgsearch-crop__list {
   display: flex;
   flex-direction: column;
