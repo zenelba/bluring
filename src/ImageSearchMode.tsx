@@ -346,7 +346,7 @@ export default function ImageSearchMode(props: {
       if (useRecognitionNames) {
         labels = await ensureRecognitionLabels(selectedPhotos);
       }
-      await downloadImageSearchZip(
+      const result = await downloadImageSearchZip(
         selectedPhotos,
         { ...brief, queries: parseQueriesText(queriesText) },
         prefix,
@@ -357,8 +357,20 @@ export default function ImageSearchMode(props: {
             setLiveNote(`Pripravljam ZIP… ${done}/${total}`),
         },
       );
-      setLiveNote(`ZIP pripravljen (${selectedPhotos.length} slik).`);
-      logEvent("image_search_export", `${selectedPhotos.length} files`);
+      if (result.skipped > 0) {
+        setLiveNote(
+          `ZIP pripravljen (${result.exported}/${selectedPhotos.length} slik; ${result.skipped} ni bilo mogoče prenesti).`,
+        );
+        setError(
+          `${result.skipped} slik ni bilo mogoče prenesti (npr. hotlink / HTML namesto slike). Ostale so v ZIP.`,
+        );
+      } else {
+        setLiveNote(`ZIP pripravljen (${result.exported} slik).`);
+      }
+      logEvent(
+        "image_search_export",
+        `${result.exported} files, ${result.skipped} skipped`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download ni uspel");
       setLiveNote("");

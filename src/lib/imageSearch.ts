@@ -286,13 +286,33 @@ export async function resolveUnsplashDownload(
   return data.url;
 }
 
+/** Candidate URLs for a search hit (full → display → thumb). */
+function photoFetchUrls(photo: SearchPhoto): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of [photo.raw, photo.url, photo.thumb]) {
+    const url = (u || "").trim();
+    if (!url || seen.has(url)) continue;
+    if (!/^https?:\/\//i.test(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
+}
+
 /** Fetch remote image bytes via server proxy (avoids canvas CORS for Serper). */
-async function fetchProxiedImageBlob(url: string): Promise<Blob> {
+async function fetchProxiedImageBlob(
+  url: string,
+  referer?: string,
+): Promise<Blob> {
   const res = await fetch("/api/image-search-fetch", {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({
+      url,
+      ...(referer ? { referer } : {}),
+    }),
   });
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -303,6 +323,24 @@ async function fetchProxiedImageBlob(url: string): Promise<Blob> {
     );
   }
   return res.blob();
+}
+
+async function loadProxiedPhotoImage(
+  photo: SearchPhoto,
+): Promise<HTMLImageElement> {
+  const urls = photoFetchUrls(photo);
+  if (urls.length === 0) throw new Error("No image URL");
+  const referer = photo.link || photo.photographerUrl || undefined;
+  let lastError: Error | null = null;
+  for (const url of urls) {
+    try {
+      const blob = await fetchProxiedImageBlob(url, referer);
+      return await loadImageFromBlob(blob);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw lastError ?? new Error("Image fetch failed");
 }
 
 function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
@@ -393,8 +431,7 @@ export async function renderCroppedBlob(
 ): Promise<Blob> {
   let img: HTMLImageElement;
   if (photo.source === "serper" || !photo.downloadLocation) {
-    const blob = await fetchProxiedImageBlob(photo.raw || photo.url);
-    img = await loadImageFromBlob(blob);
+    img = await loadProxiedPhotoImage(photo);
   } else {
     const downloadUrl = await resolveUnsplashDownload(photo.downloadLocation);
     const srcUrl =
@@ -403,8 +440,15 @@ export async function renderCroppedBlob(
     try {
       img = await loadImage(srcUrl);
     } catch {
-      const blob = await fetchProxiedImageBlob(srcUrl);
-      img = await loadImageFromBlob(blob);
+      try {
+        const blob = await fetchProxiedImageBlob(
+          srcUrl,
+          photo.link || "https://unsplash.com/",
+        );
+        img = await loadImageFromBlob(blob);
+      } catch {
+        img = await loadProxiedPhotoImage(photo);
+      }
     }
   }
 
@@ -487,7 +531,7 @@ export async function downloadImageSearchZip(
     labelsById?: Record<string, string>;
     onProgress?: (done: number, total: number) => void;
   },
-): Promise<void> {
+): Promise<{ exported: number; skipped: number; errors: string[] }> {
   if (photos.length === 0) throw new Error("Ni izbranih slik");
   const useRecognitionNames = Boolean(options?.useRecognitionNames);
   const labelsById = options?.labelsById ?? {};
@@ -508,21 +552,43 @@ export async function downloadImageSearchZip(
 
   const labelRows: ImageSearchZipLabelRow[] = [];
   const usedNames = new Map<string, number>();
+  const errors: string[] = [];
+  let exported = 0;
+  let fileIndex = 0;
 
   for (let i = 0; i < photos.length; i++) {
     const photo = photos[i];
     const label = (labelsById[photo.id] || "").trim();
-    const blob = await renderCroppedBlob(photo, brief);
-    let name = exportFileName(photo, brief, prefix, i, {
+    onProgress?.(i, photos.length);
+    let blob: Blob;
+    try {
+      blob = await renderCroppedBlob(photo, brief);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Download failed";
+      errors.push(`${photo.id.slice(0, 8)}: ${msg}`);
+      credits.push(
+        `SKIPPED ${photo.id}`,
+        `  Reason: ${msg}`,
+        `  Source: ${photo.source}`,
+        `  ${photo.link || photo.raw}`,
+        `  Query: ${photo.query}`,
+        "",
+      );
+      onProgress?.(i + 1, photos.length);
+      continue;
+    }
+    let name = exportFileName(photo, brief, prefix, fileIndex, {
       useRecognitionNames,
       label,
     });
+    fileIndex += 1;
     const n = usedNames.get(name) ?? 0;
     usedNames.set(name, n + 1);
     if (n > 0) {
       name = name.replace(/\.jpg$/i, `_${n + 1}.jpg`);
     }
     zip.file(name, blob);
+    exported += 1;
     if (label) {
       labelRows.push({
         file: name,
@@ -543,6 +609,24 @@ export async function downloadImageSearchZip(
     );
     onProgress?.(i + 1, photos.length);
   }
+
+  if (exported === 0) {
+    const sample = errors.slice(0, 3).join("; ");
+    throw new Error(
+      sample
+        ? `Nobene slike ni bilo mogoče prenesti. ${sample}`
+        : "Nobene slike ni bilo mogoče prenesti",
+    );
+  }
+
+  if (errors.length > 0) {
+    credits.push(
+      "Skipped images",
+      ...errors.map((e) => `  ${e}`),
+      "",
+    );
+  }
+
   zip.file(
     "credits.txt",
     credits.filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== "")).join("\n"),
@@ -553,6 +637,7 @@ export async function downloadImageSearchZip(
   const out = await zip.generateAsync({ type: "blob" });
   const zipName = `${safeFilePart(prefix) || "isci_slike"}_${brief.aspect.replace(":", "x")}.zip`;
   saveAs(out, zipName);
+  return { exported, skipped: errors.length, errors };
 }
 
 /** Merge search pages and drop duplicate photo ids. */
