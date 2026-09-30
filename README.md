@@ -28,6 +28,7 @@ Access is gated behind an access code (session cookie). Server-side features (At
 - Sidebar wizard: context, selection criteria, aspect ratio + long edge, crop mode, count
 - **Predlagaj poizvedbe** via OpenAI; edit the query list before search
 - **Provider:** Unsplash by default; **Serper (Google Images)** when context/criteria mentions people / osebe / ljudi
+- Optional **prepoznavno ime** in filenames (person / EN animal / iconic role) + `labels.json` for captions
 - Deduped results; pick up to N; crop/resize client-side; ZIP + `credits.txt`
 - Requires `OPENAI_API_KEY`, `UNSPLASH_ACCESS_KEY`, and `SERPER_API_KEY` (for people searches)
 
@@ -172,6 +173,7 @@ Point `COBALT_API_URL` at that URL. Docs: [run an instance](https://github.com/i
 | `POST /api/image-search` | Unsplash or Serper search proxy (`provider`) |
 | `POST /api/image-search-download` | Unsplash download_location ping + URL |
 | `POST /api/image-search-fetch` | Proxy remote image bytes for crop/export |
+| `POST /api/image-search-labels` | OpenAI recognition labels for filenames/captions |
 
 All except `/api/access` require a valid access cookie.
 
