@@ -1,14 +1,24 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  buildExportNames,
   buildSeries,
+  buildSeriesStrip,
+  canSplitDetectedText,
+  commitNumberEdit,
   defaultEdits,
+  defaultExportRoot,
   detectTexts,
+  downloadSeriesStripBlob,
+  downloadTextReplaceOne,
   downloadTextReplaceZip,
   formatNumber,
+  numberMetaForEdit,
   parseEditNumber,
   renderTextReplaceVariants,
   revokeVariants,
+  splitDetectedTextBySpaces,
   type DetectedText,
+  type ExportNaming,
   type RenderedVariant,
   type SeriesSettings,
   type TextBBox,
@@ -21,6 +31,168 @@ import {
 } from "./lib/taskHistory";
 import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
+
+const EXPORT_PREFS_KEY = "tr-export-naming";
+
+type ExportPrefs = {
+  addDate: boolean;
+  addTime: boolean;
+  seriesSuffix: "step" | "price";
+  /** Last custom file-name prefix; empty means fall back to source basename. */
+  root: string;
+};
+
+function loadExportPrefs(): ExportPrefs {
+  const fallback: ExportPrefs = {
+    addDate: true,
+    addTime: false,
+    seriesSuffix: "price",
+    root: "",
+  };
+  try {
+    const raw = localStorage.getItem(EXPORT_PREFS_KEY);
+    return raw ? { ...fallback, ...(JSON.parse(raw) as Partial<ExportPrefs>) } : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveExportPrefs(prefs: ExportPrefs) {
+  localStorage.setItem(EXPORT_PREFS_KEY, JSON.stringify(prefs));
+}
+
+function ExportDialog(props: {
+  variants: RenderedVariant[];
+  root: string;
+  onRootChange: (root: string) => void;
+  onCancel: () => void;
+  onConfirm: (naming: ExportNaming) => void;
+}) {
+  const { variants, root, onRootChange, onCancel, onConfirm } = props;
+  const [prefs, setPrefs] = useState<ExportPrefs>(() => loadExportPrefs());
+  const naming: ExportNaming = {
+    root,
+    addDate: prefs.addDate,
+    addTime: prefs.addTime,
+    seriesSuffix: prefs.seriesSuffix,
+  };
+  const multi = variants.length > 1;
+  const { files, zip } = buildExportNames(variants, naming);
+  const preview = multi ? [zip, ...files.slice(0, 3)] : files;
+
+  const confirm = () => {
+    saveExportPrefs({ ...prefs, root: root.trim() });
+    onConfirm(naming);
+  };
+
+  return (
+    <div className="tr-export" role="dialog" aria-modal="true" aria-label="Export">
+      <div className="tr-export__backdrop" onClick={onCancel} />
+      <form
+        className="tr-export__panel"
+        onSubmit={(e) => {
+          e.preventDefault();
+          confirm();
+        }}
+      >
+        <h3 className="tr-export__title">Export {multi ? `${variants.length} images` : "image"}</h3>
+        <label className="tr-export__field">
+          <span className="osebe-kicker">File name prefix</span>
+          <input
+            className="tr-export__input"
+            value={root}
+            onChange={(e) => onRootChange(e.target.value)}
+            placeholder="e.g. telekom_naj_c"
+            autoFocus
+          />
+        </label>
+        <fieldset className="tr-export__group">
+          <legend className="osebe-kicker">Add</legend>
+          <label>
+            <input
+              type="checkbox"
+              checked={prefs.addDate}
+              onChange={(e) => setPrefs({ ...prefs, addDate: e.target.checked })}
+            />{" "}
+            Export date
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={prefs.addTime}
+              onChange={(e) => setPrefs({ ...prefs, addTime: e.target.checked })}
+            />{" "}
+            Export time (hour-minute)
+          </label>
+        </fieldset>
+        {multi && (
+          <fieldset className="tr-export__group">
+            <legend className="osebe-kicker">Per image</legend>
+            <label>
+              <input
+                type="radio"
+                name="tr-series-suffix"
+                checked={prefs.seriesSuffix === "step"}
+                onChange={() => setPrefs({ ...prefs, seriesSuffix: "step" })}
+              />{" "}
+              Step (-1, 0, +1)
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="tr-series-suffix"
+                checked={prefs.seriesSuffix === "price"}
+                onChange={() => setPrefs({ ...prefs, seriesSuffix: "price" })}
+              />{" "}
+              Price
+            </label>
+          </fieldset>
+        )}
+        <div className="tr-export__preview">
+          {preview.map((name) => (
+            <code key={name}>{name}</code>
+          ))}
+          {multi && files.length > 3 && <span>… {files.length - 3} more</span>}
+        </div>
+        <div className="tr-export__actions">
+          <button type="button" className="osebe-btn osebe-btn--ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="osebe-btn osebe-btn--green">
+            Download
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** "from" → "to" per replaced text; a series lists every value it took. */
+function ChangeList({ variants }: { variants: RenderedVariant[] }) {
+  const rows = new Map<string, { from: string; to: string[] }>();
+  for (const v of variants) {
+    for (const c of v.changes) {
+      const row = rows.get(c.id) ?? { from: c.from, to: [] };
+      if (!row.to.includes(c.to)) row.to.push(c.to);
+      rows.set(c.id, row);
+    }
+  }
+  if (rows.size === 0) return null;
+  return (
+    <ul className="tr-changes">
+      {[...rows.values()].map((r, i) => (
+        <li key={i}>
+          <q>{r.from}</q> → {r.to.map((t, j) => (
+            <span key={j}>
+              {j > 0 && " · "}
+              <q>{t}</q>
+            </span>
+          ))}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function CloudIcon() {
   return (
@@ -76,6 +248,32 @@ function boxStroke(
   return "#3b82f6";
 }
 
+function SplitGlyph({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+    >
+      <path
+        d="M8 4v16M16 4v16M4 12h4M16 12h4"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M10 9l-2 3 2 3M14 9l2 3-2 3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function TextBBoxOverlay(props: {
   items: DetectedText[];
   selectedId: string | null;
@@ -85,6 +283,7 @@ function TextBBoxOverlay(props: {
   onSelect: (id: string | null) => void;
   onHover: (id: string | null) => void;
   onBBoxChange: (id: string, bbox: TextBBox) => void;
+  onSplit: (item: DetectedText) => void;
 }) {
   const {
     items,
@@ -95,6 +294,7 @@ function TextBBoxOverlay(props: {
     onSelect,
     onHover,
     onBBoxChange,
+    onSplit,
   } = props;
   const rootRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragMode | null>(null);
@@ -263,6 +463,25 @@ function TextBBoxOverlay(props: {
                       onPointerDown={(e) => startResize(e, item, c)}
                     />
                   ))}
+                  {canSplitDetectedText(item) && (
+                    <button
+                      type="button"
+                      className="tr-bbox__split"
+                      title="Split"
+                      aria-label="Split"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onSplit(item);
+                      }}
+                    >
+                      <SplitGlyph size={12} />
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -289,7 +508,14 @@ export default function TextReplaceMode(props: {
     step: 1,
   });
   const [variants, setVariants] = useState<RenderedVariant[]>([]);
+  const [seriesStrip, setSeriesStrip] = useState<{
+    blob: Blob;
+    url: string;
+  } | null>(null);
   const [lightbox, setLightbox] = useState<RenderedVariant | null>(null);
+  const [showPillDebug, setShowPillDebug] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportRoot, setExportRoot] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -320,9 +546,17 @@ export default function TextReplaceMode(props: {
     return () => {
       if (thumbUrl) URL.revokeObjectURL(thumbUrl);
       revokeVariants(variants);
+      if (seriesStrip) URL.revokeObjectURL(seriesStrip.url);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const revokeSeriesStrip = () => {
+    setSeriesStrip((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+  };
 
   useEffect(() => {
     if (!initialTask || initialTask.record.toolId !== "textReplace") return;
@@ -336,9 +570,14 @@ export default function TextReplaceMode(props: {
       new File([], payload.fileName, { type: payload.mimeType });
     if (thumbUrl) URL.revokeObjectURL(thumbUrl);
     revokeVariants(variants);
+    revokeSeriesStrip();
     setVariants([]);
     setFile(nextFile);
     setThumbUrl(URL.createObjectURL(nextFile));
+    {
+      const prefs = loadExportPrefs();
+      setExportRoot(prefs.root.trim() || defaultExportRoot(nextFile.name));
+    }
     setItems(payload.items as DetectedText[]);
     setEdits(payload.edits);
     setSeries(payload.series);
@@ -381,6 +620,7 @@ export default function TextReplaceMode(props: {
   const setImageFile = (next: File | null) => {
     if (thumbUrl) URL.revokeObjectURL(thumbUrl);
     revokeVariants(variants);
+    revokeSeriesStrip();
     setVariants([]);
     setItems([]);
     setEdits({});
@@ -390,6 +630,12 @@ export default function TextReplaceMode(props: {
     setHoveredId(null);
     setFile(next);
     setThumbUrl(next ? URL.createObjectURL(next) : null);
+    const prefs = loadExportPrefs();
+    setExportRoot(
+      next
+        ? (prefs.root.trim() || defaultExportRoot(next.name))
+        : "",
+    );
     setError(null);
     setLiveNote(next ? "Image loaded — click Detect text." : "");
     historyIdRef.current = null;
@@ -479,6 +725,27 @@ export default function TextReplaceMode(props: {
     );
   };
 
+  const onSplit = (item: DetectedText) => {
+    if (busy || !canSplitDetectedText(item)) return;
+    const parts = splitDetectedTextBySpaces(item);
+    if (!parts || parts.length < 2) return;
+    setItems((prev) => {
+      const idx = prev.findIndex((i) => i.id === item.id);
+      if (idx < 0) return prev;
+      return [...prev.slice(0, idx), ...parts, ...prev.slice(idx + 1)];
+    });
+    setEdits((prev) => {
+      const next = { ...prev };
+      delete next[item.id];
+      return { ...next, ...defaultEdits(parts) };
+    });
+    setSeries((s) =>
+      s.itemId === item.id ? { ...s, itemId: null } : s,
+    );
+    setSelectedId(parts[0].id);
+    setHoveredId(null);
+  };
+
   const visibleItems = useMemo(
     () => items.filter((item) => item.kind !== "logo"),
     [items],
@@ -491,6 +758,7 @@ export default function TextReplaceMode(props: {
     setError(null);
     setLiveNote("Detecting text…");
     revokeVariants(variants);
+    revokeSeriesStrip();
     setVariants([]);
     setSelectedId(null);
     try {
@@ -532,6 +800,7 @@ export default function TextReplaceMode(props: {
     setError(null);
     setLiveNote("Rendering…");
     revokeVariants(variants);
+    revokeSeriesStrip();
     setVariants([]);
     setLightbox(null);
     try {
@@ -541,13 +810,8 @@ export default function TextReplaceMode(props: {
         if (!item.number) continue;
         const edit = committed[item.id];
         if (!edit) continue;
-        const n = parseEditNumber(edit.replaceText);
-        if (n != null) {
-          committed[item.id] = {
-            replaceText: formatNumber(n, item.number),
-            replaceValue: n,
-          };
-        }
+        const next = commitNumberEdit(item, edit.replaceText, edit);
+        if (next) committed[item.id] = next;
       }
       setEdits(committed);
 
@@ -558,6 +822,41 @@ export default function TextReplaceMode(props: {
         series,
       });
       setVariants(out);
+      if (out.length >= 2) {
+        try {
+          const strip = await buildSeriesStrip(out);
+          setSeriesStrip(strip);
+        } catch {
+          setSeriesStrip(null);
+        }
+      }
+      const pillRows = out[0]?.pillRows ?? [];
+      if (pillRows.length > 0) {
+        logEvent(
+          "pill_rows",
+          JSON.stringify(
+            pillRows.map((r) => ({
+              T1: r.T1,
+              H1: r.H1,
+              gaps: r.gaps,
+              cleared: r.cleared,
+              pills: r.pills.map((p) => ({
+                text: p.text,
+                newText: p.newText,
+                mode: p.mode,
+                rect: p.rect,
+                newRect: p.newRect,
+                fill: p.fill,
+                textColor: p.textColor,
+                radius: p.radius,
+                padL: p.padL,
+                padR: p.padR,
+                font: p.font,
+              })),
+            })),
+          ),
+        );
+      }
       setLiveNote(
         out.length === 1
           ? "1 image ready."
@@ -573,11 +872,45 @@ export default function TextReplaceMode(props: {
     }
   };
 
-  const handleDownload = async () => {
+  const currentExportNaming = (): ExportNaming | null => {
+    if (!file) return null;
+    const prefs = loadExportPrefs();
+    return {
+      root: exportRoot.trim() || defaultExportRoot(file.name),
+      addDate: prefs.addDate,
+      addTime: prefs.addTime,
+      seriesSuffix: prefs.seriesSuffix,
+    };
+  };
+
+  const persistExportRoot = (next: string) => {
+    setExportRoot(next);
+    const prefs = loadExportPrefs();
+    saveExportPrefs({ ...prefs, root: next.trim() });
+  };
+
+  const handleOneDownload = (variant: RenderedVariant) => {
+    const naming = currentExportNaming();
+    if (!naming) return;
+    downloadTextReplaceOne(variant, naming);
+    logEvent("export_one", variant.label);
+  };
+
+  const handleStripDownload = () => {
+    const naming = currentExportNaming();
+    if (!naming || !seriesStrip) return;
+    downloadSeriesStripBlob(seriesStrip.blob, naming);
+    logEvent("export_series_strip", `${variants.length} variants`);
+  };
+
+  const handleDownload = async (naming: ExportNaming) => {
     if (!file || variants.length === 0) return;
+    setExportOpen(false);
+    persistExportRoot(naming.root);
     setError(null);
     try {
-      await downloadTextReplaceZip(variants, file.name);
+      await downloadTextReplaceZip(variants, naming);
+      logEvent("export", buildExportNames(variants, naming).files.join(", "));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download failed");
     }
@@ -655,11 +988,25 @@ export default function TextReplaceMode(props: {
           >
             {phase === "generate" ? "Generating…" : "Generate"}
           </button>
+          {file && (
+            <label className="osebe-field tr-export-prefix">
+              <span className="osebe-field__label">File name prefix</span>
+              <input
+                className="osebe-input"
+                type="text"
+                disabled={busy}
+                value={exportRoot}
+                placeholder={defaultExportRoot(file.name)}
+                onChange={(e) => setExportRoot(e.target.value)}
+                onBlur={(e) => persistExportRoot(e.target.value)}
+              />
+            </label>
+          )}
           <button
             type="button"
             className="osebe-btn osebe-btn--green"
             disabled={busy || variants.length === 0}
-            onClick={() => void handleDownload()}
+            onClick={() => setExportOpen(true)}
           >
             Download {variants.length > 1 ? "ZIP" : "PNG"}
             {variants.length > 0 ? ` (${variants.length})` : ""}
@@ -717,6 +1064,12 @@ export default function TextReplaceMode(props: {
                               {item.textBlockId.replace("blok_", "blok ")}
                             </span>
                           )}
+                          <span
+                            className="osebe-brand-chip"
+                            title={`Detected alignment: ${item.style.align}`}
+                          >
+                            {item.style.align}
+                          </span>
                           {item.style.fontFamily && (
                             <span
                               className="osebe-brand-chip"
@@ -736,22 +1089,43 @@ export default function TextReplaceMode(props: {
                           className="osebe-field"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <span className="osebe-field__label">
-                            New value
-                            {item.number.suffix || item.number.prefix
-                              ? ` → ${
-                                  (() => {
-                                    const v = parseEditNumber(
-                                      edit?.replaceText ?? "",
-                                    );
-                                    const num =
-                                      v ??
-                                      edit?.replaceValue ??
-                                      item.number.value;
-                                    return formatNumber(num, item.number);
-                                  })()
-                                }`
-                              : ""}
+                          <span className="tr-field-label-row">
+                            <span className="osebe-field__label">
+                              New value
+                              {item.number.suffix || item.number.prefix
+                                ? ` → ${
+                                    (() => {
+                                      const committed = commitNumberEdit(
+                                        item,
+                                        edit?.replaceText ?? "",
+                                        edit,
+                                      );
+                                      if (committed) return committed.replaceText;
+                                      const meta =
+                                        numberMetaForEdit(item, edit) ??
+                                        item.number;
+                                      const num =
+                                        edit?.replaceValue ?? item.number.value;
+                                      return formatNumber(num, meta);
+                                    })()
+                                  }`
+                                : ""}
+                            </span>
+                            {canSplitDetectedText(item) && (
+                              <button
+                                type="button"
+                                className="tr-split-btn"
+                                title="Split"
+                                aria-label="Split"
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSplit(item);
+                                }}
+                              >
+                                <SplitGlyph />
+                              </button>
+                            )}
                           </span>
                           <input
                             className="osebe-input"
@@ -773,20 +1147,22 @@ export default function TextReplaceMode(props: {
                                     n ??
                                     prev[item.id]?.replaceValue ??
                                     item.number!.value,
+                                  numberPrefix: prev[item.id]?.numberPrefix,
+                                  numberSuffix: prev[item.id]?.numberSuffix,
                                 },
                               }));
                             }}
                             onBlur={(e) => {
                               const raw = e.target.value;
-                              const n = parseEditNumber(raw);
-                              if (n == null || !item.number) return;
-                              const formatted = formatNumber(n, item.number);
+                              const next = commitNumberEdit(
+                                item,
+                                raw,
+                                edits[item.id],
+                              );
+                              if (!next) return;
                               setEdits((prev) => ({
                                 ...prev,
-                                [item.id]: {
-                                  replaceText: formatted,
-                                  replaceValue: n,
-                                },
+                                [item.id]: next,
                               }));
                             }}
                             onKeyDown={(e) => {
@@ -801,7 +1177,26 @@ export default function TextReplaceMode(props: {
                           className="osebe-field"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <span className="osebe-field__label">Replace with</span>
+                          <span className="tr-field-label-row">
+                            <span className="osebe-field__label">
+                              Replace with
+                            </span>
+                            {canSplitDetectedText(item) && (
+                              <button
+                                type="button"
+                                className="tr-split-btn"
+                                title="Split"
+                                aria-label="Split"
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSplit(item);
+                                }}
+                              >
+                                <SplitGlyph />
+                              </button>
+                            )}
+                          </span>
                           <input
                             className="osebe-input"
                             type="text"
@@ -899,16 +1294,22 @@ export default function TextReplaceMode(props: {
                                 item.number
                                   ? `: ${seriesPreview
                                       .map((v) =>
-                                        formatNumber(v, item.number!),
+                                        formatNumber(
+                                          v,
+                                          numberMetaForEdit(item, edit) ??
+                                            item.number!,
+                                        ),
                                       )
                                       .join(" · ")}`
                                   : seriesPreview.length > 11 && item.number
                                     ? `: ${formatNumber(
                                         seriesPreview[0]!,
-                                        item.number,
+                                        numberMetaForEdit(item, edit) ??
+                                          item.number,
                                       )} · … · ${formatNumber(
                                         seriesPreview[seriesPreview.length - 1]!,
-                                        item.number,
+                                        numberMetaForEdit(item, edit) ??
+                                          item.number,
                                       )}`
                                     : ""}
                               </p>
@@ -973,6 +1374,7 @@ export default function TextReplaceMode(props: {
                       onSelect={setSelectedId}
                       onHover={setHoveredId}
                       onBBoxChange={patchBBox}
+                      onSplit={onSplit}
                     />
                   )}
                 </div>
@@ -982,6 +1384,52 @@ export default function TextReplaceMode(props: {
               {variants.length > 0 && (
                 <div className="tr-results">
                   <span className="osebe-kicker">Results</span>
+                  {variants.some((v) => v.debugUrl) && (
+                    <label className="tr-debug-toggle">
+                      <input
+                        type="checkbox"
+                        checked={showPillDebug}
+                        onChange={(e) => setShowPillDebug(e.target.checked)}
+                      />{" "}
+                      Show pill measurements
+                    </label>
+                  )}
+                  <ChangeList variants={variants} />
+                  {seriesStrip && (
+                    <article className="tr-series-strip">
+                      <div className="tr-series-strip__head">
+                        <div>
+                          <div className="osebe-card__name">Series strip</div>
+                          <div className="osebe-card__dims">
+                            {(() => {
+                              const min = Math.min(
+                                ...variants.map((v) => v.offset),
+                              );
+                              const max = Math.max(
+                                ...variants.map((v) => v.offset),
+                              );
+                              const fmt = (n: number) =>
+                                n > 0 ? `+${n}` : String(n);
+                              return `${fmt(min)} → ${fmt(max)}`;
+                            })()}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="osebe-btn osebe-btn--ghost tr-card-download"
+                          onClick={handleStripDownload}
+                        >
+                          Download
+                        </button>
+                      </div>
+                      <div className="tr-series-strip__frame">
+                        <img
+                          src={seriesStrip.url}
+                          alt="Series strip from lowest to highest offset (left to right)"
+                        />
+                      </div>
+                    </article>
+                  )}
                   <div className="osebe-grid">
                     {variants.map((v) => (
                       <article key={v.index} className="osebe-card">
@@ -991,15 +1439,30 @@ export default function TextReplaceMode(props: {
                           onClick={() => openLightbox(v)}
                           aria-label={`Enlarge ${v.label}`}
                         >
-                          <img src={v.url} alt={v.label} />
+                          <img
+                            src={showPillDebug && v.debugUrl ? v.debugUrl : v.url}
+                            alt={v.label}
+                          />
                         </button>
                         <div className="osebe-card__meta">
-                          <div className="osebe-card__name">{v.label}</div>
-                          {v.offset !== 0 && (
-                            <div className="osebe-card__dims">
-                              offset {v.offset > 0 ? `+${v.offset}` : v.offset}
+                          <div className="tr-card-meta-row">
+                            <div className="tr-card-meta-text">
+                              <div className="osebe-card__name">{v.label}</div>
+                              {v.offset !== 0 && (
+                                <div className="osebe-card__dims">
+                                  offset{" "}
+                                  {v.offset > 0 ? `+${v.offset}` : v.offset}
+                                </div>
+                              )}
                             </div>
-                          )}
+                            <button
+                              type="button"
+                              className="osebe-btn osebe-btn--ghost tr-card-download"
+                              onClick={() => handleOneDownload(v)}
+                            >
+                              Download
+                            </button>
+                          </div>
                         </div>
                       </article>
                     ))}
@@ -1010,6 +1473,16 @@ export default function TextReplaceMode(props: {
           )}
         </section>
       </div>
+
+      {exportOpen && file && variants.length > 0 && (
+        <ExportDialog
+          variants={variants}
+          root={exportRoot || defaultExportRoot(file.name)}
+          onRootChange={setExportRoot}
+          onCancel={() => setExportOpen(false)}
+          onConfirm={(naming) => void handleDownload(naming)}
+        />
+      )}
 
       {lightbox && (
         <div
@@ -1033,10 +1506,22 @@ export default function TextReplaceMode(props: {
             </button>
             <img
               className="tr-lightbox__img"
-              src={lightbox.url}
+              src={
+                showPillDebug && lightbox.debugUrl
+                  ? lightbox.debugUrl
+                  : lightbox.url
+              }
               alt={lightbox.label}
             />
             <p className="tr-lightbox__caption">{lightbox.label}</p>
+            <ChangeList variants={[lightbox]} />
+            <button
+              type="button"
+              className="osebe-btn osebe-btn--dark tr-lightbox__download"
+              onClick={() => handleOneDownload(lightbox)}
+            >
+              Download
+            </button>
           </div>
         </div>
       )}

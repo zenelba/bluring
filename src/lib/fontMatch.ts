@@ -90,6 +90,25 @@ export function fontCss(
 type Box = { x: number; y: number; w: number; h: number };
 
 /**
+ * Glyph ink height from canvas text metrics.
+ * Do NOT invent a descent when the face reports 0 — that undersizes
+ * all-caps / no-descender lines (NAJCENEJE, neomejeno, brezskrbno, …).
+ * Also ignore residual descent (&lt; 8% of ascent) from cap bowls (J etc.)
+ * so the fitted size fills the OCR box with the visible letterforms.
+ */
+export function inkHeightFromMetrics(
+  ascent: number,
+  descent: number,
+  probe: number,
+): number {
+  const a = ascent > 0 ? ascent : 0;
+  const d = descent > 0 ? descent : 0;
+  if (a <= 0 && d <= 0) return Math.max(1, probe * 0.8);
+  if (a > 0 && d > 0 && d < a * 0.08) return Math.max(1, a);
+  return Math.max(1, a + d);
+}
+
+/**
  * Calibrate font size so original text's ink height matches box.h,
  * and scaleX so ink width matches box.w (clamped 0.75–1.3).
  */
@@ -104,11 +123,11 @@ export function calibrate(
   ctx.font = fontCss(family, weight, probe);
   ctx.textBaseline = "alphabetic";
   const m = ctx.measureText(text || "Hg");
-  const ascent =
-    m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : probe * 0.8;
-  const descent =
-    m.actualBoundingBoxDescent > 0 ? m.actualBoundingBoxDescent : probe * 0.2;
-  const inkH = Math.max(1, ascent + descent);
+  const inkH = inkHeightFromMetrics(
+    m.actualBoundingBoxAscent,
+    m.actualBoundingBoxDescent,
+    probe,
+  );
   const size = (box.h / inkH) * probe;
 
   ctx.font = fontCss(family, weight, size);
@@ -164,6 +183,30 @@ function iou(a: Uint8Array, b: Uint8Array): number {
   return uni === 0 ? 0 : inter / uni;
 }
 
+/** Tight ink bounds inside a binary mask (1 = ink). */
+export function inkBounds(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+): { x: number; y: number; w: number; h: number } | null {
+  let top = h;
+  let bottom = -1;
+  let left = w;
+  let right = -1;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      if (!mask[row + x]) continue;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+      if (x < left) left = x;
+      if (x > right) right = x;
+    }
+  }
+  if (bottom < 0) return null;
+  return { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+}
+
 /**
  * Pick nearest Google Font by rendering original text and comparing ink masks.
  * Also returns IoU scores for every candidate (used to unify fonts in a text block).
@@ -205,6 +248,12 @@ export function matchFont(
     }
   }
   const origMask = buildInkMask(crop, bw, bh, bg);
+  // Align IoU draws to pixel ink origin when present, but calibrate size to the
+  // full OCR box — ink-tight height undersizes replacements users already call small.
+  const ink = inkBounds(origMask, bw, bh);
+  const fitBox: Box = { x: 0, y: 0, w: bw, h: bh };
+  const drawOriginX = ink ? ink.x : 0;
+  const drawOriginY = ink ? ink.y : 0;
 
   const off = document.createElement("canvas");
   off.width = bw;
@@ -217,7 +266,7 @@ export function matchFont(
       text,
       "Montserrat",
       weight,
-      { x: 0, y: 0, w: bw, h: bh },
+      fitBox,
     );
     return { family: "Montserrat", weight, ...cal, scores: emptyScores() };
   }
@@ -228,9 +277,9 @@ export function matchFont(
     return {
       family: "Montserrat",
       weight: 700,
-      size: bh * 0.92,
+      size: fitBox.h * 0.92,
       scaleX: 1,
-      ascent: bh * 0.75,
+      ascent: fitBox.h * 0.75,
       scores: emptyScores(),
     };
   }
@@ -244,12 +293,7 @@ export function matchFont(
 
   for (const family of FONT_CANDIDATES) {
     for (const weight of weightOrder) {
-      const cal = calibrate(probe, text, family, weight, {
-        x: 0,
-        y: 0,
-        w: bw,
-        h: bh,
-      });
+      const cal = calibrate(probe, text, family, weight, fitBox);
       ctx.clearRect(0, 0, bw, bh);
       ctx.fillStyle = `rgb(${bg.r},${bg.g},${bg.b})`;
       ctx.fillRect(0, 0, bw, bh);
@@ -260,7 +304,8 @@ export function matchFont(
       ctx.font = fontCss(family, weight, cal.size);
       ctx.textBaseline = "alphabetic";
       ctx.save();
-      ctx.translate(0, cal.ascent);
+      // Align rendered glyphs to the source ink origin for a fair IoU
+      ctx.translate(drawOriginX, drawOriginY + cal.ascent);
       ctx.scale(cal.scaleX, 1);
       ctx.fillText(text, 0, 0);
       ctx.restore();
@@ -280,9 +325,9 @@ export function matchFont(
     best ?? {
       family: "Montserrat",
       weight: 700,
-      size: bh * 0.92,
+      size: fitBox.h * 0.92,
       scaleX: 1,
-      ascent: bh * 0.75,
+      ascent: fitBox.h * 0.75,
       scores,
     }
   );

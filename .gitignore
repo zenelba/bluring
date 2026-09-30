@@ -9,3 +9,5 @@ vite.config.js
 /api/*.js
 !api/helpers/
 feedback/
+test-results/
+playwright-report/

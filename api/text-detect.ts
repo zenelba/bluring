@@ -76,12 +76,12 @@ Return JSON only:
 
 Rules:
 - Return exactly one label per provided id. Do not add or drop ids.
-- kind "logo": brand marks / network badges that are not editable copy (e.g. "5G", carrier logos). Prefer "logo" when digits are glued to letters (5G, 4K).
+- kind "logo": brand marks / network badges (e.g. "5G", carrier logos). Prefer "logo" when digits are glued to letters (5G, 4K). Still return these detections — never omit them.
 - kind "number": the item has a clear primary numeric value (prices, speeds, months). Put surrounding words in prefix/suffix. European comma decimals.
-- kind "text": everything else (headlines, labels, buttons like SKLENI, non-numeric phrases).
-- isPill: true for any text sitting inside a compact rounded colored badge/chip — especially yellow, pink, or orange price/label chips (e.g. yellow "ENOTNA CENA", pink "2 LETI", "HITROST" chips). Set isPill true even when kind is "text". Not for full-width bars/buttons like SKLENI, and not for headlines painted directly on the page/banner background.
-- layoutGroupId: SAME id for horizontally adjacent pills in one row that should reflow together. null otherwise.
-- fontWeight / align: best guess from the image. Prefer "left" for headlines and body on the left side of banners; use "center" only when text is clearly centered in the frame.
+- kind "text": everything else (headlines, labels, buttons like SKLENI, non-numeric phrases). Prefer "text" for single-letter brand marks beside a wordmark that users may replace (e.g. the "C" in "neo C").
+- isPill: true for any text sitting inside a compact rounded colored badge/chip — yellow, pink, orange, OR light/white/pale-cyan chips (e.g. yellow "ENOTNA CENA", pink "2 LETI", light "DO 1 GBIT/S"). Set isPill true even when kind is "text". Not for full-width bars/buttons like SKLENI, and not for headlines painted directly on the page/banner background.
+- layoutGroupId: SAME id for horizontally adjacent pills in one row that should reflow together (including a vivid pill next to a light/white pill). null otherwise.
+- fontWeight / align: best guess from the image. Prefer "left" for headlines, body copy, and any text in a column next to icons (feature lists, plan cards). Use "center" only when the line is clearly centered in the frame with equal left/right margins (hero titles, button labels like SKLENI). When unsure, choose "left".
 - number must be null when kind is not "number".
 
 Detected lines:

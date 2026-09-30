@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Font ink / align harness</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 24px; background: #111; color: #eee; }
+    h1 { font-size: 18px; }
+    .row { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 16px; }
+    figure { margin: 0; }
+    canvas { background: #0a4a9c; display: block; border-radius: 8px; }
+    figcaption { margin-top: 8px; font-size: 13px; color: #bbb; }
+    .pass { color: #7dffa0; }
+    .fail { color: #ff7d7d; }
+  </style>
+</head>
+<body>
+  <h1>Plain-text font height: old descent pad vs fixed calibrate</h1>
+  <p id="status">Loading fonts…</p>
+  <div class="row" id="out"></div>
+  <script type="module">
+    import {
+      calibrate,
+      inkHeightFromMetrics,
+      fontCss,
+      loadCandidateFonts,
+    } from "/src/lib/fontMatch.ts";
+
+    await loadCandidateFonts();
+
+    const family = "Montserrat";
+    const weight = 700;
+    const samples = [
+      { text: "NAJCENEJE", boxH: 48, boxW: 220 },
+      { text: "neomejeno", boxH: 36, boxW: 160 },
+      { text: "brezskrbno", boxH: 36, boxW: 180 },
+      { text: "UGODNO", boxH: 48, boxW: 140 },
+    ];
+
+    const probe = document.createElement("canvas").getContext("2d");
+    const out = document.getElementById("out");
+    const lines = [];
+
+    for (const s of samples) {
+      // Old buggy ink height (always add descent, invent 20% when 0)
+      probe.font = fontCss(family, weight, 100);
+      const m = probe.measureText(s.text);
+      const oldAscent =
+        m.actualBoundingBoxAscent > 0 ? m.actualBoundingBoxAscent : 80;
+      const oldDescent =
+        m.actualBoundingBoxDescent > 0
+          ? m.actualBoundingBoxDescent
+          : 20;
+      const oldInk = oldAscent + oldDescent;
+      const oldSize = (s.boxH / oldInk) * 100;
+      const fixed = calibrate(probe, s.text, family, weight, {
+        x: 0, y: 0, w: s.boxW, h: s.boxH,
+      });
+      const metricsInk = inkHeightFromMetrics(
+        m.actualBoundingBoxAscent,
+        m.actualBoundingBoxDescent,
+        100,
+      );
+
+      const canvas = document.createElement("canvas");
+      canvas.width = 360;
+      canvas.height = 140;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#0a4a9c";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Guide box (target ink height)
+      const boxY = 40;
+      ctx.strokeStyle = "rgba(255,255,255,0.35)";
+      ctx.strokeRect(20, boxY, s.boxW, s.boxH);
+
+      // Old (red) vs fixed (lime) baseline-aligned draws
+      const draw = (size, color, x) => {
+        ctx.font = fontCss(family, weight, size);
+        ctx.fillStyle = color;
+        ctx.textBaseline = "alphabetic";
+        const mm = ctx.measureText(s.text);
+        const ascent =
+          mm.actualBoundingBoxAscent > 0
+            ? mm.actualBoundingBoxAscent
+            : size * 0.8;
+        ctx.fillText(s.text, x, boxY + ascent);
+      };
+      draw(oldSize, "#ff6b6b", 24);
+      draw(fixed.size, "#b8ff3c", 24);
+
+      const ratio = fixed.size / oldSize;
+      const fig = document.createElement("figure");
+      fig.appendChild(canvas);
+      const cap = document.createElement("figcaption");
+      const ok = ratio > 1.05; // fixed should be larger for no-descender
+      cap.innerHTML = `<strong>${s.text}</strong> — old ${oldSize.toFixed(1)}px → fixed ${fixed.size.toFixed(1)}px (${ratio.toFixed(2)}×) inkH metrics ${metricsInk.toFixed(1)} <span class="${ok ? "pass" : "fail"}">${ok ? "PASS taller" : "check"}</span>`;
+      fig.appendChild(cap);
+      out.appendChild(fig);
+      lines.push(`${s.text}: ${oldSize.toFixed(1)} → ${fixed.size.toFixed(1)} (${ratio.toFixed(2)}x)`);
+    }
+
+    document.getElementById("status").textContent =
+      "Red = old (padded descent). Lime = fixed. " + lines.join(" · ");
+    document.title = "FONT_HARNESS_READY";
+  </script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>Pill row regression</title></head>
+<body>
+  <canvas id="out"></canvas>
+  <script type="module">
+    import { renderTextReplaceVariants } from "/src/lib/textReplace.ts";
+
+    // Vision OCR boxes for the Telekom card. Containers carry stale,
+    // text-height rects like a task restored from before plate detection.
+    const style = (color) => ({
+      color,
+      fontWeight: "bold",
+      align: "center",
+      fontFamily: "Titillium Web",
+      fontSizeRel: 0.0122,
+      scaleX: 1,
+    });
+    const stalePill = (bbox, fill) => ({
+      type: "pill",
+      fill,
+      radiusPxHint: 8,
+      padX: 0.1,
+      padY: 0.05,
+      rect: bbox,
+    });
+    const yellowBox = { x: 0.1357, y: 0.05099, w: 0.26786, h: 0.01218 };
+    const twoBox = { x: 0.46964, y: 0.05099, w: 0.026786, h: 0.01218 };
+    const letiBox = { x: 0.50357, y: 0.05099, w: 0.083929, h: 0.01218 };
+    const fiveGBox = { x: 0.83214, y: 0.04414, w: 0.07321, h: 0.01979 };
+    const items = [
+      { id: "yellow", text: "ENOTNA CENA", bbox: yellowBox, kind: "text",
+        container: stalePill(yellowBox, "#B1D61E"), layoutGroupId: "g", textBlockId: null,
+        style: style("#31352A"), number: null },
+      { id: "two", text: "2", bbox: twoBox, kind: "number",
+        container: stalePill(twoBox, "#EA4E8F"), layoutGroupId: "g", textBlockId: null,
+        style: style("#FFFFFF"),
+        number: { value: 2, decimalSep: null, thousandSep: null, decimals: 0, prefix: "", suffix: "", rawNumeric: "2" } },
+      { id: "leti", text: "LETI", bbox: letiBox, kind: "text",
+        container: stalePill(letiBox, "#EA5292"), layoutGroupId: "g", textBlockId: null,
+        style: style("#FFFFFF"), number: null },
+      { id: "5g", text: "5G", bbox: fiveGBox, kind: "text",
+        container: stalePill(fiveGBox, "#3AB9EC"), layoutGroupId: "g", textBlockId: null,
+        style: style("#FFFFFF"), number: null },
+    ];
+
+    const newText = new URLSearchParams(location.search).get("text") || "SUPER CENA";
+
+    const blob = await (await fetch("/tests/pill-row/telekom.png")).blob();
+    const file = new File([blob], "telekom.png", { type: "image/png" });
+    const [variant] = await renderTextReplaceVariants({
+      file,
+      items,
+      edits: { yellow: { replaceText: newText, replaceValue: null } },
+      series: { itemId: null, steps: 0, step: 1 },
+    });
+
+    const load = (url) => new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => res(img);
+      img.onerror = rej;
+      img.src = url;
+    });
+    const [outImg, srcImg] = await Promise.all([load(variant.url), load(URL.createObjectURL(blob))]);
+    const c = document.getElementById("out");
+    c.width = outImg.naturalWidth;
+    c.height = outImg.naturalHeight;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(outImg, 0, 0);
+    const out = ctx.getImageData(0, 0, c.width, c.height);
+    const sc = document.createElement("canvas");
+    sc.width = c.width;
+    sc.height = c.height;
+    const sctx = sc.getContext("2d", { willReadFrequently: true });
+    sctx.drawImage(srcImg, 0, 0);
+    const src = sctx.getImageData(0, 0, c.width, c.height);
+
+    window.__RESULT__ = {
+      width: c.width,
+      height: c.height,
+      out: Array.from(out.data),
+      src: Array.from(src.data),
+      pillRows: variant.pillRows,
+    };
+  </script>
+</body>
+</html>

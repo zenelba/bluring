@@ -7,6 +7,13 @@ import {
   matchFont,
   type FontWeightNum,
 } from "./fontMatch";
+import {
+  drawPillDebugOverlay,
+  measurePillRows,
+  renderPillRow,
+  type PillRowDebug,
+} from "./pillRow";
+import { splitDetectedTextBySpaces as splitDetectedTextBySpacesCore } from "./splitDetectedText";
 
 export type TextBBox = { x: number; y: number; w: number; h: number };
 
@@ -61,6 +68,9 @@ export type TextEdit = {
   replaceText: string;
   /** For number fields: numeric value driving formatNumber */
   replaceValue: number | null;
+  /** Typed affixes — override item.number when set (allows dropping trailing `/`). */
+  numberPrefix?: string;
+  numberSuffix?: string;
 };
 
 export type TextReplaceEdits = Record<string, TextEdit>;
@@ -78,7 +88,14 @@ export type RenderedVariant = {
   label: string;
   blob: Blob;
   url: string;
+  /** Result with measured / new pill outlines, T1 and cleared area drawn on top. */
+  debugUrl?: string;
+  pillRows?: PillRowDebug[];
+  /** Replacements applied in this variant, in reading order. */
+  changes: TextChange[];
 };
+
+export type TextChange = { id: string; from: string; to: string };
 
 const MAX_API_EDGE = 1536;
 const MAX_BODY_BYTES = 3.5 * 1024 * 1024;
@@ -277,7 +294,6 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
       : raw.number
         ? "number"
         : "text";
-  if (kind === "logo") return null;
 
   const container = raw.container ?? {
     type: "plain" as const,
@@ -290,12 +306,14 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
 
   let number: TextNumberMeta | null =
     kind === "number" ? raw.number ?? null : null;
-  if (!number) {
+  // Don't invent numbers from logo marks like "5G" / single letters
+  if (!number && kind !== "logo") {
     number = parseNumberFromText(raw.text);
   }
 
   return {
     ...raw,
+    // Keep logo marks editable in the UI (map to text)
     kind: number ? "number" : "text",
     number,
     container: {
@@ -310,7 +328,9 @@ function normalizeIncomingItem(raw: DetectedText): DetectedText | null {
       color: raw.style?.color ?? "#000000",
       fontWeight: raw.style?.fontWeight === "normal" ? "normal" : "bold",
       align:
-        raw.style?.align === "left" || raw.style?.align === "right"
+        raw.style?.align === "left" ||
+        raw.style?.align === "right" ||
+        raw.style?.align === "center"
           ? raw.style.align
           : "left",
       fontFamily: raw.style?.fontFamily ?? "Montserrat",
@@ -429,7 +449,8 @@ function assignTextBlocks(items: DetectedText[]): DetectedText[] {
 
 /**
  * Infer align from text blocks (edge spread) and solo geometry.
- * Pills are always center.
+ * Pills are always center. Prefer left — promo cards left-align copy next to
+ * icons even when the glyph center sits near the image midline.
  */
 function inferAlignments(items: DetectedText[]): DetectedText[] {
   const byBlock = new Map<string, DetectedText[]>();
@@ -451,13 +472,10 @@ function inferAlignments(items: DetectedText[]): DetectedText[] {
     const centerSpread = spread(centers);
     const rightSpread = spread(rights);
     let align: "left" | "center" | "right" = "left";
-    let best = leftSpread;
-    // Prefer left on ties
-    if (centerSpread + 1e-9 < best) {
-      best = centerSpread;
+    // Center/right only when clearly tighter than left (not a near-tie)
+    if (centerSpread < leftSpread * 0.7 && centerSpread <= rightSpread) {
       align = "center";
-    }
-    if (rightSpread + 1e-9 < best) {
+    } else if (rightSpread < leftSpread * 0.7 && rightSpread < centerSpread) {
       align = "right";
     }
     blockAlign.set(blockId, align);
@@ -479,12 +497,15 @@ function inferAlignments(items: DetectedText[]): DetectedText[] {
         },
       };
     }
-    // Solo: keep explicit right; center only if clearly mid-frame
-    if (item.style.align === "right") return item;
-    const cx = item.bbox.x + item.bbox.w / 2;
-    const nearlyFullWidth = item.bbox.w > 0.55;
-    if (Math.abs(cx - 0.5) < 0.04 && !nearlyFullWidth) {
-      return { ...item, style: { ...item.style, align: "center" } };
+    // Solo: trust model left/right/center. Do not infer center from
+    // image-mid geometry — short left-column words on a centered card
+    // also have near-equal side margins (neomejeno, brezskrbno, …).
+    if (
+      item.style.align === "left" ||
+      item.style.align === "right" ||
+      item.style.align === "center"
+    ) {
+      return item;
     }
     return { ...item, style: { ...item.style, align: "left" } };
   });
@@ -579,6 +600,33 @@ function isVividChipColor(c: Rgb): boolean {
   return false;
 }
 
+/**
+ * Pale / ice / light-cyan badge plates on dark banners (e.g. "DO 1 GBIT/S").
+ * Excludes mid gray UI chrome and saturated cyan logos like "5G".
+ */
+function isLightBadgePlateColor(c: Rgb): boolean {
+  const chroma = rgbChroma(c);
+  const lum = luminance(c);
+  if (lum < 200 || lum > 252) return false;
+  // Off-white / ice
+  if (chroma <= 55) return true;
+  // Very pale cyan / light blue-green chip (high lum, low–mid chroma)
+  if (
+    chroma < 70 &&
+    c.b >= 170 &&
+    c.g >= 160 &&
+    c.r >= 140
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Any compact badge plate fill we should reflow as a chip. */
+function isChipPlateColor(c: Rgb): boolean {
+  return isVividChipColor(c) || isLightBadgePlateColor(c);
+}
+
 function textBoxHRel(textH: number, padPx: number): number {
   return textH > 0 ? padPx / textH : 0.45;
 }
@@ -610,7 +658,7 @@ function sampleInteriorChipFill(
       const c = { r: data[i], g: data[i + 1], b: data[i + 2] };
       // Skip glyph ink
       if (colorDist(c, textRgb) < 36) continue;
-      if (isVividChipColor(c)) vivid.push(c);
+      if (isChipPlateColor(c)) vivid.push(c);
       else other.push(c);
     }
   }
@@ -620,6 +668,49 @@ function sampleInteriorChipFill(
     r: medianChannel(pool.map((c) => c.r)),
     g: medianChannel(pool.map((c) => c.g)),
     b: medianChannel(pool.map((c) => c.b)),
+  };
+}
+
+/**
+ * Medians over the OCR box are pulled toward glyph anti-aliasing. The solid
+ * plate is the most frequent color near the estimate, so take the mode bin.
+ */
+function dominantPlateColor(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  box: PxRect,
+  estimate: Rgb,
+  textRgb: Rgb,
+): Rgb {
+  const pad = Math.max(2, Math.round(box.h * 0.6));
+  const x0 = Math.max(0, Math.floor(box.x - pad));
+  const x1 = Math.min(imgW, Math.ceil(box.x + box.w + pad));
+  const y0 = Math.max(0, Math.floor(box.y - pad));
+  const y1 = Math.min(imgH, Math.ceil(box.y + box.h + pad));
+  const bins = new Map<number, { n: number; r: number; g: number; b: number }>();
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * imgW + x) * 4;
+      const c = { r: data[i], g: data[i + 1], b: data[i + 2] };
+      if (colorDist(c, estimate) > 110) continue;
+      if (colorDist(c, textRgb) < 60) continue;
+      const key = ((c.r >> 3) << 10) | ((c.g >> 3) << 5) | (c.b >> 3);
+      const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+      bin.n++;
+      bin.r += c.r;
+      bin.g += c.g;
+      bin.b += c.b;
+      bins.set(key, bin);
+    }
+  }
+  let best: { n: number; r: number; g: number; b: number } | null = null;
+  for (const bin of bins.values()) if (!best || bin.n > best.n) best = bin;
+  if (!best || best.n < 6) return estimate;
+  return {
+    r: Math.round(best.r / best.n),
+    g: Math.round(best.g / best.n),
+    b: Math.round(best.b / best.n),
   };
 }
 
@@ -666,23 +757,24 @@ function measurePillPlate(
     );
   }
   const fillCand = sampleMedianRgb(data, imgW, imgH, fillPoints);
-  // Prefer interior vivid chip (yellow) over outer samples (often banner blue)
+  // Prefer interior chip fill (yellow / pale cyan) over outer samples (often banner blue)
   let fillRgb: Rgb = nearBg;
-  if (interiorFill && isVividChipColor(interiorFill)) {
+  if (interiorFill && isChipPlateColor(interiorFill)) {
     fillRgb = interiorFill;
-  } else if (fillCand && isVividChipColor(fillCand)) {
+  } else if (fillCand && isChipPlateColor(fillCand)) {
     fillRgb = fillCand;
   } else if (interiorFill && colorDist(interiorFill, textRgb) > 20) {
     fillRgb = interiorFill;
   } else if (fillCand && colorDist(fillCand, textRgb) > 20) {
     fillRgb = fillCand;
-  } else if (isVividChipColor(nearBg)) {
+  } else if (isChipPlateColor(nearBg)) {
     fillRgb = nearBg;
   } else if (fillCand) {
     fillRgb = fillCand;
   } else if (interiorFill) {
     fillRgb = interiorFill;
   }
+  fillRgb = dominantPlateColor(data, imgW, imgH, box, fillRgb, textRgb);
   const fillHex = rgbToHex(fillRgb.r, fillRgb.g, fillRgb.b);
   const thresh = 38;
 
@@ -695,38 +787,79 @@ function measurePillPlate(
     );
   };
 
-  let left = Math.floor(box.x);
-  let right = Math.ceil(box.x + box.w);
-  let top = Math.floor(box.y);
-  let bottom = Math.ceil(box.y + box.h);
-  const maxExpand = Math.round(Math.max(box.h * 4, box.w * 0.8));
+  // Bounded 2D flood of the chip color. The OCR box interior is passable so
+  // glyphs don't stop growth; the window keeps full-width fields from flooding.
+  const bx0 = Math.floor(box.x);
+  const by0 = Math.floor(box.y);
+  const bx1 = Math.ceil(box.x + box.w);
+  const by1 = Math.ceil(box.y + box.h);
+  const winX0 = Math.max(0, Math.floor(box.x - box.h * 4));
+  const winX1 = Math.min(imgW, Math.ceil(box.x + box.w + box.h * 4));
+  const winY0 = Math.max(0, Math.floor(box.y - box.h * 1.5));
+  const winY1 = Math.min(imgH, Math.ceil(box.y + box.h + box.h * 1.5));
+  const ww = winX1 - winX0;
+  const wh = winY1 - winY0;
+  if (ww <= 0 || wh <= 0) return null;
 
-  let leftExpand = 0;
-  let rightExpand = 0;
-  for (let i = 0; i < maxExpand; i++) {
-    const midY = Math.round((top + bottom) / 2);
-    if (pixelMatches(left - 1, midY)) {
-      left -= 1;
-      leftExpand += 1;
-    } else break;
+  const inBox = (x: number, y: number) =>
+    x >= bx0 && x < bx1 && y >= by0 && y < by1;
+  const visited = new Uint8Array(ww * wh);
+  const stack: number[] = [];
+  let seeded = 0;
+  for (let y = Math.max(by0, winY0); y < Math.min(by1, winY1); y++) {
+    for (let x = Math.max(bx0, winX0); x < Math.min(bx1, winX1); x++) {
+      if (!pixelMatches(x, y)) continue;
+      const k = (y - winY0) * ww + (x - winX0);
+      visited[k] = 1;
+      stack.push(k);
+      seeded++;
+    }
   }
-  for (let i = 0; i < maxExpand; i++) {
-    const midY = Math.round((top + bottom) / 2);
-    if (pixelMatches(right + 1, midY)) {
-      right += 1;
-      rightExpand += 1;
-    } else break;
+  if (seeded === 0) return null;
+  // Interior (glyph) pixels count as plate once the chip color is present.
+  for (let y = Math.max(by0, winY0); y < Math.min(by1, winY1); y++) {
+    for (let x = Math.max(bx0, winX0); x < Math.min(bx1, winX1); x++) {
+      const k = (y - winY0) * ww + (x - winX0);
+      if (!visited[k]) {
+        visited[k] = 1;
+        stack.push(k);
+      }
+    }
   }
-  for (let i = 0; i < maxExpand; i++) {
-    const midX = Math.round((left + right) / 2);
-    if (pixelMatches(midX, top - 1)) top -= 1;
-    else break;
+
+  let left = bx0;
+  let right = bx1;
+  let top = by0;
+  let bottom = by1;
+  while (stack.length > 0) {
+    const k = stack.pop()!;
+    const x = winX0 + (k % ww);
+    const y = winY0 + Math.floor(k / ww);
+    if (x < left) left = x;
+    if (x + 1 > right) right = x + 1;
+    if (y < top) top = y;
+    if (y + 1 > bottom) bottom = y + 1;
+    const nbrs = [
+      [x - 1, y],
+      [x + 1, y],
+      [x, y - 1],
+      [x, y + 1],
+    ];
+    for (const [nx, ny] of nbrs) {
+      if (nx < winX0 || ny < winY0 || nx >= winX1 || ny >= winY1) continue;
+      const nk = (ny - winY0) * ww + (nx - winX0);
+      if (visited[nk]) continue;
+      if (!inBox(nx, ny) && !pixelMatches(nx, ny)) continue;
+      visited[nk] = 1;
+      stack.push(nk);
+    }
   }
-  for (let i = 0; i < maxExpand; i++) {
-    const midX = Math.round((left + right) / 2);
-    if (pixelMatches(midX, bottom + 1)) bottom += 1;
-    else break;
-  }
+
+  const leftExpand = bx0 - left;
+  const rightExpand = right - bx1;
+  const touchesLeft = left <= winX0 && winX0 > 0;
+  const touchesRight = right >= winX1 && winX1 < imgW;
+  const maxExpand = Math.round(box.h * 4);
 
   const rectPx: PxRect = {
     x: left,
@@ -752,8 +885,54 @@ function measurePillPlate(
     padXPx,
     padYPx,
     hitMaxHorizontal:
-      leftExpand >= maxExpand - 1 && rightExpand >= maxExpand - 1,
+      (touchesLeft || leftExpand >= maxExpand - 1) &&
+      (touchesRight || rightExpand >= maxExpand - 1),
   };
+}
+
+/**
+ * Real tablets need fill≠banner and text≠fill. Light ice chips need dark ink
+ * on the light plate (rejects white prices on a gradient mistaken for ice fill).
+ */
+function hasPillLikeContrast(
+  textRgb: Rgb,
+  fillRgb: Rgb,
+  farBg: Rgb,
+): boolean {
+  const fillVsFar = colorDist(fillRgb, farBg);
+  const textVsFill = colorDist(textRgb, fillRgb);
+  if (textVsFill < 80) return false;
+  if (isLightBadgePlateColor(fillRgb)) {
+    if (fillVsFar < 35) return false;
+    // Dark ink on light plate
+    if (luminance(textRgb) + 40 >= luminance(fillRgb)) return false;
+    return true;
+  }
+  if (isVividChipColor(fillRgb)) {
+    return fillVsFar >= 25;
+  }
+  return fillVsFar >= 28 && textVsFill >= 80;
+}
+
+function samplePlateFarBg(
+  data: Uint8ClampedArray,
+  imgW: number,
+  imgH: number,
+  box: PxRect,
+  plateRect: PxRect,
+): Rgb | null {
+  const far = Math.max(10, Math.round(box.h * 1.4));
+  const farPoints: Array<{ x: number; y: number }> = [];
+  for (let t = 0; t <= 4; t++) {
+    const u = t / 4;
+    farPoints.push(
+      { x: box.x + box.w * u, y: plateRect.y - far },
+      { x: box.x + box.w * u, y: plateRect.y + plateRect.h + far },
+      { x: plateRect.x - far, y: box.y + box.h * u },
+      { x: plateRect.x + plateRect.w + far, y: box.y + box.h * u },
+    );
+  }
+  return sampleMedianRgb(data, imgW, imgH, farPoints);
 }
 
 /**
@@ -766,46 +945,34 @@ function shouldPromotePlainToPill(
   imgH: number,
   box: PxRect,
   plate: NonNullable<ReturnType<typeof measurePillPlate>>,
+  textRgb: Rgb,
 ): boolean {
-  if (plate.rectPx.h > box.h * 2.4) return false;
+  // Real badge plates are often ~3x cap height once the flood wraps the text.
+  if (plate.rectPx.h > box.h * 3.6) return false;
   if (plate.rectPx.w > box.w * 4.0) return false;
   if (plate.rectPx.w > box.w + box.h * 10) return false;
 
-  const far = Math.max(10, Math.round(box.h * 1.4));
-  const farPoints: Array<{ x: number; y: number }> = [];
-  for (let t = 0; t <= 4; t++) {
-    const u = t / 4;
-    farPoints.push(
-      { x: box.x + box.w * u, y: plate.rectPx.y - far },
-      { x: box.x + box.w * u, y: plate.rectPx.y + plate.rectPx.h + far },
-      { x: plate.rectPx.x - far, y: box.y + box.h * u },
-      { x: plate.rectPx.x + plate.rectPx.w + far, y: box.y + box.h * u },
-    );
-  }
-  const farBg = sampleMedianRgb(data, imgW, imgH, farPoints);
+  const farBg = samplePlateFarBg(data, imgW, imgH, box, plate.rectPx);
   if (!farBg) return false;
+  if (!isChipPlateColor(plate.fillRgb)) return false;
+  if (!hasPillLikeContrast(textRgb, plate.fillRgb, farBg)) return false;
 
   const fillVsFar = colorDist(plate.fillRgb, farBg);
 
   // Strong path: vivid chip vs banner field — promote even if flood hit max expand
-  // (wrong outer fill used to flood the whole blue bar; interior yellow fixes that).
   if (isVividChipColor(plate.fillRgb) && fillVsFar >= 25) {
     return true;
   }
+  // Pale ice/cyan chips: compact flood + dark-on-light (checked above)
+  if (
+    isLightBadgePlateColor(plate.fillRgb) &&
+    fillVsFar >= 35 &&
+    !plate.hitMaxHorizontal
+  ) {
+    return true;
+  }
 
-  // Full-width buttons / fields (non-vivid)
-  if (plate.hitMaxHorizontal) return false;
-
-  // Fallback: any fill clearly different from far field + some plate extent
-  if (fillVsFar < 28) return false;
-  const hasPad =
-    plate.padXPx >= 2 ||
-    plate.padYPx >= 2 ||
-    plate.rectPx.w > box.w + 2 ||
-    plate.rectPx.h > box.h + 2;
-  if (!hasPad && fillVsFar < 45) return false;
-
-  return true;
+  return false;
 }
 
 /**
@@ -897,13 +1064,34 @@ export async function measureStyles(
       item.style.fontWeight,
     );
 
-    let container: TextContainer = { ...item.container, rect: null };
+    let container: TextContainer = {
+      ...item.container,
+      type: "plain",
+      fill: null,
+      rect: null,
+    };
     const plate = measurePillPlate(data, imgW, imgH, box, textColor, bg);
+    const textRgb = {
+      r: parseInt(textColor.slice(1, 3), 16),
+      g: parseInt(textColor.slice(3, 5), 16),
+      b: parseInt(textColor.slice(5, 7), 16),
+    };
     if (plate) {
-      const asPill = item.container.type === "pill";
+      // A "pill" whose plate is just the banner field (e.g. a 5G logo) is not a chip.
+      const bannerField =
+        plate.hitMaxHorizontal && !isChipPlateColor(plate.fillRgb);
+      const farBg = samplePlateFarBg(data, imgW, imgH, box, plate.rectPx);
+      const contrastOk =
+        !!farBg &&
+        isChipPlateColor(plate.fillRgb) &&
+        hasPillLikeContrast(textRgb, plate.fillRgb, farBg);
+      // GPT isPill only sticks when the plate has real tablet-like contrast
+      const asPill =
+        item.container.type === "pill" && !bannerField && contrastOk;
       const promote =
         !asPill &&
-        shouldPromotePlainToPill(data, imgW, imgH, box, plate);
+        contrastOk &&
+        shouldPromotePlainToPill(data, imgW, imgH, box, plate, textRgb);
       if (asPill || promote) {
         container = {
           ...item.container,
@@ -939,7 +1127,7 @@ export async function measureStyles(
   ];
   const blockWinner = new Map<
     string,
-    { family: string; weight: FontWeightNum; sizeRel: number; scaleX: number }
+    { family: string; weight: FontWeightNum }
   >();
 
   for (const blockId of blockIds) {
@@ -966,24 +1154,9 @@ export async function measureStyles(
       pipe >= 0 && bestKey.slice(pipe + 1) === "400" ? 400 : 700
     ) as FontWeightNum;
 
-    // Recalibrate each member with the winning font, then take medians
-    const sizeRels: number[] = [];
-    const scaleXs: number[] = [];
-    for (const m of members) {
-      const box = bboxToPx(m.item.bbox, imgW, imgH);
-      const cal = calibrate(ctx, m.item.text, family, weight, box);
-      sizeRels.push(cal.size / imgH);
-      scaleXs.push(cal.scaleX);
-    }
-    sizeRels.sort((a, b) => a - b);
-    scaleXs.sort((a, b) => a - b);
-    const mid = Math.floor(sizeRels.length / 2);
-    blockWinner.set(blockId, {
-      family,
-      weight,
-      sizeRel: sizeRels[mid] ?? 0.04,
-      scaleX: scaleXs[mid] ?? 1,
-    });
+    // Share family/weight only — each line keeps its own calibrated size so
+    // a slightly taller headline is not median-shrunk toward fine print.
+    blockWinner.set(blockId, { family, weight });
   }
 
   return pass1.map((p) => {
@@ -994,6 +1167,8 @@ export async function measureStyles(
         : undefined;
 
     if (winner) {
+      const box = bboxToPx(p.item.bbox, imgW, imgH);
+      const cal = calibrate(ctx, p.item.text, winner.family, winner.weight, box);
       return {
         ...p.item,
         container: p.container,
@@ -1004,8 +1179,8 @@ export async function measureStyles(
             | "bold",
           align: p.item.style.align,
           fontFamily: winner.family,
-          fontSizeRel: winner.sizeRel,
-          scaleX: winner.scaleX,
+          fontSizeRel: cal.size / imgH,
+          scaleX: cal.scaleX,
         },
       };
     }
@@ -1025,6 +1200,78 @@ export async function measureStyles(
       },
     };
   });
+}
+
+/**
+ * OCR often splits one chip ("2" + "LETI"). Items whose measured plates are
+ * the same component get one shared rect and layout group so they redraw as
+ * a single pill.
+ */
+function unifySharedPlates(input: DetectedText[]): DetectedText[] {
+  // Text whose box sits inside another chip's plate belongs to that chip
+  // (e.g. "2" inside the "2 LETI" pink plate even if its own promote failed).
+  const plates = input.filter(
+    (i) => i.container.type === "pill" && i.container.rect,
+  );
+  const items = input.map((item) => {
+    if (item.container.type === "pill" && item.container.rect) return item;
+    const b = item.bbox;
+    for (const p of plates) {
+      const r = p.container.rect!;
+      const ix = Math.max(0, Math.min(b.x + b.w, r.x + r.w) - Math.max(b.x, r.x));
+      const iy = Math.max(0, Math.min(b.y + b.h, r.y + r.h) - Math.max(b.y, r.y));
+      if (b.w * b.h > 0 && (ix * iy) / (b.w * b.h) >= 0.8) {
+        return { ...item, container: { ...p.container } };
+      }
+    }
+    return item;
+  });
+  const idx = items
+    .map((item, i) => ({ item, i }))
+    .filter(({ item }) => item.container.type === "pill" && item.container.rect);
+  const parent = idx.map((_, k) => k);
+  const find = (k: number): number =>
+    parent[k] === k ? k : (parent[k] = find(parent[k]));
+  for (let a = 0; a < idx.length; a++) {
+    for (let b = a + 1; b < idx.length; b++) {
+      const ra = idx[a].item.container.rect!;
+      const rb = idx[b].item.container.rect!;
+      const sameFill =
+        (idx[a].item.container.fill ?? "").toLowerCase() ===
+        (idx[b].item.container.fill ?? "").toLowerCase();
+      if (normRectIoU(ra, rb) >= 0.8 || (sameFill && normRectIoU(ra, rb) >= 0.6)) {
+        parent[find(a)] = find(b);
+      }
+    }
+  }
+  const groups = new Map<number, number[]>();
+  idx.forEach((_, k) => {
+    const r = find(k);
+    groups.set(r, [...(groups.get(r) ?? []), k]);
+  });
+  const out = [...items];
+  for (const ks of groups.values()) {
+    if (ks.length < 2) continue;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const k of ks) {
+      const r = idx[k].item.container.rect!;
+      x0 = Math.min(x0, r.x);
+      y0 = Math.min(y0, r.y);
+      x1 = Math.max(x1, r.x + r.w);
+      y1 = Math.max(y1, r.y + r.h);
+    }
+    const rect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    const groupId = `plate_${idx[ks[0]].item.id}`;
+    for (const k of ks) {
+      const { item, i } = idx[k];
+      out[i] = {
+        ...item,
+        layoutGroupId: groupId,
+        container: { ...item.container, rect },
+      };
+    }
+  }
+  return out;
 }
 
 /** Heuristic: group nearby horizontal pills that share a row. */
@@ -1114,6 +1361,71 @@ export function formatNumber(value: number, meta: TextNumberMeta): string {
   return `${meta.prefix}${sign}${numeric}${meta.suffix}`;
 }
 
+/** Number meta with any typed prefix/suffix overrides from the edit. */
+export function numberMetaForEdit(
+  item: DetectedText,
+  edit: TextEdit | undefined,
+): TextNumberMeta | null {
+  if (!item.number) return null;
+  if (
+    edit?.numberPrefix === undefined &&
+    edit?.numberSuffix === undefined
+  ) {
+    return item.number;
+  }
+  return {
+    ...item.number,
+    prefix:
+      edit.numberPrefix !== undefined ? edit.numberPrefix : item.number.prefix,
+    suffix:
+      edit.numberSuffix !== undefined ? edit.numberSuffix : item.number.suffix,
+  };
+}
+
+/**
+ * Commit a typed number field: keep the prefix/suffix the user typed
+ * (e.g. drop trailing `/` from `10,99 € /` → `11,99 €`).
+ */
+export function commitNumberEdit(
+  item: DetectedText,
+  raw: string,
+  previous?: TextEdit,
+): TextEdit | null {
+  if (!item.number) return null;
+  const structured = parseNumberFromText(raw);
+  const n =
+    structured && Number.isFinite(structured.value)
+      ? structured.value
+      : parseEditNumber(raw);
+  if (n == null) return null;
+
+  const numberPrefix =
+    structured != null
+      ? structured.prefix
+      : previous?.numberPrefix !== undefined
+        ? previous.numberPrefix
+        : item.number.prefix;
+  const numberSuffix =
+    structured != null
+      ? structured.suffix
+      : previous?.numberSuffix !== undefined
+        ? previous.numberSuffix
+        : item.number.suffix;
+
+  const meta: TextNumberMeta = {
+    ...item.number,
+    prefix: numberPrefix,
+    suffix: numberSuffix,
+    value: n,
+  };
+  return {
+    replaceText: formatNumber(n, meta),
+    replaceValue: n,
+    numberPrefix,
+    numberSuffix,
+  };
+}
+
 /** Parse a number from user-typed replace text ( tolerates €, spaces, EU decimals ). */
 export function parseEditNumber(raw: string): number | null {
   const fromStructured = parseNumberFromText(raw);
@@ -1201,18 +1513,30 @@ export function defaultEdits(items: DetectedText[]): TextReplaceEdits {
   return edits;
 }
 
+export { canSplitDetectedText } from "./splitDetectedText";
+
+export function splitDetectedTextBySpaces(
+  item: DetectedText,
+): DetectedText[] | null {
+  return splitDetectedTextBySpacesCore(
+    item,
+    parseNumberFromText,
+  ) as DetectedText[] | null;
+}
+
 export function resolveItemText(
   item: DetectedText,
   edit: TextEdit | undefined,
   seriesValue: number | null,
 ): string {
-  if (seriesValue != null && item.number) {
-    return formatNumber(seriesValue, item.number);
+  const meta = numberMetaForEdit(item, edit);
+  if (seriesValue != null && meta) {
+    return formatNumber(seriesValue, meta);
   }
   if (!edit) return item.text;
-  if (item.number) {
+  if (meta) {
     const v = effectiveNumberValue(item, edit);
-    if (v != null) return formatNumber(v, item.number);
+    if (v != null) return formatNumber(v, meta);
   }
   return edit.replaceText;
 }
@@ -1226,8 +1550,11 @@ function itemChanged(
   if (!edit) return false;
   if (item.number) {
     const v = effectiveNumberValue(item, edit);
+    const meta = numberMetaForEdit(item, edit) ?? item.number;
     if (v == null) return edit.replaceText !== item.text;
-    return Math.abs(v - item.number.value) > 1e-9;
+    if (Math.abs(v - item.number.value) > 1e-9) return true;
+    // Same digits but different prefix/suffix (e.g. dropped trailing /)
+    return formatNumber(v, meta) !== formatNumber(item.number.value, item.number);
   }
   return edit.replaceText !== item.text;
 }
@@ -1515,28 +1842,68 @@ function itemScaleX(item: DetectedText): number {
   return Number.isFinite(s) && s > 0 ? s : 1;
 }
 
-/** Available width for plain text: to next same-row item or image edge. */
+/**
+ * Right clear edge for plain text beside a vertically overlapping neighbor:
+ * neighborLeft − ½×width("0") in that neighbor's font. Null when none.
+ */
+function plainRightClearEdge(
+  ctx: CanvasRenderingContext2D,
+  item: DetectedText,
+  allItems: DetectedText[],
+  imgW: number,
+  imgH: number,
+): { edge: number; gap: number; neighbor: DetectedText } | null {
+  let rightLimit = imgW;
+  let rightNeighbor: DetectedText | null = null;
+  for (const other of allItems) {
+    if (other.id === item.id) continue;
+    if (other.kind === "logo") continue;
+    // Must sit to the right of this box's left edge
+    if (other.bbox.x <= item.bbox.x) continue;
+    // Vertical overlap (not midY-only) so a short "mesec" beside a tall price counts
+    const pad = Math.max(item.bbox.h, other.bbox.h) * 0.15;
+    const overlapsY =
+      item.bbox.y - pad < other.bbox.y + other.bbox.h &&
+      other.bbox.y - pad < item.bbox.y + item.bbox.h;
+    if (!overlapsY) continue;
+    const ox = other.bbox.x * imgW;
+    if (ox < rightLimit) {
+      rightLimit = ox;
+      rightNeighbor = other;
+    }
+  }
+  if (!rightNeighbor || rightLimit >= imgW) return null;
+  const nSize = itemFontSize(rightNeighbor, imgH);
+  const nScale = itemScaleX(rightNeighbor);
+  ctx.font = fontCss(
+    rightNeighbor.style.fontFamily || "Montserrat",
+    itemFontWeight(rightNeighbor),
+    nSize,
+  );
+  const gap = 0.5 * ctx.measureText("0").width * nScale;
+  return {
+    edge: rightLimit - gap,
+    gap,
+    neighbor: rightNeighbor,
+  };
+}
+
+/** Available width for plain (non-pill) text: at most to the shared right clear edge. */
 function plainMaxWidth(
+  ctx: CanvasRenderingContext2D,
   item: DetectedText,
   allItems: DetectedText[],
   imgW: number,
   imgH: number,
 ): number {
   const box = bboxToPx(item.bbox, imgW, imgH);
-  const midY = item.bbox.y + item.bbox.h / 2;
-  let rightLimit = imgW;
-  for (const other of allItems) {
-    if (other.id === item.id) continue;
-    const oMid = other.bbox.y + other.bbox.h / 2;
-    if (Math.abs(oMid - midY) > Math.max(item.bbox.h, other.bbox.h) * 0.55) {
-      continue;
-    }
-    if (other.bbox.x <= item.bbox.x) continue;
-    const ox = other.bbox.x * imgW;
-    if (ox < rightLimit) rightLimit = ox;
+  const clear = plainRightClearEdge(ctx, item, allItems, imgW, imgH);
+  if (clear) {
+    return Math.max(4, clear.edge - box.x);
   }
-  // Leave a small gap before the next element
-  return Math.max(box.w, rightLimit - box.x - 4);
+  const gap = Math.max(4, Math.round(box.h * 0.15));
+  const toRight = imgW - box.x - gap;
+  return Math.max(box.w, toRight);
 }
 
 function drawScaledText(
@@ -1580,7 +1947,7 @@ function drawPlainText(
   const box = bboxToPx(item.bbox, imgW, imgH);
   let size = itemFontSize(item, imgH);
   let scaleX = itemScaleX(item);
-  const maxW = plainMaxWidth(item, allItems, imgW, imgH);
+  const maxW = plainMaxWidth(ctx, item, allItems, imgW, imgH);
 
   // Shrink only if text would exceed available width
   let width = measureScaledWidth(ctx, text, item, size, scaleX);
@@ -1668,14 +2035,17 @@ async function ensurePillFontsLoaded(
   const loads: Promise<FontFace[]>[] = [];
   const seen = new Set<string>();
   for (const item of items) {
-    if (item.container.type !== "pill") continue;
+    if (!isRowChip(item) && item.container.type !== "pill") continue;
     const family = item.style.fontFamily || "Montserrat";
     const weight = itemFontWeight(item);
     const sizePx = itemFontSize(item, imgH);
-    const css = fontCss(family, weight, sizePx);
-    if (seen.has(css)) continue;
-    seen.add(css);
-    loads.push(document.fonts.load(css).catch(() => []));
+    // Also load a slightly larger size used by calibrate/fit
+    for (const px of [sizePx, sizePx * 1.15, Math.max(6, sizePx * 0.9)]) {
+      const css = fontCss(family, weight, px);
+      if (seen.has(css)) continue;
+      seen.add(css);
+      loads.push(document.fonts.load(css).catch(() => []));
+    }
   }
   await Promise.all(loads);
   if (document.fonts.ready) {
@@ -1787,20 +2157,11 @@ function measurePill(
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
 
-  const h = orig.h;
-  const origMetrics = pillTextInkWidth(ctx, item.text || "Hg", scaleX);
-  const origDrawn = measureDrawnTextWidth(
-    family,
-    weight,
-    sizePx,
-    scaleX,
-    item.text || "Hg",
-  );
-  const origInk = Math.max(origMetrics.width, origDrawn);
-
-  const fromPlate = (orig.w - origInk) / 2;
-  const fromContainer = (item.container.padX || 0.45) * h;
-  const padH = Math.max(0.4 * h, fromContainer, fromPlate, 6);
+  // Keep original plate height & stadium radius — only width may grow.
+  const h = Math.max(1, orig.h);
+  const textBox = bboxToPx(item.bbox, imgW, imgH);
+  // Horizontal inset from the source plate (same look as the original chip).
+  const padH = Math.max(2, (orig.w - Math.min(textBox.w, orig.w * 0.95)) / 2);
 
   const newMetrics = pillTextInkWidth(ctx, text || "Hg", scaleX);
   const newDrawn = measureDrawnTextWidth(
@@ -1814,13 +2175,10 @@ function measurePill(
   const ascent =
     newMetrics.ascent > 0 ? newMetrics.ascent : sizePx * 0.8;
 
-  // User-requested ~15% safety margin so glyphs never crowd the plate edge
-  const contentW = (newInk + 2 * padH) * 1.15;
-  const w = Math.max(h * 0.8, contentW, orig.w);
-  const radius =
-    item.container.radiusPxHint > 0
-      ? item.container.radiusPxHint
-      : h / 2;
+  // Same construction as the original: ink + 2*sourcePad. Grow only when text needs it.
+  const w = Math.max(orig.w, newInk + 2 * padH);
+  // Capsule: always half-height corners like the source badges.
+  const radius = h / 2;
   return {
     w,
     h,
@@ -1841,6 +2199,7 @@ function layoutPillGroup(
   imgW: number,
   imgH: number,
 ): PillLayout[] {
+  if (members.length === 0) return [];
   const sorted = [...members].sort((a, b) => a.bbox.x - b.bbox.x);
   const measured = sorted.map((item) => {
     const text = texts.get(item.id) ?? item.text;
@@ -1848,24 +2207,25 @@ function layoutPillGroup(
     return { item, text, ...m };
   });
 
-  // Original gaps between consecutive pills (container edges)
+  // Gaps from original plate edges (merged co-plate chips already share one plate).
   const gaps: number[] = [];
   for (let i = 0; i < measured.length - 1; i++) {
     const a = measured[i].orig;
     const b = measured[i + 1].orig;
-    gaps.push(Math.max(4, b.x - (a.x + a.w)));
+    const raw = b.x - (a.x + a.w);
+    const minGap = Math.max(4, Math.round(measured[i].h * 0.2));
+    gaps.push(Number.isFinite(raw) && raw > 0 ? Math.max(minGap, raw) : minGap);
   }
 
-  const groupY =
-    measured.reduce((s, m) => s + m.orig.y, 0) / measured.length;
   let cursorX = measured[0].orig.x;
 
-  return measured.map((m, i) => {
+  const layouts = measured.map((m, i) => {
     const layout: PillLayout = {
       item: m.item,
       text: m.text,
       x: cursorX,
-      y: groupY,
+      // Keep each chip on its original vertical plate position
+      y: m.orig.y,
       w: m.w,
       h: m.h,
       radius: m.radius,
@@ -1878,6 +2238,14 @@ function layoutPillGroup(
     cursorX += m.w + (gaps[i] ?? 0);
     return layout;
   });
+
+  for (let i = 1; i < layouts.length; i++) {
+    const prev = layouts[i - 1];
+    const minGap = Math.max(4, Math.round(prev.h * 0.2));
+    const minX = prev.x + prev.w + minGap;
+    if (layouts[i].x < minX) layouts[i].x = minX;
+  }
+  return layouts;
 }
 
 function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
@@ -1886,18 +2254,28 @@ function drawPill(ctx: CanvasRenderingContext2D, layout: PillLayout) {
   roundRectPath(ctx, layout.x, layout.y, layout.w, layout.h, layout.radius);
   ctx.fill();
 
-  // Same font + scaleX as measurePill
+  // Same font + scaleX as measurePill; center using max(metrics, drawn ink)
   ctx.save();
   ctx.font = layout.fontCss;
   ctx.fillStyle = layout.item.style.color;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   const ink = pillTextInkWidth(ctx, layout.text, layout.scaleX);
+  const weight = itemFontWeight(layout.item);
+  const family = layout.item.style.fontFamily || "Montserrat";
+  const drawn = measureDrawnTextWidth(
+    family,
+    weight,
+    layout.fontSize,
+    layout.scaleX,
+    layout.text,
+  );
+  const inkW = Math.max(ink.width, drawn);
   const m = ctx.measureText(layout.text || "Hg");
   const leftBearing =
     (Number.isFinite(m.actualBoundingBoxLeft) ? m.actualBoundingBoxLeft : 0) *
     layout.scaleX;
-  const textX = layout.x + (layout.w - ink.width) / 2 - leftBearing;
+  const textX = layout.x + (layout.w - inkW) / 2 - leftBearing;
   const midY = layout.y + layout.h / 2;
   const ascent =
     ink.ascent > 0
@@ -1926,41 +2304,91 @@ function pillNormRect(item: DetectedText): TextBBox {
   };
 }
 
-function pillsOnSameRow(a: DetectedText, b: DetectedText): boolean {
-  if (a.container.type !== "pill" || b.container.type !== "pill") return false;
-  const ar = pillNormRect(a);
-  const br = pillNormRect(b);
+/** Chip-like detections that must reflow with a growing pill (even if still "plain"). */
+function isRowChip(item: DetectedText): boolean {
+  if (item.container.type === "pill") return true;
+  if (item.container.rect) return true;
+  if (item.container.fill) return true;
+  return false;
+}
+
+function rowChipNormRect(item: DetectedText): TextBBox {
+  if (item.container.type === "pill" || item.container.rect) {
+    return pillNormRect(item);
+  }
+  return item.bbox;
+}
+
+function chipsOnSameRow(a: DetectedText, b: DetectedText): boolean {
+  const ar = rowChipNormRect(a);
+  const br = rowChipNormRect(b);
   const ay = ar.y + ar.h / 2;
   const by = br.y + br.h / 2;
   const avgH = (ar.h + br.h) / 2;
-  return Math.abs(ay - by) <= avgH * 1.0;
+  return Math.abs(ay - by) <= avgH * 1.15;
 }
 
-/** Expand changed pill ids to include same-row neighbors so chips reflow together. */
+function normRectIoU(a: TextBBox, b: TextBBox): number {
+  const ax1 = a.x + a.w;
+  const ay1 = a.y + a.h;
+  const bx1 = b.x + b.w;
+  const by1 = b.y + b.h;
+  const ix0 = Math.max(a.x, b.x);
+  const iy0 = Math.max(a.y, b.y);
+  const ix1 = Math.min(ax1, bx1);
+  const iy1 = Math.min(ay1, by1);
+  const iw = Math.max(0, ix1 - ix0);
+  const ih = Math.max(0, iy1 - iy0);
+  const inter = iw * ih;
+  const uni = a.w * a.h + b.w * b.h - inter;
+  return uni > 0 ? inter / uni : 0;
+}
+
+function unionPxRects(rects: PxRect[], pad = 0): PxRect | null {
+  if (rects.length === 0) return null;
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const r of rects) {
+    x0 = Math.min(x0, r.x);
+    y0 = Math.min(y0, r.y);
+    x1 = Math.max(x1, r.x + r.w);
+    y1 = Math.max(y1, r.y + r.h);
+  }
+  return {
+    x: x0 - pad,
+    y: y0 - pad,
+    w: x1 - x0 + pad * 2,
+    h: y1 - y0 + pad * 2,
+  };
+}
+
+/** Expand changed ids to same-row chip neighbors so plates reflow together. */
 function expandPillRowIds(
   items: DetectedText[],
   changedIds: Set<string>,
 ): Set<string> {
   const out = new Set(changedIds);
-  const pills = items.filter((i) => i.container.type === "pill");
+  const chips = items.filter(isRowChip);
   let grew = true;
   while (grew) {
     grew = false;
-    for (const p of pills) {
+    for (const p of chips) {
       if (!out.has(p.id)) continue;
-      for (const q of pills) {
+      for (const q of chips) {
         if (out.has(q.id)) continue;
-        if (!pillsOnSameRow(p, q)) continue;
-        const pr = pillNormRect(p);
-        const qr = pillNormRect(q);
+        if (!chipsOnSameRow(p, q)) continue;
+        const pr = rowChipNormRect(p);
+        const qr = rowChipNormRect(q);
         const gap =
           pr.x < qr.x ? qr.x - (pr.x + pr.w) : pr.x - (qr.x + qr.w);
         const maxGap = Math.max(
-          Math.max(pr.w, qr.w) * 2.0,
-          ((pr.h + qr.h) / 2) * 4,
-          0.15,
+          Math.max(pr.w, qr.w) * 2.5,
+          ((pr.h + qr.h) / 2) * 5,
+          0.18,
         );
-        if (gap >= -0.02 && gap <= maxGap) {
+        if (gap >= -0.05 && gap <= maxGap) {
           out.add(q.id);
           grew = true;
         }
@@ -1970,7 +2398,359 @@ function expandPillRowIds(
   return out;
 }
 
-function collectEraseTargets(
+/** Treat fill/rect plain chips as pills for erase + redraw layout. */
+function asPillForLayout(item: DetectedText): DetectedText {
+  if (item.container.type === "pill") return item;
+  if (!item.container.fill && !item.container.rect) return item;
+  return {
+    ...item,
+    container: {
+      ...item.container,
+      type: "pill",
+      fill: item.container.fill ?? "#FFD400",
+      padX: item.container.padX || 0.45,
+      padY: item.container.padY || 0.35,
+    },
+  };
+}
+
+/**
+ * Merge OCR fragments that share nearly the same plate (e.g. "2" + "LETI")
+ * into one chip before measure / wipe / draw.
+ */
+function mergeCoPlateMembers(
+  members: DetectedText[],
+  texts: Map<string, string>,
+): { members: DetectedText[]; texts: Map<string, string>; absorbed: Set<string> } {
+  const absorbed = new Set<string>();
+  if (members.length < 2) return { members, texts, absorbed };
+
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    const p = parent.get(id) ?? id;
+    if (p !== id) {
+      const root = find(p);
+      parent.set(id, root);
+      return root;
+    }
+    return id;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  for (const m of members) parent.set(m.id, m.id);
+
+  for (let i = 0; i < members.length; i++) {
+    for (let j = i + 1; j < members.length; j++) {
+      const a = members[i];
+      const b = members[j];
+      if (!chipsOnSameRow(a, b)) continue;
+      const ar = rowChipNormRect(a);
+      const br = rowChipNormRect(b);
+      const iou = normRectIoU(ar, br);
+      const sameFill =
+        !!a.container.fill &&
+        !!b.container.fill &&
+        a.container.fill.toLowerCase() === b.container.fill.toLowerCase();
+      // Shared plate: high IoU, or same vivid fill with heavy x-overlap
+      const ax1 = ar.x + ar.w;
+      const bx1 = br.x + br.w;
+      const overlapX = Math.max(0, Math.min(ax1, bx1) - Math.max(ar.x, br.x));
+      const minW = Math.min(ar.w, br.w);
+      const heavyOverlap = minW > 0 && overlapX / minW >= 0.55;
+      if (iou >= 0.55 || (sameFill && heavyOverlap)) {
+        union(a.id, b.id);
+      }
+    }
+  }
+
+  const groups = new Map<string, DetectedText[]>();
+  for (const m of members) {
+    const root = find(m.id);
+    const list = groups.get(root) ?? [];
+    list.push(m);
+    groups.set(root, list);
+  }
+
+  const nextTexts = new Map(texts);
+  const out: DetectedText[] = [];
+
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      out.push(group[0]);
+      continue;
+    }
+    const sorted = [...group].sort((a, b) => a.bbox.x - b.bbox.x);
+    // Prefer number item as survivor so Serija still targets it
+    const survivor =
+      sorted.find((m) => m.number != null) ?? sorted[0];
+    const combined = sorted
+      .map((m) => nextTexts.get(m.id) ?? m.text)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    nextTexts.set(survivor.id, combined);
+
+    // Union plate rects in normalized space
+    const rects = sorted.map((m) => rowChipNormRect(m));
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const r of rects) {
+      x0 = Math.min(x0, r.x);
+      y0 = Math.min(y0, r.y);
+      x1 = Math.max(x1, r.x + r.w);
+      y1 = Math.max(y1, r.y + r.h);
+    }
+    const unionRect: TextBBox = {
+      x: x0,
+      y: y0,
+      w: Math.max(0.001, x1 - x0),
+      h: Math.max(0.001, y1 - y0),
+    };
+    // Union OCR bbox so pad math uses full glyph span
+    let bx0 = Infinity;
+    let by0 = Infinity;
+    let bx1 = -Infinity;
+    let by1 = -Infinity;
+    for (const m of sorted) {
+      bx0 = Math.min(bx0, m.bbox.x);
+      by0 = Math.min(by0, m.bbox.y);
+      bx1 = Math.max(bx1, m.bbox.x + m.bbox.w);
+      by1 = Math.max(by1, m.bbox.y + m.bbox.h);
+    }
+
+    const merged: DetectedText = {
+      ...survivor,
+      text: sorted.map((m) => m.text).join(" ").replace(/\s+/g, " ").trim(),
+      bbox: {
+        x: bx0,
+        y: by0,
+        w: Math.max(0.001, bx1 - bx0),
+        h: Math.max(0.001, by1 - by0),
+      },
+      container: {
+        ...survivor.container,
+        type: "pill",
+        fill:
+          survivor.container.fill ??
+          sorted.find((m) => m.container.fill)?.container.fill ??
+          "#FFD400",
+        rect: unionRect,
+      },
+    };
+    out.push(asPillForLayout(merged));
+    for (const m of sorted) {
+      if (m.id !== survivor.id) absorbed.add(m.id);
+    }
+  }
+
+  return { members: out, texts: nextTexts, absorbed };
+}
+
+/**
+ * Full-pixel gradient reconstruct for a chip-row AABB.
+ * Samples above/below each column (rejects vivid chip colors); lerps by y.
+ * No left/right borders, no ink-only mask.
+ */
+function wipeChipRowGradient(
+  ctx: CanvasRenderingContext2D,
+  aabb: PxRect,
+  imgW: number,
+  imgH: number,
+) {
+  const x0 = Math.max(0, Math.floor(aabb.x));
+  const y0 = Math.max(0, Math.floor(aabb.y));
+  const x1 = Math.min(imgW, Math.ceil(aabb.x + aabb.w));
+  const y1 = Math.min(imgH, Math.ceil(aabb.y + aabb.h));
+  const rw = x1 - x0;
+  const rh = y1 - y0;
+  if (rw <= 0 || rh <= 0) return;
+
+  const sampleSpan = Math.max(6, Math.min(16, Math.round(rh * 0.45)));
+  const margin = sampleSpan + 2;
+  const sx0 = Math.max(0, x0 - 2);
+  const sy0 = Math.max(0, y0 - margin);
+  const sx1 = Math.min(imgW, x1 + 2);
+  const sy1 = Math.min(imgH, y1 + margin);
+  const sw = sx1 - sx0;
+  const sh = sy1 - sy0;
+  const imageData = ctx.getImageData(sx0, sy0, sw, sh);
+  const data = imageData.data;
+
+  const readRgb = (gx: number, gy: number): Rgb | null => {
+    if (gx < sx0 || gy < sy0 || gx >= sx1 || gy >= sy1) return null;
+    const i = ((gy - sy0) * sw + (gx - sx0)) * 4;
+    return { r: data[i], g: data[i + 1], b: data[i + 2] };
+  };
+
+  const cleanSample = (
+    gx: number,
+    yStart: number,
+    yEnd: number,
+  ): Rgb | null => {
+    const pool: Rgb[] = [];
+    const step = Math.max(1, Math.floor(Math.abs(yEnd - yStart) / 6));
+    const lo = Math.min(yStart, yEnd);
+    const hi = Math.max(yStart, yEnd);
+    for (let y = lo; y <= hi; y += step) {
+      const c = readRgb(gx, y);
+      if (!c) continue;
+      if (isChipPlateColor(c)) continue;
+      // Skip near-white flecks / UI chrome
+      if (c.r > 230 && c.g > 230 && c.b > 230) continue;
+      pool.push(c);
+    }
+    if (pool.length < 2) return null;
+    return {
+      r: medianChannel(pool.map((c) => c.r)),
+      g: medianChannel(pool.map((c) => c.g)),
+      b: medianChannel(pool.map((c) => c.b)),
+    };
+  };
+
+  const top: Array<Rgb | null> = new Array(rw);
+  const bot: Array<Rgb | null> = new Array(rw);
+  for (let i = 0; i < rw; i++) {
+    const gx = x0 + i;
+    top[i] = cleanSample(gx, y0 - sampleSpan, y0 - 2);
+    bot[i] = cleanSample(gx, y1 + 1, y1 + sampleSpan);
+  }
+
+  // Fill gaps from nearest clean column
+  const fillGaps = (arr: Array<Rgb | null>) => {
+    let last: Rgb | null = null;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i]) last = arr[i];
+      else if (last) arr[i] = last;
+    }
+    last = null;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i]) last = arr[i];
+      else if (last) arr[i] = last;
+    }
+  };
+  fillGaps(top);
+  fillGaps(bot);
+
+  // Global fallback if a whole edge failed
+  const allClean: Rgb[] = [];
+  for (let i = 0; i < rw; i++) {
+    if (top[i]) allClean.push(top[i]!);
+    if (bot[i]) allClean.push(bot[i]!);
+  }
+  const fallback: Rgb =
+    allClean.length > 0
+      ? {
+          r: medianChannel(allClean.map((c) => c.r)),
+          g: medianChannel(allClean.map((c) => c.g)),
+          b: medianChannel(allClean.map((c) => c.b)),
+        }
+      : { r: 0, g: 140, b: 200 };
+
+  for (let i = 0; i < rw; i++) {
+    if (!top[i]) top[i] = bot[i] ?? fallback;
+    if (!bot[i]) bot[i] = top[i] ?? fallback;
+  }
+
+  // Light horizontal smooth (3-tap) so column noise doesn't streak
+  const smooth = (arr: Array<Rgb | null>): Rgb[] => {
+    const out: Rgb[] = new Array(rw);
+    for (let i = 0; i < rw; i++) {
+      const samples = [arr[i - 1], arr[i], arr[i + 1]].filter(Boolean) as Rgb[];
+      out[i] = {
+        r: medianChannel(samples.map((c) => c.r)),
+        g: medianChannel(samples.map((c) => c.g)),
+        b: medianChannel(samples.map((c) => c.b)),
+      };
+    }
+    return out;
+  };
+  const topS = smooth(top);
+  const botS = smooth(bot);
+
+  for (let j = 0; j < rh; j++) {
+    const t = rh <= 1 ? 0.5 : j / (rh - 1);
+    for (let i = 0; i < rw; i++) {
+      const a = topS[i];
+      const b = botS[i];
+      const r = a.r + (b.r - a.r) * t;
+      const g = a.g + (b.g - a.g) * t;
+      const bl = a.b + (b.b - a.b) * t;
+      const di = ((y0 + j - sy0) * sw + (x0 + i - sx0)) * 4;
+      data[di] = Math.max(0, Math.min(255, Math.round(r)));
+      data[di + 1] = Math.max(0, Math.min(255, Math.round(g)));
+      data[di + 2] = Math.max(0, Math.min(255, Math.round(bl)));
+      data[di + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imageData, sx0, sy0);
+}
+
+type ChipRowPlan = {
+  members: DetectedText[];
+  texts: Map<string, string>;
+  layouts: PillLayout[];
+  aabb: PxRect;
+  handledIds: Set<string>;
+};
+
+/**
+ * Expand wipe AABB horizontally to cover any vivid chip pixels still in the
+ * row's vertical band (catches undetected / plain pink remnants).
+ */
+function expandAabbToVividInBand(
+  ctx: CanvasRenderingContext2D,
+  aabb: PxRect,
+  imgW: number,
+  imgH: number,
+): PxRect {
+  const y0 = Math.max(0, Math.floor(aabb.y));
+  const y1 = Math.min(imgH, Math.ceil(aabb.y + aabb.h));
+  if (y1 <= y0) return aabb;
+  // Scan a bit wider than current aabb so leftovers just outside are caught
+  const scanX0 = Math.max(0, Math.floor(aabb.x - aabb.h * 2));
+  const scanX1 = Math.min(imgW, Math.ceil(aabb.x + aabb.w + aabb.h * 4));
+  const rw = scanX1 - scanX0;
+  const rh = y1 - y0;
+  if (rw <= 0 || rh <= 0) return aabb;
+  const imageData = ctx.getImageData(scanX0, y0, rw, rh);
+  const data = imageData.data;
+  let minX = aabb.x;
+  let maxX = aabb.x + aabb.w;
+  let found = false;
+  for (let j = 0; j < rh; j++) {
+    for (let i = 0; i < rw; i++) {
+      const di = (j * rw + i) * 4;
+      const c = { r: data[di], g: data[di + 1], b: data[di + 2] };
+      if (!isChipPlateColor(c)) continue;
+      found = true;
+      const gx = scanX0 + i;
+      if (gx < minX) minX = gx;
+      if (gx + 1 > maxX) maxX = gx + 1;
+    }
+  }
+  if (!found) return aabb;
+  const pad = 3;
+  return {
+    x: Math.max(0, minX - pad),
+    y: aabb.y,
+    w: Math.min(imgW, maxX + pad) - Math.max(0, minX - pad),
+    h: aabb.h,
+  };
+}
+
+/**
+ * Build chip rows for wipe + redraw: take the full vertical badge band,
+ * merge co-plate fragments, layout, wipe old+new footprints (plus any vivid
+ * leftovers in the band), then redraw.
+ */
+function collectChipRowPlans(
   ctx: CanvasRenderingContext2D,
   items: DetectedText[],
   edits: TextReplaceEdits,
@@ -1978,70 +2758,147 @@ function collectEraseTargets(
   seriesValue: number | null,
   imgW: number,
   imgH: number,
-): PxRect[] {
+): ChipRowPlan[] {
   let changedIds = new Set(
     items
       .filter((item) => itemChanged(item, edits[item.id], seriesItemId))
       .map((item) => item.id),
   );
 
-  // If any member of a pill group changes, erase the whole group
-  const groupMembers = new Map<string, DetectedText[]>();
   for (const item of items) {
-    if (item.container.type !== "pill" || !item.layoutGroupId) continue;
-    const list = groupMembers.get(item.layoutGroupId) ?? [];
-    list.push(item);
-    groupMembers.set(item.layoutGroupId, list);
-  }
-
-  for (const [, members] of groupMembers) {
-    if (members.some((m) => changedIds.has(m.id))) {
-      for (const m of members) changedIds.add(m.id);
+    if (!item.layoutGroupId || !changedIds.has(item.id)) continue;
+    for (const sib of items) {
+      if (sib.layoutGroupId === item.layoutGroupId) changedIds.add(sib.id);
     }
   }
-
   changedIds = expandPillRowIds(items, changedIds);
 
-  const texts = new Map<string, string>();
+  const baseTexts = new Map<string, string>();
   for (const item of items) {
     const seriesVal =
       seriesItemId === item.id && seriesValue != null ? seriesValue : null;
-    texts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
+    baseTexts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
   }
 
-  const rects: PxRect[] = [];
-  const pillHandled = new Set<string>();
-  const pillChanged = items.filter(
-    (i) => i.container.type === "pill" && changedIds.has(i.id),
-  );
+  // Prefer measured chips; also promote any detection in the band so plain
+  // pink/yellow leftovers still reflow.
+  const allChips = items.filter(isRowChip).map(asPillForLayout);
+  const plans: ChipRowPlan[] = [];
+  const globalHandled = new Set<string>();
 
-  for (const seed of pillChanged) {
-    if (pillHandled.has(seed.id)) continue;
-    const row = pillChanged.filter(
-      (p) =>
-        p.id === seed.id ||
-        (p.layoutGroupId && p.layoutGroupId === seed.layoutGroupId) ||
-        pillsOnSameRow(p, seed),
-    );
-    for (const m of row) pillHandled.add(m.id);
-    const layouts = layoutPillGroup(ctx, row, texts, imgW, imgH);
-    for (const layout of layouts) {
-      const orig = pillContainerPx(layout.item, imgW, imgH);
-      const x0 = Math.min(orig.x, layout.x) - 2;
-      const y0 = Math.min(orig.y, layout.y) - 2;
-      const x1 = Math.max(orig.x + orig.w, layout.x + layout.w) + 2;
-      const y1 = Math.max(orig.y + orig.h, layout.y + layout.h) + 2;
-      rects.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+  const seeds = allChips.filter((c) => changedIds.has(c.id));
+  for (const seed of seeds) {
+    if (globalHandled.has(seed.id)) continue;
+
+    // Full vertical band: every chip on the same badge row (user: remove all
+    // pills, restore background, put them back with original geometry).
+    const seedRect = rowChipNormRect(seed);
+    const seedMid = seedRect.y + seedRect.h / 2;
+    let rowIds = new Set<string>();
+    for (const q of allChips) {
+      const qr = rowChipNormRect(q);
+      const qMid = qr.y + qr.h / 2;
+      const avgH = (seedRect.h + qr.h) / 2;
+      if (Math.abs(qMid - seedMid) <= avgH * 1.25) {
+        rowIds.add(q.id);
+      }
     }
+    // Also include non-chip detections in the band that sit on vivid plates
+    for (const q of items) {
+      if (rowIds.has(q.id)) continue;
+      const qr = q.bbox;
+      const qMid = qr.y + qr.h / 2;
+      if (Math.abs(qMid - seedMid) > seedRect.h * 1.25) continue;
+      // Must horizontally sit near the badge cluster
+      const seedPx = pillContainerPx(seed, imgW, imgH);
+      const qPx = bboxToPx(q.bbox, imgW, imgH);
+      if (qPx.x > seedPx.x + seedPx.w + seedPx.h * 8) continue;
+      if (qPx.x + qPx.w < seedPx.x - seedPx.h) continue;
+      rowIds.add(q.id);
+    }
+
+    let members = items
+      .filter((c) => rowIds.has(c.id))
+      .map(asPillForLayout)
+      .filter(isRowChip);
+    // If band pick included plain items, still try asPillForLayout
+    if (members.length === 0) {
+      members = allChips.filter((c) => rowIds.has(c.id));
+    }
+
+    let merged = mergeCoPlateMembers(members, baseTexts);
+    let layouts = layoutPillGroup(
+      ctx,
+      merged.members,
+      merged.texts,
+      imgW,
+      imgH,
+    );
+    if (layouts.length === 0) continue;
+
+    const footprint: PxRect[] = [];
+    for (const m of merged.members) {
+      footprint.push(pillContainerPx(m, imgW, imgH));
+    }
+    // Also cover every original detection bbox in the band (plain leftovers)
+    for (const id of rowIds) {
+      const it = items.find((i) => i.id === id);
+      if (!it) continue;
+      footprint.push(
+        isRowChip(it)
+          ? pillContainerPx(asPillForLayout(it), imgW, imgH)
+          : bboxToPx(it.bbox, imgW, imgH),
+      );
+    }
+    for (const layout of layouts) {
+      footprint.push({ x: layout.x, y: layout.y, w: layout.w, h: layout.h });
+    }
+    let aabb = unionPxRects(footprint, 4);
+    if (!aabb) continue;
+    aabb = expandAabbToVividInBand(ctx, aabb, imgW, imgH);
+
+    const handledIds = new Set<string>([
+      ...merged.members.map((m) => m.id),
+      ...merged.absorbed,
+      ...rowIds,
+    ]);
+    for (const id of handledIds) globalHandled.add(id);
+
+    plans.push({
+      members: merged.members,
+      texts: merged.texts,
+      layouts,
+      aabb,
+      handledIds,
+    });
   }
 
+  return plans;
+}
+
+function collectPlainEraseTargets(
+  ctx: CanvasRenderingContext2D,
+  items: DetectedText[],
+  edits: TextReplaceEdits,
+  seriesItemId: string | null,
+  chipHandled: Set<string>,
+  imgW: number,
+  imgH: number,
+): PxRect[] {
+  const rects: PxRect[] = [];
   for (const item of items) {
-    if (!changedIds.has(item.id) || item.container.type === "pill") continue;
+    if (chipHandled.has(item.id)) continue;
+    if (isRowChip(item)) continue;
+    if (!itemChanged(item, edits[item.id], seriesItemId)) continue;
     const box = bboxToPx(item.bbox, imgW, imgH);
+    const left = box.x - 2;
+    const rawRight = box.x + box.w + 2;
+    const clear = plainRightClearEdge(ctx, item, items, imgW, imgH);
+    const right = clear ? Math.min(rawRight, clear.edge) : rawRight;
     rects.push({
-      x: box.x - 2,
+      x: left,
       y: box.y - 2,
-      w: box.w + 4,
+      w: Math.max(4, right - left),
       h: box.h + 4,
     });
   }
@@ -2064,7 +2921,7 @@ function buildCleanPlate(
   if (!ctx) throw new Error("Canvas unavailable");
   ctx.drawImage(source, 0, 0);
 
-  const rects = collectEraseTargets(
+  const chipRows = collectChipRowPlans(
     ctx,
     items,
     edits,
@@ -2073,7 +2930,22 @@ function buildCleanPlate(
     imgW,
     imgH,
   );
-  for (const rect of rects) {
+  const chipHandled = new Set<string>();
+  for (const row of chipRows) {
+    wipeChipRowGradient(ctx, row.aabb, imgW, imgH);
+    for (const id of row.handledIds) chipHandled.add(id);
+  }
+
+  const plainRects = collectPlainEraseTargets(
+    ctx,
+    items,
+    edits,
+    seriesItemId,
+    chipHandled,
+    imgW,
+    imgH,
+  );
+  for (const rect of plainRects) {
     inpaintRect(ctx, rect, imgW, imgH);
   }
   return canvas;
@@ -2088,71 +2960,47 @@ function drawAllReplacements(
   imgW: number,
   imgH: number,
 ) {
-  const texts = new Map<string, string>();
-  for (const item of items) {
-    const seriesVal =
-      seriesItemId === item.id && seriesValue != null ? seriesValue : null;
-    texts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
-  }
-
-  const changed = (item: DetectedText) =>
-    itemChanged(item, edits[item.id], seriesItemId);
-
-  let redrawIds = new Set(
-    items.filter(changed).map((item) => item.id),
+  const chipRows = collectChipRowPlans(
+    ctx,
+    items,
+    edits,
+    seriesItemId,
+    seriesValue,
+    imgW,
+    imgH,
   );
-  // Include layout-group siblings
-  for (const item of items) {
-    if (!item.layoutGroupId || !redrawIds.has(item.id)) continue;
-    for (const sib of items) {
-      if (sib.layoutGroupId === item.layoutGroupId) redrawIds.add(sib.id);
-    }
-  }
-  redrawIds = expandPillRowIds(items, redrawIds);
-
   const handled = new Set<string>();
-
-  // Build row clusters among pills that need redraw
-  const pillRedraw = items.filter(
-    (i) => i.container.type === "pill" && redrawIds.has(i.id),
-  );
-  const clustered = new Set<string>();
-  for (const seed of pillRedraw) {
-    if (clustered.has(seed.id)) continue;
-    const members = pillRedraw.filter(
-      (p) =>
-        !clustered.has(p.id) &&
-        (p.id === seed.id ||
-          p.layoutGroupId === seed.layoutGroupId ||
-          pillsOnSameRow(p, seed)),
-    );
-    // Expand to full same-row set among redraw pills
-    const row = pillRedraw.filter((p) =>
-      members.some(
-        (m) =>
-          p.id === m.id ||
-          (p.layoutGroupId && p.layoutGroupId === m.layoutGroupId) ||
-          pillsOnSameRow(p, m),
-      ),
-    );
-    for (const m of row) clustered.add(m.id);
-    if (row.length === 0) continue;
-    const layouts = layoutPillGroup(ctx, row, texts, imgW, imgH);
-    for (const layout of layouts) {
+  for (const row of chipRows) {
+    for (const layout of row.layouts) {
       drawPill(ctx, layout);
       handled.add(layout.item.id);
     }
+    for (const id of row.handledIds) handled.add(id);
   }
 
   for (const item of items) {
-    if (handled.has(item.id) || !redrawIds.has(item.id)) continue;
-    const text = texts.get(item.id) ?? item.text;
-    if (item.container.type === "pill") {
-      const layouts = layoutPillGroup(ctx, [item], texts, imgW, imgH);
-      drawPill(ctx, layouts[0]);
-    } else {
-      drawPlainText(ctx, item, text, imgW, imgH, items);
+    if (handled.has(item.id)) continue;
+    if (!itemChanged(item, edits[item.id], seriesItemId)) continue;
+    if (isRowChip(item)) {
+      // Lone chip that didn't join a row plan — still draw via layout
+      const texts = new Map<string, string>();
+      const seriesVal =
+        seriesItemId === item.id && seriesValue != null ? seriesValue : null;
+      texts.set(item.id, resolveItemText(item, edits[item.id], seriesVal));
+      const layouts = layoutPillGroup(
+        ctx,
+        [asPillForLayout(item)],
+        texts,
+        imgW,
+        imgH,
+      );
+      if (layouts[0]) drawPill(ctx, layouts[0]);
+      continue;
     }
+    const seriesVal =
+      seriesItemId === item.id && seriesValue != null ? seriesValue : null;
+    const text = resolveItemText(item, edits[item.id], seriesVal);
+    drawPlainText(ctx, item, text, imgW, imgH, items);
   }
 }
 
@@ -2175,7 +3023,7 @@ export async function detectTexts(file: File): Promise<{
   const enriched = enrichDetections(Array.isArray(data.items) ? data.items : []);
   const measured = await measureStyles(file, enriched);
   // Re-group pills after measured container.rect improves proximity
-  const items = assignLayoutGroups(measured);
+  const items = assignLayoutGroups(unifySharedPlates(measured));
   return { items, width: prepared.width, height: prepared.height };
 }
 
@@ -2192,6 +3040,32 @@ export async function renderTextReplaceVariants(input: {
 
   // Ensure Google Fonts used by pills are ready before measureText / draw
   await ensurePillFontsLoaded(items, imgH);
+
+  // Badge rows are measured fresh from source pixels; stored container
+  // geometry (e.g. from a restored task) is never trusted for them.
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = imgW;
+  srcCanvas.height = imgH;
+  const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
+  if (!srcCtx) throw new Error("Canvas unavailable");
+  srcCtx.drawImage(source, 0, 0);
+  const srcData = srcCtx.getImageData(0, 0, imgW, imgH);
+  const pillRows = measurePillRows(
+    srcData,
+    items
+      .filter((i) => i.kind !== "logo")
+      .map((i) => ({
+        id: i.id,
+        text: i.text,
+        bbox: i.bbox,
+        fontWeight: i.style.fontWeight,
+      })),
+  );
+  const rowIds = new Set(
+    pillRows.flatMap((r) => r.pills.flatMap((p) => p.memberIds)),
+  );
+  const restItems = items.filter((i) => !rowIds.has(i.id));
+  const itemById = new Map(items.map((i) => [i.id, i]));
 
   const seriesItem = series.itemId
     ? items.find((i) => i.id === series.itemId && i.number)
@@ -2211,10 +3085,12 @@ export async function renderTextReplaceVariants(input: {
   // Erase using the widest series label so longer prices clear the plate
   let eraseSeriesValue: number | null = null;
   if (seriesItem?.number) {
+    const seriesMeta =
+      numberMetaForEdit(seriesItem, edits[seriesItem.id]) ?? seriesItem.number;
     let bestLen = -1;
     for (const v of values) {
       if (v == null) continue;
-      const len = formatNumber(v, seriesItem.number).length;
+      const len = formatNumber(v, seriesMeta).length;
       if (len > bestLen) {
         bestLen = len;
         eraseSeriesValue = v;
@@ -2224,7 +3100,7 @@ export async function renderTextReplaceVariants(input: {
 
   const clean = buildCleanPlate(
     source,
-    items,
+    restItems,
     edits,
     seriesItem?.id ?? null,
     eraseSeriesValue,
@@ -2243,20 +3119,75 @@ export async function renderTextReplaceVariants(input: {
     ctx.drawImage(clean, 0, 0);
     drawAllReplacements(
       ctx,
-      items,
+      restItems,
       edits,
       seriesItem?.id ?? null,
       value,
       imgW,
       imgH,
     );
+    const changes: TextChange[] = [...items]
+      .filter((it) => it.kind !== "logo")
+      .sort((a, b) => a.bbox.y - b.bbox.y || a.bbox.x - b.bbox.x)
+      .filter((it) => itemChanged(it, edits[it.id], seriesItem?.id ?? null))
+      .map((it) => ({
+        id: it.id,
+        from: it.text,
+        to: resolveItemText(it, edits[it.id], seriesItem?.id === it.id ? value : null),
+      }))
+      .filter((c) => c.from !== c.to);
+    const pillDebug: PillRowDebug[] = [];
+    for (const row of pillRows) {
+      const texts: string[] = [];
+      const changed: boolean[] = [];
+      for (const pill of row.pills) {
+        const members = pill.memberIds
+          .map((id) => itemById.get(id))
+          .filter((m): m is DetectedText => m != null);
+        texts.push(
+          members
+            .map((m) =>
+              resolveItemText(
+                m,
+                edits[m.id],
+                seriesItem?.id === m.id ? value : null,
+              ),
+            )
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim(),
+        );
+        changed.push(
+          members.some((m) =>
+            itemChanged(m, edits[m.id], seriesItem?.id ?? null),
+          ),
+        );
+      }
+      pillDebug.push(renderPillRow(ctx, srcData, row, texts, changed));
+    }
     const blob = await canvasToBlob(canvas, "image/png");
+    let debugUrl: string | undefined;
+    if (pillDebug.length > 0) {
+      const dbg = document.createElement("canvas");
+      dbg.width = imgW;
+      dbg.height = imgH;
+      const dctx = dbg.getContext("2d");
+      if (dctx) {
+        dctx.drawImage(canvas, 0, 0);
+        drawPillDebugOverlay(dctx, pillDebug);
+        debugUrl = URL.createObjectURL(await canvasToBlob(dbg, "image/png"));
+      }
+    }
     const offset = seriesItem ? i - steps : 0;
     const label =
       value == null
         ? "result"
         : seriesItem
-          ? formatNumber(value, seriesItem.number!)
+          ? formatNumber(
+              value,
+              numberMetaForEdit(seriesItem, edits[seriesItem.id]) ??
+                seriesItem.number!,
+            )
           : String(value);
     variants.push({
       index: i,
@@ -2265,33 +3196,157 @@ export async function renderTextReplaceVariants(input: {
       label,
       blob,
       url: URL.createObjectURL(blob),
+      debugUrl,
+      pillRows: pillDebug,
+      changes,
     });
   }
 
   return variants;
 }
 
+export type ExportNaming = {
+  /** File name root, e.g. "telekom_naj_c". */
+  root: string;
+  addDate: boolean;
+  addTime: boolean;
+  /** Per-file suffix when a series produced several variants. */
+  seriesSuffix: "step" | "price";
+};
+
+export function defaultExportRoot(sourceName: string): string {
+  return sourceName.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+}
+
+function safeFilePart(s: string): string {
+  return s
+    .replace(/€/g, "EUR")
+    .replace(/\s+/g, "")
+    .replace(/[^\w.,+-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 60);
+}
+
+function exportStamp(naming: ExportNaming, now: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const parts: string[] = [];
+  if (naming.addDate) {
+    parts.push(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`);
+  }
+  if (naming.addTime) parts.push(`${pad(now.getHours())}-${pad(now.getMinutes())}`);
+  return parts.map((p) => `_${p}`).join("");
+}
+
+/** File names for each variant plus the ZIP name, e.g. root_2026-09-27_18-14_+1.png. */
+export function buildExportNames(
+  variants: Pick<RenderedVariant, "offset" | "label">[],
+  naming: ExportNaming,
+  now: Date = new Date(),
+): { files: string[]; zip: string } {
+  const root = safeFilePart(naming.root) || "export";
+  const stamp = exportStamp(naming, now);
+  const multi = variants.length > 1;
+  const seen = new Map<string, number>();
+  const files = variants.map((v) => {
+    let suffix = "";
+    if (multi) {
+      suffix =
+        naming.seriesSuffix === "price"
+          ? safeFilePart(v.label)
+          : v.offset > 0
+            ? `+${v.offset}`
+            : String(v.offset);
+      suffix = `_${suffix}`;
+    }
+    let name = `${root}${stamp}${suffix}`;
+    const n = seen.get(name) ?? 0;
+    seen.set(name, n + 1);
+    if (n > 0) name = `${name}_${n + 1}`;
+    return `${name}.png`;
+  });
+  return { files, zip: `${root}${stamp}.zip` };
+}
+
 export async function downloadTextReplaceZip(
   variants: RenderedVariant[],
-  sourceName: string,
+  naming: ExportNaming,
 ): Promise<void> {
   if (variants.length === 0) throw new Error("Nothing to download");
-  const base = sourceName.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+  const { files, zip: zipName } = buildExportNames(variants, naming);
   if (variants.length === 1) {
-    saveAs(variants[0].blob, `${base}_replaced.png`);
+    saveAs(variants[0].blob, files[0]);
     return;
   }
   const zip = new JSZip();
-  for (const v of variants) {
-    const safe = v.label.replace(/[^\w.,+-]+/g, "_").slice(0, 40);
-    const sign =
-      v.offset === 0 ? "v0" : v.offset > 0 ? `v+${v.offset}` : `v${v.offset}`;
-    zip.file(`${base}_${sign}_${safe}.png`, v.blob);
-  }
+  variants.forEach((v, i) => zip.file(files[i], v.blob));
   const out = await zip.generateAsync({ type: "blob" });
-  saveAs(out, `${base}_text_replace.zip`);
+  saveAs(out, zipName);
+}
+
+/** Download one variant with a series-style suffix in the file name. */
+export function downloadTextReplaceOne(
+  variant: RenderedVariant,
+  naming: ExportNaming,
+  now: Date = new Date(),
+): void {
+  const root = safeFilePart(naming.root) || "export";
+  const stamp = exportStamp(naming, now);
+  const suffix =
+    naming.seriesSuffix === "price"
+      ? `_${safeFilePart(variant.label)}`
+      : `_${variant.offset > 0 ? `+${variant.offset}` : String(variant.offset)}`;
+  saveAs(variant.blob, `${root}${stamp}${suffix}.png`);
+}
+
+/** Download the series strip (all variants left→right). */
+export function downloadSeriesStripBlob(
+  blob: Blob,
+  naming: ExportNaming,
+  now: Date = new Date(),
+): void {
+  const root = safeFilePart(naming.root) || "export";
+  const stamp = exportStamp(naming, now);
+  saveAs(blob, `${root}${stamp}_series.png`);
+}
+
+/**
+ * Horizontal strip of series variants from −N (left) to +N (right).
+ * Returns null when there is only one image.
+ */
+export async function buildSeriesStrip(
+  variants: RenderedVariant[],
+): Promise<{ blob: Blob; url: string; width: number; height: number } | null> {
+  if (variants.length < 2) return null;
+  const sorted = [...variants].sort((a, b) => a.offset - b.offset);
+  const images = await Promise.all(
+    sorted.map((v) => loadImageFromBlob(v.blob)),
+  );
+  const width = images.reduce((sum, img) => sum + img.naturalWidth, 0);
+  const height = Math.max(...images.map((img) => img.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas unavailable");
+  let x = 0;
+  for (const img of images) {
+    const y = Math.round((height - img.naturalHeight) / 2);
+    ctx.drawImage(img, x, y);
+    x += img.naturalWidth;
+  }
+  const blob = await canvasToBlob(canvas, "image/png");
+  return {
+    blob,
+    url: URL.createObjectURL(blob),
+    width,
+    height,
+  };
 }
 
 export function revokeVariants(variants: RenderedVariant[]) {
-  for (const v of variants) URL.revokeObjectURL(v.url);
+  for (const v of variants) {
+    URL.revokeObjectURL(v.url);
+    if (v.debugUrl) URL.revokeObjectURL(v.debugUrl);
+  }
 }
