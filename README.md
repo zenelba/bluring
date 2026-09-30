@@ -20,6 +20,15 @@ Access is gated behind an access code (session cookie). Server-side features (At
 | **Collages** | Sort images by filename, strip whitespace, optional BG fill, ribbons or packed grids |
 | **Audio / Video** | Download YouTube/Facebook (Cobalt) or Mixcloud shows, transcribe, extract slides |
 | **Brand removal** | AI removes logos/text named in comma-separated filenames (2D vs 3D packaging prompts) |
+| **Text replace** | Detect and replace text/numbers on flat graphics; series; Split; export naming |
+| **Išči slike** | Brief (kontekst → kriterij → format → izrez) → OpenAI poizvedbe → Unsplash → ZIP |
+
+### Išči slike
+
+- Sidebar wizard: context, selection criteria, aspect ratio + long edge, crop mode, count
+- **Predlagaj poizvedbe** via OpenAI; edit the query list before search
+- Unsplash search (deduped); pick up to N distinct photos; crop/resize client-side; ZIP + `credits.txt`
+- Requires `OPENAI_API_KEY` and `UNSPLASH_ACCESS_KEY`
 
 ### Brand removal
 
@@ -94,10 +103,13 @@ Copy `.env.example` → `.env.local` and fill in values as needed.
 | `SONIOX_LANGUAGE` | Optional | Language hint (default `sl`) |
 | `SONIOX_SPEAKER_DIARIZATION` | Optional | `true` / `false` (default `true`) |
 | `SONIOX_API_BASE_URL` | Optional | Default `https://api.soniox.com` |
-| `OPENAI_API_KEY` | Brand removal | Vision + gpt-image-1 edits |
+| `OPENAI_API_KEY` | Brand removal, Text replace, Išči slike | Vision / chat / query suggestions |
 | `OPENAI_BASE_URL` | Optional | OpenAI-compatible API base |
 | `OPENAI_BRAND_VISION_MODEL` | Optional | 2D/3D classify (default `gpt-4o-mini`) |
 | `OPENAI_BRAND_IMAGE_MODEL` | Optional | Brand edit model (default `gpt-image-1`) |
+| `OPENAI_IMAGE_SEARCH_MODEL` | Optional | Query propose for Išči slike (default `gpt-4o-mini`) |
+| `UNSPLASH_ACCESS_KEY` | Išči slike | Unsplash API access key |
+| `GOOGLE_CLOUD_VISION_API_KEY` | Text replace | OCR geometry |
 
 See [`.env.example`](.env.example) for a template.
 
@@ -153,6 +165,10 @@ Point `COBALT_API_URL` at that URL. Docs: [run an instance](https://github.com/i
 | `POST /api/av-transcribe` | Soniox transcription (server fetches media via `downloadUrl`) |
 | `POST /api/brand-analyze` | Classify 2D graphic vs 3D packaging |
 | `POST /api/brand-edit` | OpenAI image edit — remove listed brands |
+| `POST /api/text-detect` | Vision OCR + GPT labels for Text replace |
+| `POST /api/image-search-queries` | OpenAI suggests Unsplash search queries |
+| `POST /api/image-search` | Unsplash photo search proxy |
+| `POST /api/image-search-download` | Unsplash download_location ping + URL |
 
 All except `/api/access` require a valid access cookie.
 

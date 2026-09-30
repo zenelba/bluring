@@ -46,6 +46,18 @@
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"
     },
+    "api/image-search-queries.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
+    "api/image-search.ts": {
+      "maxDuration": 30,
+      "includeFiles": "api/helpers/**"
+    },
+    "api/image-search-download.ts": {
+      "maxDuration": 30,
+      "includeFiles": "api/helpers/**"
+    },
     "api/feedback-save.ts": {
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"

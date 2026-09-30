@@ -84,9 +84,9 @@
 }
 
 .osebe-select,
-.osebe-input {
+.osebe-input,
+.osebe-textarea {
   width: 100%;
-  height: 42px;
   border: 1px solid var(--osebe-line);
   border-radius: 10px;
   background: #fff;
@@ -94,6 +94,18 @@
   font: inherit;
   font-size: 0.9rem;
   padding: 0 0.75rem;
+}
+
+.osebe-select,
+.osebe-input {
+  height: 42px;
+}
+
+.osebe-textarea {
+  min-height: 5rem;
+  padding: 0.65rem 0.75rem;
+  resize: vertical;
+  line-height: 1.4;
 }
 
 .osebe-select:disabled {
@@ -1299,6 +1311,111 @@ button.tr-result-thumb:focus-visible {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+.imgsearch-crop {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.imgsearch-crop__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.imgsearch-crop__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.imgsearch-crop__option strong {
+  display: block;
+  font-weight: 650;
+}
+
+.imgsearch-crop__option .osebe-hint {
+  display: block;
+  margin-top: 0.1rem;
+}
+
+.imgsearch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+  padding: 0.25rem 0 1rem;
+}
+
+.imgsearch-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 2px solid var(--osebe-line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.imgsearch-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: #f3f4f6;
+}
+
+.imgsearch-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.45rem 0.55rem 0.55rem;
+}
+
+.imgsearch-card__query {
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.imgsearch-card__by {
+  font-size: 0.68rem;
+  color: var(--osebe-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.imgsearch-card--selected {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 1px #16a34a;
+}
+
+.imgsearch-card__check {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 @media (max-width: 900px) {

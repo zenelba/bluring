@@ -9,7 +9,8 @@ export type HistoryToolId =
   | "collages"
   | "av"
   | "brandRemoval"
-  | "textReplace";
+  | "textReplace"
+  | "imageSearch";
 
 export const HISTORY_TOOL_LABELS: Record<HistoryToolId, string> = {
   blur: "Logo blur",
@@ -21,6 +22,7 @@ export const HISTORY_TOOL_LABELS: Record<HistoryToolId, string> = {
   av: "Audio / Video",
   brandRemoval: "Brand removal",
   textReplace: "Text replace",
+  imageSearch: "Išči slike",
 };
 
 export const MAX_TASK_HISTORY = 10;
@@ -134,13 +136,31 @@ export type AvPayload = {
   slides: Array<{ index: number; timeSec: number }>;
 };
 
+export type ImageSearchPayload = {
+  kind: "imageSearch";
+  context: string;
+  criteria: string;
+  aspect: "1:1" | "4:3" | "3:5" | "16:9";
+  longEdgePx: number;
+  cropMode:
+    | "fullSubject"
+    | "head"
+    | "recognition"
+    | "center"
+    | "wideContext";
+  count: number;
+  queries: string[];
+  prefix: string;
+};
+
 export type TaskPayload =
   | ImageAppPayload
   | TextReplacePayload
   | BrandRemovalPayload
   | PortraitsPayload
   | CollagesPayload
-  | AvPayload;
+  | AvPayload
+  | ImageSearchPayload;
 
 export type TaskRecord = TaskSummary & {
   payload: TaskPayload;

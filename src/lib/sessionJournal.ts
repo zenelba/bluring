@@ -10,7 +10,8 @@ export type JournalToolId =
   | "collages"
   | "av"
   | "brandRemoval"
-  | "textReplace";
+  | "textReplace"
+  | "imageSearch";
 
 export type JournalEvent = {
   /** ms since session start */

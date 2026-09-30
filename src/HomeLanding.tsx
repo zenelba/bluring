@@ -101,6 +101,14 @@ function ModeIcon({ id }: { id: string }): ReactNode {
           <path d="M11 24h10" />
         </svg>
       );
+    case "imageSearch":
+      return (
+        <svg {...common}>
+          <circle cx="14" cy="14" r="7" />
+          <path d="M19 19l5 5" />
+          <rect x="11" y="11" width="6" height="4.5" rx="0.5" opacity="0.45" />
+        </svg>
+      );
     default:
       return (
         <svg {...common}>

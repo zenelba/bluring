@@ -33,6 +33,7 @@ import CollagesMode from "./CollagesMode";
 import AudioVideoMode from "./AudioVideoMode";
 import BrandRemovalMode from "./BrandRemovalMode";
 import TextReplaceMode from "./TextReplaceMode";
+import ImageSearchMode from "./ImageSearchMode";
 import HomeLanding from "./HomeLanding";
 import { FeedbackLauncher } from "@zenel/user-feedback/client";
 import "@zenel/user-feedback/styles.css";
@@ -60,7 +61,8 @@ type ToolMode =
   | "collages"
   | "av"
   | "brandRemoval"
-  | "textReplace";
+  | "textReplace"
+  | "imageSearch";
 
 type AppMode = "home" | ToolMode;
 
@@ -115,6 +117,11 @@ const APP_MODES: ReadonlyArray<AppModeItem> = [
     id: "textReplace",
     label: "Text replace",
     blurb: "Image texts replace",
+  },
+  {
+    id: "imageSearch",
+    label: "Išči slike",
+    blurb: "Brief → Unsplash poizvedbe → izrez → ZIP",
   },
 ];
 
@@ -1011,6 +1018,7 @@ export default function App() {
             mode !== "av" &&
             mode !== "brandRemoval" &&
             mode !== "textReplace" &&
+            mode !== "imageSearch" &&
             mode !== "home" && (
             <button type="button" className="btn btn--ghost" onClick={reset}>
               New image
@@ -1064,6 +1072,13 @@ export default function App() {
         <TextReplaceMode
           initialTask={
             restoreTask?.record.toolId === "textReplace" ? restoreTask : null
+          }
+          onInitialConsumed={() => setRestoreTask(null)}
+        />
+      ) : mode === "imageSearch" ? (
+        <ImageSearchMode
+          initialTask={
+            restoreTask?.record.toolId === "imageSearch" ? restoreTask : null
           }
           onInitialConsumed={() => setRestoreTask(null)}
         />
