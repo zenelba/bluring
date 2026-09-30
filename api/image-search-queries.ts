@@ -23,6 +23,7 @@ export default async function handler(
       criteria?: string;
       count?: number;
       lang?: string;
+      provider?: "unsplash" | "serper";
     };
   },
   res: {
@@ -73,23 +74,41 @@ export default async function handler(
     typeof req.body?.lang === "string" && req.body.lang.trim()
       ? req.body.lang.trim()
       : "sl";
+  const provider =
+    req.body?.provider === "serper" ? "serper" : "unsplash";
 
-  const prompt = `You help build photo search queries for Unsplash.
+  const peopleExtra =
+    provider === "serper"
+      ? `
+Provider: Google Images via Serper (people / public figures).
+- Queries may include real public-figure names when the brief asks for recognizable people.
+- Prefer portrait / headshot / press photo style phrasing.
+- Mix Slovenian and English names/queries when relevant to the brief.
+- Still avoid NSFW.
+`
+      : `
+Provider: Unsplash stock photos (not Google).
+- Prefer English queries (Unsplash indexes English best).
+- No celebrity names.
+`;
+
+  const prompt = `You help build photo search queries.
 
 Domain context: ${JSON.stringify(context)}
 Selection criteria: ${JSON.stringify(criteria || "(none — stay close to context)")}
 How many DISTINCT subjects/scenes the user wants: ${count}
 User language hint: ${lang}
+${peopleExtra}
 
 Return JSON only:
 { "queries": string[] }
 
 Rules:
-- Propose between ${Math.max(count, Math.min(count + 4, 24))} and ${Math.min(count + 8, 30)} short English search queries (Unsplash indexes English best).
+- Propose between ${Math.max(count, Math.min(count + 4, 24))} and ${Math.min(count + 8, 30)} short search queries.
 - Each query should target a DIFFERENT concrete subject or scene (not near-duplicates).
 - Prefer recognizable, personality-rich subjects when the criteria ask for analogies / "someone is like…".
-- Keep queries 2–6 words, photo-search friendly (no full sentences).
-- No brand names, no NSFW, no celebrity names.
+- Keep queries 2–8 words, photo-search friendly (no full sentences).
+- No brand names (unless asking for a named public person on Serper).
 - Do not number the strings.`;
 
   try {

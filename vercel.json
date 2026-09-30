@@ -58,6 +58,11 @@
       "maxDuration": 30,
       "includeFiles": "api/helpers/**"
     },
+    "api/image-search-fetch.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**",
+      "memory": 1024
+    },
     "api/feedback-save.ts": {
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"

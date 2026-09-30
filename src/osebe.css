@@ -1319,6 +1319,10 @@ button.tr-result-thumb:focus-visible {
   padding: 0;
 }
 
+.imgsearch-provider {
+  margin: 0 0 0.35rem;
+}
+
 .imgsearch-crop__list {
   display: flex;
   flex-direction: column;

@@ -8,12 +8,14 @@ import {
   orientationForAspect,
   parseQueriesText,
   proposeSearchQueries,
-  searchUnsplashPhotos,
+  providerLabel,
+  resolveImageSearchProvider,
+  searchPhotos,
   targetSize,
   type ImageAspect,
   type ImageCropMode,
   type ImageSearchBrief,
-  type UnsplashPhoto,
+  type SearchPhoto,
 } from "./lib/imageSearch";
 import {
   upsertTask,
@@ -41,7 +43,7 @@ export default function ImageSearchMode(props: {
   const [brief, setBrief] = useState<ImageSearchBrief>({ ...DEFAULT_BRIEF });
   const [queriesText, setQueriesText] = useState("");
   const [prefix, setPrefix] = useState(loadPrefix);
-  const [candidates, setCandidates] = useState<UnsplashPhoto[]>([]);
+  const [candidates, setCandidates] = useState<SearchPhoto[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<
@@ -56,6 +58,11 @@ export default function ImageSearchMode(props: {
   const size = useMemo(
     () => targetSize(brief.aspect, brief.longEdgePx),
     [brief.aspect, brief.longEdgePx],
+  );
+
+  const provider = useMemo(
+    () => resolveImageSearchProvider(brief.context, brief.criteria),
+    [brief.context, brief.criteria],
   );
 
   const selectedPhotos = useMemo(
@@ -157,6 +164,7 @@ export default function ImageSearchMode(props: {
         criteria: brief.criteria,
         count: brief.count,
         lang: "sl",
+        provider,
       });
       const next = { ...brief, queries };
       setBrief(next);
@@ -188,15 +196,18 @@ export default function ImageSearchMode(props: {
       30,
       Math.max(6, Math.ceil((brief.count * 2) / Math.max(1, queries.length)) + 2),
     );
-    const all: UnsplashPhoto[] = [];
+    const all: SearchPhoto[] = [];
     try {
       for (let i = 0; i < queries.length; i++) {
         const q = queries[i];
-        setLiveNote(`Iščem (${i + 1}/${queries.length}): ${q}`);
-        const hits = await searchUnsplashPhotos({
+        setLiveNote(
+          `${providerLabel(provider)} · iščem (${i + 1}/${queries.length}): ${q}`,
+        );
+        const hits = await searchPhotos({
           query: q,
           perPage,
           orientation,
+          provider,
         });
         all.push(...hits);
       }
@@ -205,7 +216,7 @@ export default function ImageSearchMode(props: {
       setLiveNote(
         unique.length === 0
           ? "Ni rezultatov — poskusi drugačna besedila."
-          : `${unique.length} kandidatov (brez dvojnikov). Izberi do ${brief.count}.`,
+          : `${unique.length} kandidatov prek ${providerLabel(provider)}. Izberi do ${brief.count}.`,
       );
       logEvent("image_search_done", `${unique.length} photos`);
       await persistHistory(nextBrief);
@@ -274,10 +285,14 @@ export default function ImageSearchMode(props: {
           <div className="osebe-brand">
             <h2>Išči slike</h2>
             <p>
-              Brief → predlog poizvedb → Unsplash → izbor → izrez → ZIP z
-              attribution.
+              Brief → predlog poizvedb → iskanje → izbor → izrez → ZIP.
+              Osebe/ljudi gredo prek Serperja, ostalo prek Unsplasha.
             </p>
           </div>
+
+          <p className="osebe-hint imgsearch-provider">
+            Vir: <strong>{providerLabel(provider)}</strong>
+          </p>
 
           <label className="osebe-field">
             <span className="osebe-field__label">1. Kontekst</span>

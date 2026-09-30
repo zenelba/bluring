@@ -1,5 +1,5 @@
 /**
- * Image search brief → Unsplash candidates → crop → ZIP.
+ * Image search brief → Unsplash / Serper candidates → crop → ZIP.
  */
 
 import { saveAs } from "file-saver";
@@ -14,6 +14,8 @@ export type ImageCropMode =
   | "center"
   | "wideContext";
 
+export type ImageSearchProvider = "unsplash" | "serper";
+
 export type ImageSearchBrief = {
   context: string;
   criteria: string;
@@ -24,11 +26,13 @@ export type ImageSearchBrief = {
   queries: string[];
 };
 
-export type UnsplashPhoto = {
+export type SearchPhoto = {
   id: string;
+  source: ImageSearchProvider;
   url: string;
   thumb: string;
   raw: string;
+  /** Unsplash-only; empty for Serper. */
   downloadLocation: string;
   width: number;
   height: number;
@@ -38,6 +42,9 @@ export type UnsplashPhoto = {
   description: string | null;
   query: string;
 };
+
+/** @deprecated alias — prefer SearchPhoto */
+export type UnsplashPhoto = SearchPhoto;
 
 export const ASPECT_OPTIONS: Array<{ id: ImageAspect; label: string }> = [
   { id: "1:1", label: "Kvadrat (1:1)" },
@@ -87,6 +94,25 @@ export const DEFAULT_BRIEF: ImageSearchBrief = {
   count: 8,
   queries: [],
 };
+
+const PEOPLE_RE =
+  /\b(oseb[aeiy]?|ljudi|človek|človeški|politiki|politik|portreti?\s+ljudi|ljudsk|people|person|persons|human|humans|celebrity|celebrities|politician|politicians|public\s+figure|headshot|faces?\s+of\s+people)\b/i;
+
+/** People / persons → Serper; everything else → Unsplash. */
+export function resolveImageSearchProvider(
+  context: string,
+  criteria = "",
+): ImageSearchProvider {
+  const blob = `${context}\n${criteria}`.trim();
+  if (!blob) return "unsplash";
+  return PEOPLE_RE.test(blob) ? "serper" : "unsplash";
+}
+
+export function providerLabel(provider: ImageSearchProvider): string {
+  return provider === "serper"
+    ? "Serper (Google Images — osebe)"
+    : "Unsplash";
+}
 
 export function aspectRatioValue(aspect: ImageAspect): number {
   switch (aspect) {
@@ -139,6 +165,7 @@ export async function proposeSearchQueries(input: {
   criteria: string;
   count: number;
   lang?: string;
+  provider?: ImageSearchProvider;
 }): Promise<string[]> {
   const data = await apiFetch<{ queries: string[] }>(
     "/api/image-search-queries",
@@ -151,20 +178,31 @@ export async function proposeSearchQueries(input: {
   return (data.queries ?? []).map((q) => String(q).trim()).filter(Boolean);
 }
 
+export async function searchPhotos(input: {
+  query: string;
+  perPage?: number;
+  orientation?: "landscape" | "portrait" | "squarish";
+  provider: ImageSearchProvider;
+}): Promise<SearchPhoto[]> {
+  const data = await apiFetch<{ results: SearchPhoto[] }>("/api/image-search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return (data.results ?? []).map((r) => ({
+    ...r,
+    source: r.source || input.provider,
+    query: input.query,
+  }));
+}
+
+/** @deprecated use searchPhotos */
 export async function searchUnsplashPhotos(input: {
   query: string;
   perPage?: number;
   orientation?: "landscape" | "portrait" | "squarish";
-}): Promise<UnsplashPhoto[]> {
-  const data = await apiFetch<{ results: UnsplashPhoto[] }>(
-    "/api/image-search",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    },
-  );
-  return (data.results ?? []).map((r) => ({ ...r, query: input.query }));
+}): Promise<SearchPhoto[]> {
+  return searchPhotos({ ...input, provider: "unsplash" });
 }
 
 export async function resolveUnsplashDownload(
@@ -177,6 +215,41 @@ export async function resolveUnsplashDownload(
   });
   if (!data.url) throw new Error("No download URL");
   return data.url;
+}
+
+/** Fetch remote image bytes via server proxy (avoids canvas CORS for Serper). */
+async function fetchProxiedImageBlob(url: string): Promise<Blob> {
+  const res = await fetch("/api/image-search-fetch", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(
+      typeof data.error === "string"
+        ? data.error
+        : `Image fetch failed (${res.status})`,
+    );
+  }
+  return res.blob();
+}
+
+function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load image"));
+    };
+    img.src = url;
+  });
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -200,7 +273,6 @@ function sourceCropRect(
   const targetR = outW / outH;
   const srcR = imgW / imgH;
 
-  // Contain-style for fullSubject / wideContext: take largest area matching ratio
   let sw: number;
   let sh: number;
   if (srcR > targetR) {
@@ -211,7 +283,6 @@ function sourceCropRect(
     sh = imgW / targetR;
   }
 
-  // Zoom in for recognition (tighter), zoom out slightly for wideContext
   let scale = 1;
   if (cropMode === "recognition") scale = 0.72;
   else if (cropMode === "head") scale = 0.85;
@@ -221,7 +292,6 @@ function sourceCropRect(
 
   sw = Math.min(imgW, sw * scale);
   sh = Math.min(imgH, sh * scale);
-  // Re-fit to target ratio after scale
   if (sw / sh > targetR) sw = sh * targetR;
   else sh = sw / targetR;
   sw = Math.min(imgW, sw);
@@ -249,15 +319,26 @@ function sourceCropRect(
 }
 
 export async function renderCroppedBlob(
-  photo: UnsplashPhoto,
+  photo: SearchPhoto,
   brief: Pick<ImageSearchBrief, "aspect" | "longEdgePx" | "cropMode">,
 ): Promise<Blob> {
-  const downloadUrl = await resolveUnsplashDownload(photo.downloadLocation);
-  // Prefer resolved URL; fall back to raw with large width
-  const srcUrl =
-    downloadUrl ||
-    `${photo.raw}${photo.raw.includes("?") ? "&" : "?"}w=2400&q=85`;
-  const img = await loadImage(srcUrl);
+  let img: HTMLImageElement;
+  if (photo.source === "serper" || !photo.downloadLocation) {
+    const blob = await fetchProxiedImageBlob(photo.raw || photo.url);
+    img = await loadImageFromBlob(blob);
+  } else {
+    const downloadUrl = await resolveUnsplashDownload(photo.downloadLocation);
+    const srcUrl =
+      downloadUrl ||
+      `${photo.raw}${photo.raw.includes("?") ? "&" : "?"}w=2400&q=85`;
+    try {
+      img = await loadImage(srcUrl);
+    } catch {
+      const blob = await fetchProxiedImageBlob(srcUrl);
+      img = await loadImageFromBlob(blob);
+    }
+  }
+
   const { w: outW, h: outH } = targetSize(brief.aspect, brief.longEdgePx);
   const { sx, sy, sw, sh } = sourceCropRect(
     img.naturalWidth,
@@ -294,7 +375,7 @@ function safeFilePart(s: string): string {
 }
 
 export function exportFileName(
-  photo: UnsplashPhoto,
+  photo: SearchPhoto,
   brief: ImageSearchBrief,
   prefix: string,
   index: number,
@@ -307,18 +388,26 @@ export function exportFileName(
 }
 
 export async function downloadImageSearchZip(
-  photos: UnsplashPhoto[],
+  photos: SearchPhoto[],
   brief: ImageSearchBrief,
   prefix: string,
   onProgress?: (done: number, total: number) => void,
 ): Promise<void> {
   if (photos.length === 0) throw new Error("Ni izbranih slik");
   const zip = new JSZip();
+  const hasSerper = photos.some((p) => p.source === "serper");
+  const hasUnsplash = photos.some((p) => p.source !== "serper");
   const credits: string[] = [
-    "Unsplash attribution",
-    "Photos courtesy of Unsplash photographers (https://unsplash.com).",
+    "Image credits",
+    hasUnsplash
+      ? "Unsplash photos: courtesy of Unsplash photographers (https://unsplash.com)."
+      : "",
+    hasSerper
+      ? "Serper / Google Images results: check each source page for license before commercial use."
+      : "",
     "",
-  ];
+  ].filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== ""));
+
   for (let i = 0; i < photos.length; i++) {
     const photo = photos[i];
     const blob = await renderCroppedBlob(photo, brief);
@@ -326,7 +415,8 @@ export async function downloadImageSearchZip(
     zip.file(name, blob);
     credits.push(
       `${name}`,
-      `  Photo by ${photo.photographer} (${photo.photographerUrl || "Unsplash"})`,
+      `  Source: ${photo.source}`,
+      `  Credit: ${photo.photographer}${photo.photographerUrl ? ` (${photo.photographerUrl})` : ""}`,
       `  ${photo.link}`,
       `  Query: ${photo.query}`,
       "",
@@ -340,9 +430,9 @@ export async function downloadImageSearchZip(
 }
 
 /** Merge search pages and drop duplicate photo ids. */
-export function dedupePhotos(photos: UnsplashPhoto[]): UnsplashPhoto[] {
+export function dedupePhotos(photos: SearchPhoto[]): SearchPhoto[] {
   const seen = new Set<string>();
-  const out: UnsplashPhoto[] = [];
+  const out: SearchPhoto[] = [];
   for (const p of photos) {
     if (seen.has(p.id)) continue;
     seen.add(p.id);

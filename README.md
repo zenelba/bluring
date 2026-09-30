@@ -27,8 +27,9 @@ Access is gated behind an access code (session cookie). Server-side features (At
 
 - Sidebar wizard: context, selection criteria, aspect ratio + long edge, crop mode, count
 - **Predlagaj poizvedbe** via OpenAI; edit the query list before search
-- Unsplash search (deduped); pick up to N distinct photos; crop/resize client-side; ZIP + `credits.txt`
-- Requires `OPENAI_API_KEY` and `UNSPLASH_ACCESS_KEY`
+- **Provider:** Unsplash by default; **Serper (Google Images)** when context/criteria mentions people / osebe / ljudi
+- Deduped results; pick up to N; crop/resize client-side; ZIP + `credits.txt`
+- Requires `OPENAI_API_KEY`, `UNSPLASH_ACCESS_KEY`, and `SERPER_API_KEY` (for people searches)
 
 ### Brand removal
 
@@ -108,7 +109,8 @@ Copy `.env.example` → `.env.local` and fill in values as needed.
 | `OPENAI_BRAND_VISION_MODEL` | Optional | 2D/3D classify (default `gpt-4o-mini`) |
 | `OPENAI_BRAND_IMAGE_MODEL` | Optional | Brand edit model (default `gpt-image-1`) |
 | `OPENAI_IMAGE_SEARCH_MODEL` | Optional | Query propose for Išči slike (default `gpt-4o-mini`) |
-| `UNSPLASH_ACCESS_KEY` | Išči slike | Unsplash API access key |
+| `UNSPLASH_ACCESS_KEY` | Išči slike | Unsplash API access key (non-people) |
+| `SERPER_API_KEY` | Išči slike (osebe) | [Serper](https://serper.dev) Google Images key |
 | `GOOGLE_CLOUD_VISION_API_KEY` | Text replace | OCR geometry |
 
 See [`.env.example`](.env.example) for a template.
@@ -167,8 +169,9 @@ Point `COBALT_API_URL` at that URL. Docs: [run an instance](https://github.com/i
 | `POST /api/brand-edit` | OpenAI image edit — remove listed brands |
 | `POST /api/text-detect` | Vision OCR + GPT labels for Text replace |
 | `POST /api/image-search-queries` | OpenAI suggests Unsplash search queries |
-| `POST /api/image-search` | Unsplash photo search proxy |
+| `POST /api/image-search` | Unsplash or Serper search proxy (`provider`) |
 | `POST /api/image-search-download` | Unsplash download_location ping + URL |
+| `POST /api/image-search-fetch` | Proxy remote image bytes for crop/export |
 
 All except `/api/access` require a valid access cookie.
 
