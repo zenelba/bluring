@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Plain replace smoke — neomejeno → brezskrbno</title>
+    <style>
+      body {
+        margin: 0;
+        background: #111;
+        color: #eee;
+        font: 14px system-ui, sans-serif;
+      }
+      #status {
+        padding: 12px 16px;
+      }
+      #preview {
+        max-width: 100%;
+        display: block;
+        background: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <p id="status">Loading…</p>
+    <img id="preview" alt="preview" />
+    <script type="module">
+      import { calibrate, loadCandidateFonts } from "/src/lib/fontMatch.ts";
+      import { renderTextReplaceVariants } from "/src/lib/textReplace.ts";
+
+      const status = document.getElementById("status");
+      const preview = document.getElementById("preview");
+
+      try {
+        const res = await fetch("/tests/pill-row/telekom.png");
+        if (!res.ok) throw new Error("telekom.png fetch failed");
+        const blob = await res.blob();
+        const file = new File([blob], "telekom.png", { type: "image/png" });
+        await loadCandidateFonts();
+
+        // Tuned on telekom.png (560×1314) PRENOS PODATKOV "neomejeno".
+        const bbox = { x: 0.32, y: 0.712, w: 0.30, h: 0.028 };
+        const probe = document.createElement("canvas").getContext("2d");
+        const imgProbe = await createImageBitmap(blob);
+        const cal = calibrate(probe, "neomejeno", "Rubik", 700, {
+          x: bbox.x * imgProbe.width,
+          y: bbox.y * imgProbe.height,
+          w: bbox.w * imgProbe.width,
+          h: bbox.h * imgProbe.height,
+        });
+
+        const neo = {
+          id: "neo",
+          text: "neomejeno",
+          bbox,
+          kind: "text",
+          container: {
+            type: "plain",
+            fill: null,
+            radiusPxHint: 0,
+            padX: 0.45,
+            padY: 0.28,
+            rect: null,
+          },
+          layoutGroupId: null,
+          textBlockId: null,
+          style: {
+            color: "#2a2a2a",
+            fontWeight: "bold",
+            align: "left",
+            fontFamily: "Rubik",
+            fontSizeRel: cal.size / imgProbe.height,
+            scaleX: cal.scaleX,
+          },
+          number: null,
+        };
+        // Interior fragment — old clear-edge mid-cut erase + tiny type.
+        const frag = {
+          ...neo,
+          id: "frag",
+          text: "mejeno",
+          bbox: {
+            x: neo.bbox.x + neo.bbox.w * 0.35,
+            y: neo.bbox.y,
+            w: neo.bbox.w * 0.55,
+            h: neo.bbox.h,
+          },
+        };
+
+        const variants = await renderTextReplaceVariants({
+          file,
+          items: [neo, frag],
+          edits: { neo: { replaceText: "brezskrbno", replaceValue: null } },
+          series: { itemId: null, steps: 1, step: 0 },
+        });
+        const v = variants[0];
+        preview.src = v.url;
+        window.__RESULT__ = {
+          url: v.url,
+          changes: v.changes,
+        };
+        status.textContent = "OK — brezskrbno rendered";
+      } catch (err) {
+        console.error(err);
+        status.textContent = String(err);
+        window.__RESULT__ = { error: String(err) };
+      }
+    </script>
+  </body>
+</html>
