@@ -13,6 +13,7 @@ import {
   renderPillRow,
   type PillRowDebug,
 } from "./pillRow";
+import { isExteriorRightNeighbor } from "./plainNeighbor";
 import { splitDetectedTextBySpaces as splitDetectedTextBySpacesCore } from "./splitDetectedText";
 
 export type TextBBox = { x: number; y: number; w: number; h: number };
@@ -1856,16 +1857,7 @@ function plainRightClearEdge(
   let rightLimit = imgW;
   let rightNeighbor: DetectedText | null = null;
   for (const other of allItems) {
-    if (other.id === item.id) continue;
-    if (other.kind === "logo") continue;
-    // Must sit to the right of this box's left edge
-    if (other.bbox.x <= item.bbox.x) continue;
-    // Vertical overlap (not midY-only) so a short "mesec" beside a tall price counts
-    const pad = Math.max(item.bbox.h, other.bbox.h) * 0.15;
-    const overlapsY =
-      item.bbox.y - pad < other.bbox.y + other.bbox.h &&
-      other.bbox.y - pad < item.bbox.y + item.bbox.h;
-    if (!overlapsY) continue;
+    if (!isExteriorRightNeighbor(item, other)) continue;
     const ox = other.bbox.x * imgW;
     if (ox < rightLimit) {
       rightLimit = ox;
@@ -1899,7 +1891,8 @@ function plainMaxWidth(
   const box = bboxToPx(item.bbox, imgW, imgH);
   const clear = plainRightClearEdge(ctx, item, allItems, imgW, imgH);
   if (clear) {
-    return Math.max(4, clear.edge - box.x);
+    // Never narrower than the original OCR box (avoids unreadably tiny type).
+    return Math.max(box.w, clear.edge - box.x, 4);
   }
   const gap = Math.max(4, Math.round(box.h * 0.15));
   const toRight = imgW - box.x - gap;
@@ -1945,13 +1938,16 @@ function drawPlainText(
   allItems: DetectedText[] = [],
 ) {
   const box = bboxToPx(item.bbox, imgW, imgH);
-  let size = itemFontSize(item, imgH);
+  const baseSize = itemFontSize(item, imgH);
+  let size = baseSize;
   let scaleX = itemScaleX(item);
   const maxW = plainMaxWidth(ctx, item, allItems, imgW, imgH);
+  // Prefer slight overflow over collapsing to unreadable ~6px type.
+  const minSize = Math.max(6, baseSize * 0.85);
 
   // Shrink only if text would exceed available width
   let width = measureScaledWidth(ctx, text, item, size, scaleX);
-  while (size > 6 && width > maxW) {
+  while (size > minSize && width > maxW) {
     size -= 0.5;
     width = measureScaledWidth(ctx, text, item, size, scaleX);
   }
@@ -2891,10 +2887,16 @@ function collectPlainEraseTargets(
     if (isRowChip(item)) continue;
     if (!itemChanged(item, edits[item.id], seriesItemId)) continue;
     const box = bboxToPx(item.bbox, imgW, imgH);
+    const boxRight = box.x + box.w;
     const left = box.x - 2;
-    const rawRight = box.x + box.w + 2;
+    const rawRight = boxRight + 2;
     const clear = plainRightClearEdge(ctx, item, items, imgW, imgH);
-    const right = clear ? Math.min(rawRight, clear.edge) : rawRight;
+    // Always wipe the full OCR box so leftover glyphs (e.g. "mejeno") never remain.
+    // Only trim padding beyond the box when a true right-hand placeholder is close.
+    let right = rawRight;
+    if (clear && clear.edge < rawRight) {
+      right = Math.max(boxRight, clear.edge);
+    }
     rects.push({
       x: left,
       y: box.y - 2,
