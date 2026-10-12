@@ -17,6 +17,7 @@ import {
   renderTextReplaceVariants,
   revokeVariants,
   splitDetectedTextBySpaces,
+  toggleDetectedTextKind,
   type DetectedText,
   type ExportNaming,
   type RenderedVariant,
@@ -270,6 +271,51 @@ function SplitGlyph({ size = 14 }: { size?: number }) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+/** Shows the type you will switch TO: Aa when number→text, 12 when text→number. */
+function KindToggleGlyph({
+  toText,
+  size = 14,
+}: {
+  toText: boolean;
+  size?: number;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+    >
+      {toText ? (
+        <text
+          x="12"
+          y="16"
+          textAnchor="middle"
+          fill="currentColor"
+          fontSize="11"
+          fontWeight="700"
+          fontFamily="system-ui, sans-serif"
+        >
+          Aa
+        </text>
+      ) : (
+        <text
+          x="12"
+          y="16"
+          textAnchor="middle"
+          fill="currentColor"
+          fontSize="11"
+          fontWeight="700"
+          fontFamily="system-ui, sans-serif"
+        >
+          12
+        </text>
+      )}
     </svg>
   );
 }
@@ -746,6 +792,48 @@ export default function TextReplaceMode(props: {
     setHoveredId(null);
   };
 
+  const onToggleKind = (item: DetectedText) => {
+    if (busy || item.kind === "logo") return;
+    const nextItem = toggleDetectedTextKind(item);
+    setItems((prev) =>
+      prev.map((it) => (it.id === item.id ? nextItem : it)),
+    );
+    setEdits((prev) => {
+      const edit = prev[item.id];
+      if (nextItem.number) {
+        const raw = edit?.replaceText ?? nextItem.text;
+        const committed = commitNumberEdit(nextItem, raw, edit);
+        return {
+          ...prev,
+          [item.id]: committed ?? {
+            replaceText: formatNumber(
+              nextItem.number.value,
+              nextItem.number,
+            ),
+            replaceValue: nextItem.number.value,
+          },
+        };
+      }
+      const asText =
+        edit?.replaceText ??
+        (item.number
+          ? formatNumber(
+              edit?.replaceValue ?? item.number.value,
+              numberMetaForEdit(item, edit) ?? item.number,
+            )
+          : item.text);
+      return {
+        ...prev,
+        [item.id]: { replaceText: asText, replaceValue: null },
+      };
+    });
+    if (!nextItem.number) {
+      setSeries((s) =>
+        s.itemId === item.id ? { ...s, itemId: null } : s,
+      );
+    }
+  };
+
   const visibleItems = useMemo(
     () => items.filter((item) => item.kind !== "logo"),
     [items],
@@ -1111,21 +1199,36 @@ export default function TextReplaceMode(props: {
                                   }`
                                 : ""}
                             </span>
-                            {canSplitDetectedText(item) && (
+                            <span className="tr-field-actions">
                               <button
                                 type="button"
                                 className="tr-split-btn"
-                                title="Split"
-                                aria-label="Split"
+                                title="Switch to text"
+                                aria-label="Switch to text"
                                 disabled={busy}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  onSplit(item);
+                                  onToggleKind(item);
                                 }}
                               >
-                                <SplitGlyph />
+                                <KindToggleGlyph toText />
                               </button>
-                            )}
+                              {canSplitDetectedText(item) && (
+                                <button
+                                  type="button"
+                                  className="tr-split-btn"
+                                  title="Split"
+                                  aria-label="Split"
+                                  disabled={busy}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSplit(item);
+                                  }}
+                                >
+                                  <SplitGlyph />
+                                </button>
+                              )}
+                            </span>
                           </span>
                           <input
                             className="osebe-input"
@@ -1181,21 +1284,36 @@ export default function TextReplaceMode(props: {
                             <span className="osebe-field__label">
                               Replace with
                             </span>
-                            {canSplitDetectedText(item) && (
+                            <span className="tr-field-actions">
                               <button
                                 type="button"
                                 className="tr-split-btn"
-                                title="Split"
-                                aria-label="Split"
+                                title="Switch to number"
+                                aria-label="Switch to number"
                                 disabled={busy}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  onSplit(item);
+                                  onToggleKind(item);
                                 }}
                               >
-                                <SplitGlyph />
+                                <KindToggleGlyph toText={false} />
                               </button>
-                            )}
+                              {canSplitDetectedText(item) && (
+                                <button
+                                  type="button"
+                                  className="tr-split-btn"
+                                  title="Split"
+                                  aria-label="Split"
+                                  disabled={busy}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSplit(item);
+                                  }}
+                                >
+                                  <SplitGlyph />
+                                </button>
+                              )}
+                            </span>
                           </span>
                           <input
                             className="osebe-input"

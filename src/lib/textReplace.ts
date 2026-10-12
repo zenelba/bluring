@@ -1460,6 +1460,36 @@ export function parseEditNumber(raw: string): number | null {
 }
 
 /**
+ * Manually flip a cell between number and text editing.
+ * Number → text drops numeric meta so the full string can be replaced.
+ * Text → number re-parses the label (or falls back to a minimal meta).
+ */
+export function toggleDetectedTextKind(item: DetectedText): DetectedText {
+  if (item.kind === "logo") return item;
+  if (item.number) {
+    return { ...item, kind: "text", number: null };
+  }
+  const parsed = parseNumberFromText(item.text);
+  if (parsed) {
+    return { ...item, kind: "number", number: parsed };
+  }
+  const n = parseEditNumber(item.text);
+  return {
+    ...item,
+    kind: "number",
+    number: {
+      value: n ?? 0,
+      decimalSep: ",",
+      thousandSep: ".",
+      decimals: 0,
+      prefix: "",
+      suffix: "",
+      rawNumeric: n != null ? String(n) : "0",
+    },
+  };
+}
+
+/**
  * Effective numeric value for an edit: prefer the typed text when it parses to a
  * different number than replaceValue (avoids stale replaceValue after typing).
  */
