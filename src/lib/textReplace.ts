@@ -13,8 +13,11 @@ import {
   renderPillRow,
   type PillRowDebug,
 } from "./pillRow";
+import { plainCanvasRightMax } from "./plainMargin";
 import { isExteriorRightNeighbor } from "./plainNeighbor";
 import { splitDetectedTextBySpaces as splitDetectedTextBySpacesCore } from "./splitDetectedText";
+
+export { PLAIN_RIGHT_MARGIN_FRAC, plainCanvasRightMax } from "./plainMargin";
 
 export type TextBBox = { x: number; y: number; w: number; h: number };
 
@@ -1919,14 +1922,11 @@ function plainMaxWidth(
   imgH: number,
 ): number {
   const box = bboxToPx(item.bbox, imgW, imgH);
+  const rightMax = plainCanvasRightMax(imgW);
   const clear = plainRightClearEdge(ctx, item, allItems, imgW, imgH);
-  if (clear) {
-    // Never narrower than the original OCR box (avoids unreadably tiny type).
-    return Math.max(box.w, clear.edge - box.x, 4);
-  }
-  const gap = Math.max(4, Math.round(box.h * 0.15));
-  const toRight = imgW - box.x - gap;
-  return Math.max(box.w, toRight);
+  const hardRight = clear ? Math.min(clear.edge, rightMax) : rightMax;
+  // Grow into free space up to hardRight, but never past the 3% canvas margin.
+  return Math.max(4, hardRight - box.x);
 }
 
 function drawScaledText(
@@ -1972,14 +1972,24 @@ function drawPlainText(
   let size = baseSize;
   let scaleX = itemScaleX(item);
   const maxW = plainMaxWidth(ctx, item, allItems, imgW, imgH);
-  // Prefer slight overflow over collapsing to unreadable ~6px type.
-  const minSize = Math.max(6, baseSize * 0.85);
+  const rightMax = plainCanvasRightMax(imgW);
+  // Soft floor avoids unreadably tiny type; hard shrink still enforces maxW
+  // so text cannot run flush into the banner's right edge (e.g. MAXNET).
+  const softMin = Math.max(6, baseSize * 0.85);
 
-  // Shrink only if text would exceed available width
   let width = measureScaledWidth(ctx, text, item, size, scaleX);
-  while (size > minSize && width > maxW) {
+  while (size > softMin && width > maxW) {
     size -= 0.5;
     width = measureScaledWidth(ctx, text, item, size, scaleX);
+  }
+  while (size > 6 && width > maxW) {
+    size -= 0.5;
+    width = measureScaledWidth(ctx, text, item, size, scaleX);
+  }
+  // Last resort: compress horizontally to keep the 3% right margin.
+  if (width > maxW && maxW > 4) {
+    scaleX = scaleX * (maxW / width);
+    width = maxW;
   }
 
   ctx.font = fontCss(
@@ -1999,6 +2009,10 @@ function drawPlainText(
     x = box.x + box.w / 2 - width / 2;
   } else if (item.style.align === "right") {
     x = box.x + box.w - width;
+  }
+  // Keep drawn ink inside the right margin regardless of align.
+  if (x + width > rightMax) {
+    x = Math.max(0, rightMax - width);
   }
   const baselineY = box.y + ascent;
   drawScaledText(ctx, text, item, size, scaleX, x, baselineY);
@@ -2202,7 +2216,10 @@ function measurePill(
     newMetrics.ascent > 0 ? newMetrics.ascent : sizePx * 0.8;
 
   // Same construction as the original: ink + 2*sourcePad. Grow only when text needs it.
-  const w = Math.max(orig.w, newInk + 2 * padH);
+  // Cap growth so pills leave ≥3% of canvas width free on the right.
+  const rightMax = plainCanvasRightMax(imgW);
+  const maxW = Math.max(orig.w, rightMax - orig.x);
+  const w = Math.min(Math.max(orig.w, newInk + 2 * padH), maxW);
   // Capsule: always half-height corners like the source badges.
   const radius = h / 2;
   return {
@@ -2244,15 +2261,18 @@ function layoutPillGroup(
   }
 
   let cursorX = measured[0].orig.x;
+  const rightMax = plainCanvasRightMax(imgW);
 
   const layouts = measured.map((m, i) => {
+    const room = Math.max(m.orig.w, rightMax - cursorX);
+    const w = Math.min(m.w, room);
     const layout: PillLayout = {
       item: m.item,
       text: m.text,
       x: cursorX,
       // Keep each chip on its original vertical plate position
       y: m.orig.y,
-      w: m.w,
+      w,
       h: m.h,
       radius: m.radius,
       fontSize: m.fontSize,
@@ -2261,7 +2281,7 @@ function layoutPillGroup(
       fontCss: m.fontCss,
       scaleX: m.scaleX,
     };
-    cursorX += m.w + (gaps[i] ?? 0);
+    cursorX += w + (gaps[i] ?? 0);
     return layout;
   });
 

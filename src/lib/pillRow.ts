@@ -6,6 +6,7 @@
  */
 
 import { fontCss, matchFont, type FontWeightNum } from "./fontMatch";
+import { plainCanvasRightMax } from "./plainMargin";
 
 type Rgb = { r: number; g: number; b: number };
 export type PxRect = { x: number; y: number; w: number; h: number };
@@ -701,9 +702,13 @@ export function renderPillRow(
     return { pill, edited, w, inkW, inkLeft, x: 0 };
   });
 
+  // Leave ≥3% of canvas width free on the right when chips grow.
+  const rightMax = plainCanvasRightMax(px.w);
   let cursor = row.T1;
   layouts.forEach((l, i) => {
     l.x = cursor;
+    const room = Math.max(l.pill.rect.w, rightMax - l.x);
+    if (l.w > room) l.w = room;
     cursor += l.w + (row.gaps[i] ?? 0);
   });
 
