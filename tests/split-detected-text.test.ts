@@ -101,4 +101,42 @@ function baseItem(overrides: Partial<SplitDetectedText> = {}): SplitDetectedText
   assert(splitDetectedTextBySpaces(baseItem({ text: "alone" })) == null, "null");
 }
 
+{
+  // Parent center → left parts may keep center; rightmost must be left.
+  const centered = baseItem({
+    text: "NEO C",
+    style: {
+      color: "#fff",
+      fontWeight: "bold",
+      align: "center",
+      fontFamily: "Work Sans",
+      fontSizeRel: 0.08,
+      scaleX: 1,
+    },
+  });
+  const parts = splitDetectedTextBySpaces(centered);
+  assert(parts != null && parts.length === 2, "centered split → 2");
+  assert(parts![0].style.align === "center", "left fragment keeps parent align");
+  assert(parts![1].style.align === "left", "rightmost fragment forced left");
+}
+
+{
+  const three = baseItem({
+    text: "A B C",
+    style: {
+      color: "#000",
+      fontWeight: "bold",
+      align: "center",
+      fontFamily: "Montserrat",
+      fontSizeRel: 0.05,
+      scaleX: 1,
+    },
+  });
+  const parts = splitDetectedTextBySpaces(three);
+  assert(parts != null && parts.length === 3, "three-way split");
+  assert(parts![0].style.align === "center", "first keeps center");
+  assert(parts![1].style.align === "center", "middle keeps center");
+  assert(parts![2].style.align === "left", "last is left");
+}
+
 console.log("split-detected-text tests ok");

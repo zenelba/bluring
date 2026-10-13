@@ -123,9 +123,13 @@ export function splitDetectedTextBySpaces(
     cursor += w;
   }
 
+  const last = tokens.length - 1;
   return tokens.map((tok, i) => {
     const number = parseNumber(tok.text);
     const box = tokenBoxes[i];
+    // Rightmost fragment is always left-aligned so replacement text grows
+    // toward the right from its box edge (not re-centered in a tiny bbox).
+    const align = i === last ? ("left" as const) : item.style.align;
     return {
       id: `${item.id}__s${i}`,
       text: tok.text,
@@ -146,7 +150,7 @@ export function splitDetectedTextBySpaces(
       },
       layoutGroupId: null,
       textBlockId: null,
-      style: { ...item.style },
+      style: { ...item.style, align },
       number,
     };
   });
