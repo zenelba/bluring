@@ -660,7 +660,7 @@ export default function PortraitsMode(props: {
                 return (
                   <article key={item.localId} className="osebe-card">
                     <div
-                      className="osebe-card__photo"
+                      className="osebe-card__photo osebe-card__photo--square"
                       style={
                         item.previewUrl
                           ? { background: settings.background }

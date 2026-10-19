@@ -358,6 +358,10 @@
   position: relative;
 }
 
+.osebe-card__photo--square {
+  aspect-ratio: 1 / 1;
+}
+
 .osebe-card__photo > img:first-child {
   width: 100%;
   height: 100%;
