@@ -109,9 +109,24 @@ export default function PptxTranslationMode(props: {
     slideLabel: "",
     percent: 0,
   });
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const translateStartedAtRef = useRef<number | null>(null);
   const [costSummary, setCostSummary] = useState<TranslateCostSummary | null>(
     null,
   );
+
+  // Live elapsed clock while translating (shown next to the progress bar).
+  useEffect(() => {
+    if (phase !== "translate" || translateStartedAtRef.current == null) return;
+    const tick = () => {
+      const start = translateStartedAtRef.current;
+      if (start == null) return;
+      setElapsedMs(performance.now() - start);
+    };
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => window.clearInterval(id);
+  }, [phase]);
 
   useEffect(() => {
     if (!initialTask || initialTask.record.toolId !== "pptxTranslation") return;
@@ -188,6 +203,8 @@ export default function PptxTranslationMode(props: {
     setResultBlob(null);
     setResultName(null);
     setCostSummary(null);
+    setElapsedMs(0);
+    translateStartedAtRef.current = null;
   };
 
   const selectedModel = getPptxModel(model);
@@ -295,6 +312,8 @@ export default function PptxTranslationMode(props: {
     setError(null);
     clearResult();
     const started = performance.now();
+    translateStartedAtRef.current = started;
+    setElapsedMs(0);
     let usageTotal = emptyUsage();
 
     try {
@@ -363,6 +382,7 @@ export default function PptxTranslationMode(props: {
         textCount: extracted.nodes.length,
       };
       setCostSummary(summary);
+      setElapsedMs(durationMs);
       setProgress({
         slideDone: extracted.slides.length,
         slideTotal: extracted.slides.length,
@@ -387,7 +407,11 @@ export default function PptxTranslationMode(props: {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Translate failed");
       setLiveNote("");
+      if (translateStartedAtRef.current != null) {
+        setElapsedMs(performance.now() - translateStartedAtRef.current);
+      }
     } finally {
+      translateStartedAtRef.current = null;
       setBusy(false);
       setPhase("idle");
     }
@@ -411,6 +435,8 @@ export default function PptxTranslationMode(props: {
     setLiveNote("");
     clearResult();
     setProgress({ slideDone: 0, slideTotal: 0, slideLabel: "", percent: 0 });
+    setElapsedMs(0);
+    translateStartedAtRef.current = null;
     extractRef.current = null;
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -594,20 +620,41 @@ export default function PptxTranslationMode(props: {
               <span className="osebe-kicker">Status</span>
               <span className="osebe-status__count">
                 {phase === "translate" && progress.slideTotal > 0
-                  ? `${progress.slideDone} / ${progress.slideTotal} slides`
-                  : textCount > 0
-                    ? `${slideCount} slides · ${textCount} strings`
-                    : "—"}
+                  ? `${progress.slideDone} / ${progress.slideTotal} slides · ${formatDuration(elapsedMs)}`
+                  : costSummary
+                    ? `${formatDuration(costSummary.durationMs)} elapsed`
+                    : textCount > 0
+                      ? `${slideCount} slides · ${textCount} strings`
+                      : "—"}
               </span>
             </div>
             {(phase === "translate" || progress.percent > 0) &&
               progress.slideTotal > 0 && (
-                <div className="osebe-bar" aria-hidden>
+                <>
+                  <div className="osebe-bar" aria-hidden>
+                    <div
+                      className="osebe-bar__fill"
+                      style={{ width: `${progress.percent}%` }}
+                    />
+                  </div>
                   <div
-                    className="osebe-bar__fill"
-                    style={{ width: `${progress.percent}%` }}
-                  />
-                </div>
+                    className="osebe-status__row"
+                    style={{ marginTop: "0.35rem" }}
+                  >
+                    <span className="osebe-hint">
+                      {phase === "translate"
+                        ? `Elapsed ${formatDuration(elapsedMs)}`
+                        : costSummary
+                          ? `Finished in ${formatDuration(costSummary.durationMs)}`
+                          : elapsedMs > 0
+                            ? `Elapsed ${formatDuration(elapsedMs)}`
+                            : null}
+                    </span>
+                    <span className="osebe-hint">
+                      {progress.percent}%
+                    </span>
+                  </div>
+                </>
               )}
             <p className="osebe-status__copy">
               {!file
