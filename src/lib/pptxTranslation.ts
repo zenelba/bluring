@@ -226,20 +226,44 @@ type AtHit = {
 
 /**
  * Repair common MT spacing glitches as a safety net after paragraph translate.
- * Does not invent spaces inside unknown compounds — only punctuation gaps and
- * leading orphan periods.
+ * - "liked ," → "liked," (no space before punctuation)
+ * - "opinion,that" / "poor.They" → space after punctuation
+ * - "shoppers(FG2)" → "shoppers (FG2)"
+ * - "RegularCustomers" → "Regular Customers" (camelCase only)
+ * Glued lowercase ("Regularcustomers", "storehas") needs paragraph-level MT
+ * and/or a spacing-repair retry when the source had spaces.
  */
 export function fixTranslationSpacing(text: string): string {
   let t = text;
-  // ". displacement…" → "Displacement…"
+  // ". displacement…" → "Displacement…" (only capitalize when we stripped a lead punct)
+  const strippedLead = /^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/.test(t);
   t = t.replace(/^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/, "");
-  t = t.replace(/^([a-zà-öø-ÿā-ž])/, (ch) => ch.toUpperCase());
-  // "opinion,that" / "poor.They" → space after punct (not decimals like 3.5)
+  if (strippedLead) {
+    t = t.replace(/^([a-zà-öø-ÿā-ž])/, (ch) => ch.toUpperCase());
+  }
+  // "liked ," / "price ," → no space BEFORE punctuation
+  t = t.replace(/\s+([,.;:!?…])/g, "$1");
+  // "opinion,that" / "poor.They" → space AFTER punctuation
   t = t.replace(/([,;:!?])(?=\S)/g, "$1 ");
   t = t.replace(/(\.)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž("«„])/g, "$1 ");
-  // Collapse accidental double spaces (keep intentional newlines out — we have none)
+  // "shoppers(FG2)" / "trustinretailer(you" → space before (
+  t = t.replace(/([A-Za-zÀ-ÖØ-öø-ÿĀ-ž0-9])\(/g, "$1 (");
+  // ")and" → ") and"
+  t = t.replace(/\)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/g, ") ");
+  // CamelCase leftovers: "RegularCustomers" → "Regular Customers"
+  t = t.replace(/([a-zà-öø-ÿā-ž])([A-ZÀ-Ö])/g, "$1 $2");
   t = t.replace(/ {2,}/g, " ");
   return t;
+}
+
+/** True when source clearly had multiple words but the translation lost every space. */
+export function lostWordSpaces(source: string, translated: string): boolean {
+  const srcWords = source.trim().split(/\s+/).filter(Boolean);
+  if (srcWords.length < 2) return false;
+  const out = translated.trim();
+  if (!out || /\s/.test(out)) return false;
+  // Only short labels / cells — long prose without spaces is rare and risky to auto-fix
+  return out.length <= 80 && /[A-Za-zÀ-ÖØ-öø-ÿĀ-ž]{4,}/.test(out);
 }
 
 /**
