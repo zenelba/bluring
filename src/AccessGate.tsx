@@ -60,7 +60,7 @@ export default function AccessGate({ children }: AccessGateProps) {
     <div className="access-gate">
       <div className="access-gate__panel">
         <div className="access-gate__logo">I</div>
-        <h1 className="access-gate__title">Image Processor</h1>
+        <h1 className="access-gate__title">Content Processor</h1>
         <p className="access-gate__copy">Enter an access code to continue.</p>
         <form className="access-gate__form" onSubmit={handleSubmit}>
           <label className="access-gate__label" htmlFor="access-code">
