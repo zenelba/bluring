@@ -38,6 +38,8 @@ Access is gated behind an access code (session cookie). Server-side features (At
 - Non-English source proposes **English**; English / unknown leaves target blank until you select
 - Model picker: **GPT-4o** or **GPT-4o mini** (list prices shown); after a run, shows elapsed time + estimated USD cost from token usage
 - Translates slide-by-slide with a progress bar; prompts include deck overview + current-slide context for consistency
+- Merges PowerPoint text runs per paragraph (avoids glued words / missing spaces after punctuation from split `a:t` runs)
+- Slide range like print pages: `all` (default), `1-4`, `1-4,7`
 - Rewrites standard text placeholders (`a:t`) in place via JSZip (layout/fonts preserved). Not SmartArt deep graphs or chart-internal labels
 - Requires `OPENAI_API_KEY`; optional `OPENAI_PPTX_TRANSLATE_MODEL` (default `gpt-4o`)
 

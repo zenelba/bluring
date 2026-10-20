@@ -11,9 +11,11 @@ import {
   estimateUsd,
   extractPptxTexts,
   formatDuration,
+  formatSlideRangeLabel,
   formatUsd,
   getPptxModel,
   langLabel,
+  parseSlideRange,
   proposeTargetLang,
   translatePptxBySlides,
   translatedFileName,
@@ -86,6 +88,8 @@ export default function PptxTranslationMode(props: {
   const [file, setFile] = useState<File | null>(null);
   const [textCount, setTextCount] = useState(0);
   const [slideCount, setSlideCount] = useState(0);
+  const [maxSlideNumber, setMaxSlideNumber] = useState(0);
+  const [slideRange, setSlideRange] = useState("all");
   const [detectedLang, setDetectedLang] = useState<string | null>(null);
   const [detectConfidence, setDetectConfidence] = useState<number | null>(
     null,
@@ -227,6 +231,8 @@ export default function PptxTranslationMode(props: {
     setTargetLang("");
     setTextCount(0);
     setSlideCount(0);
+    setMaxSlideNumber(0);
+    setSlideRange("all");
     setProgress({ slideDone: 0, slideTotal: 0, slideLabel: "", percent: 0 });
     extractRef.current = null;
 
@@ -237,6 +243,7 @@ export default function PptxTranslationMode(props: {
       const slides = extracted.slides.length;
       setTextCount(count);
       setSlideCount(slides);
+      setMaxSlideNumber(extracted.maxSlideNumber);
       if (count === 0) {
         setLiveNote("No text placeholders found.");
         setError("No text placeholders found in this PPTX.");
@@ -297,16 +304,24 @@ export default function PptxTranslationMode(props: {
     }
   };
 
+  const slideRangeParsed = parseSlideRange(slideRange, maxSlideNumber || 1);
   const canTranslate =
     Boolean(file) &&
     textCount > 0 &&
     Boolean(sourceLang) &&
     Boolean(targetLang) &&
     sourceLang !== targetLang &&
-    !busy;
+    !busy &&
+    slideRangeParsed.error == null;
 
   const runTranslate = async () => {
     if (!file || !canTranslate) return;
+    const range = parseSlideRange(slideRange, maxSlideNumber || 1);
+    if (range.error) {
+      setError(range.error);
+      return;
+    }
+
     setBusy(true);
     setPhase("translate");
     setError(null);
@@ -317,53 +332,64 @@ export default function PptxTranslationMode(props: {
     let usageTotal = emptyUsage();
 
     try {
-      let extracted = extractRef.current;
-      if (!extracted || extracted.nodes.length === 0) {
-        extracted = await extractPptxTexts(file);
-        extractRef.current = extracted;
-      }
+      // Always re-read from the original file so partial ranges don't stack
+      // on a previously mutated ZIP.
+      const extracted = await extractPptxTexts(file);
+      extractRef.current = extracted;
       setSlideCount(extracted.slides.length);
+      setMaxSlideNumber(extracted.maxSlideNumber);
       setTextCount(extracted.nodes.length);
+
+      const selectedSlides = range.slides;
+      const workSlides =
+        selectedSlides == null
+          ? extracted.slides.length
+          : extracted.slides.filter((s) =>
+              selectedSlides.includes(s.slideNumber),
+            ).length;
+
       setProgress({
         slideDone: 0,
-        slideTotal: extracted.slides.length,
-        slideLabel: extracted.slides[0]?.label ?? "",
+        slideTotal: workSlides,
+        slideLabel: "",
         percent: 0,
       });
       setLiveNote(
-        `Translating slide 0 / ${extracted.slides.length}…`,
+        `Translating ${formatSlideRangeLabel(selectedSlides, extracted.maxSlideNumber)}…`,
       );
 
-      const { translations, usage } = await translatePptxBySlides({
-        extracted,
-        source: sourceLang,
-        target: targetLang,
-        model,
-        onProgress: (p) => {
-          const percent =
-            p.slideTotal === 0
-              ? 0
-              : Math.round((p.slideDone / p.slideTotal) * 100);
-          setProgress({
-            slideDone: p.slideDone,
-            slideTotal: p.slideTotal,
-            slideLabel: p.slideLabel,
-            percent,
-          });
-          setLiveNote(
-            p.slideDone >= p.slideTotal
-              ? `Translated ${p.slideTotal} slide(s)…`
-              : `Translating ${p.slideLabel} (${p.slideDone}/${p.slideTotal})…`,
-          );
-        },
-      });
+      const { units, translations, usage, slidesTranslated } =
+        await translatePptxBySlides({
+          extracted,
+          source: sourceLang,
+          target: targetLang,
+          model,
+          slideNumbers: selectedSlides,
+          onProgress: (p) => {
+            const percent =
+              p.slideTotal === 0
+                ? 0
+                : Math.round((p.slideDone / p.slideTotal) * 100);
+            setProgress({
+              slideDone: p.slideDone,
+              slideTotal: p.slideTotal,
+              slideLabel: p.slideLabel,
+              percent,
+            });
+            setLiveNote(
+              p.slideDone >= p.slideTotal
+                ? `Translated ${p.slideTotal} slide(s)…`
+                : `Translating ${p.slideLabel} (${p.slideDone}/${p.slideTotal})…`,
+            );
+          },
+        });
       usageTotal = addUsage(usageTotal, usage);
 
       setLiveNote("Rewriting PPTX…");
       const blob = await buildTranslatedPptx({
         zip: extracted.zip,
         xmlByPath: extracted.xmlByPath,
-        nodes: extracted.nodes,
+        nodes: units,
         translations,
       });
       const filename = translatedFileName(file.name, targetLang);
@@ -378,29 +404,29 @@ export default function PptxTranslationMode(props: {
         promptTokens: usageTotal.promptTokens,
         completionTokens: usageTotal.completionTokens,
         estimatedUsd: estimateUsd(model, usageTotal),
-        slideCount: extracted.slides.length,
-        textCount: extracted.nodes.length,
+        slideCount: slidesTranslated,
+        textCount: units.length,
       };
       setCostSummary(summary);
       setElapsedMs(durationMs);
       setProgress({
-        slideDone: extracted.slides.length,
-        slideTotal: extracted.slides.length,
+        slideDone: slidesTranslated,
+        slideTotal: slidesTranslated,
         slideLabel: "Done",
         percent: 100,
       });
       setLiveNote(
-        `Done in ${formatDuration(durationMs)} · ${formatUsd(summary.estimatedUsd)} · downloaded ${filename}`,
+        `Done in ${formatDuration(durationMs)} · ${formatUsd(summary.estimatedUsd)} · ${slidesTranslated} slides · downloaded ${filename}`,
       );
       logEvent(
         "pptx_translate",
-        `${sourceLang}→${targetLang} · ${model} · ${extracted.slides.length} slides · ${formatUsd(summary.estimatedUsd)}`,
+        `${sourceLang}→${targetLang} · ${model} · ${slidesTranslated} slides · ${formatUsd(summary.estimatedUsd)}`,
       );
       await persistHistory({
         fileName: file.name,
         sourceLang,
         targetLang,
-        textCount: extracted.nodes.length,
+        textCount: units.length,
         detectedLang,
         blob: file,
       });
@@ -426,6 +452,8 @@ export default function PptxTranslationMode(props: {
     setFile(null);
     setTextCount(0);
     setSlideCount(0);
+    setMaxSlideNumber(0);
+    setSlideRange("all");
     setDetectedLang(null);
     setDetectConfidence(null);
     setSourceDetectedLocked(false);
@@ -501,6 +529,31 @@ export default function PptxTranslationMode(props: {
               </span>
             </div>
           )}
+
+          <label className="osebe-field">
+            <span className="osebe-field__label">Slides to translate</span>
+            <input
+              className="osebe-input"
+              type="text"
+              value={slideRange}
+              disabled={busy || !file}
+              placeholder="all"
+              onChange={(e) => {
+                setSlideRange(e.target.value);
+                clearResult();
+              }}
+            />
+            <span className="osebe-hint">
+              Like print pages: <code>all</code>, <code>1-4</code>,{" "}
+              <code>1-4,7</code>, or <code>3,5,8</code>
+              {maxSlideNumber > 0 ? ` · deck has ${maxSlideNumber}` : ""}
+              {slideRangeParsed.error
+                ? ` · ${slideRangeParsed.error}`
+                : slideRangeParsed.slides
+                  ? ` · ${slideRangeParsed.slides.length} selected`
+                  : ""}
+            </span>
+          </label>
 
           <label className="osebe-field">
             <span className="osebe-field__label">Model (OpenAI)</span>

@@ -229,7 +229,7 @@ function buildPrompt(input: {
 
   return `Translate PowerPoint placeholder strings from ${input.source} to ${input.target}.
 
-You are translating ONE slide of a larger deck. Use the deck overview and the full slide text to keep terminology consistent and choose context-appropriate wording (domain, tone, product names).
+You are translating ONE slide of a larger deck. Each item is already a FULL paragraph (runs merged). Use the deck overview and the full slide text to keep terminology consistent.
 
 Deck overview (all slides, condensed):
 ${deck}
@@ -248,6 +248,11 @@ Rules:
 - Preserve numbers, percentages, dates, brand/product names, and URLs when appropriate.
 - Keep short labels short; do not merge, split, drop, or renumber items.
 - Empty input → empty string.
+- Spacing / punctuation (critical):
+  - Put a normal space between words (never "storehas" or "Regularcustomers").
+  - Always put a space AFTER commas, periods, colons, semicolons, and exclamation/question marks when more text follows (e.g. "opinion, that" and "poor. They" — never "opinion,that" or "poor.They").
+  - Do NOT start a translation with a stray period or comma.
+  - Start sentences with a capital letter.
 
 Items to translate:
 ${lines}`;
