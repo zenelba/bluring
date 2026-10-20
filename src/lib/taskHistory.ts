@@ -10,7 +10,8 @@ export type HistoryToolId =
   | "av"
   | "brandRemoval"
   | "textReplace"
-  | "imageSearch";
+  | "imageSearch"
+  | "pptxTranslation";
 
 export const HISTORY_TOOL_LABELS: Record<HistoryToolId, string> = {
   blur: "Logo blur",
@@ -23,6 +24,7 @@ export const HISTORY_TOOL_LABELS: Record<HistoryToolId, string> = {
   brandRemoval: "Brand removal",
   textReplace: "Text replace",
   imageSearch: "Išči slike",
+  pptxTranslation: "Powerpoint translation",
 };
 
 export const MAX_TASK_HISTORY = 10;
@@ -155,6 +157,15 @@ export type ImageSearchPayload = {
   providerChoice: "auto" | "unsplash" | "serper";
 };
 
+export type PptxTranslationPayload = {
+  kind: "pptxTranslation";
+  fileName: string;
+  sourceLang: string;
+  targetLang: string;
+  textCount: number;
+  detectedLang: string | null;
+};
+
 export type TaskPayload =
   | ImageAppPayload
   | TextReplacePayload
@@ -162,7 +173,8 @@ export type TaskPayload =
   | PortraitsPayload
   | CollagesPayload
   | AvPayload
-  | ImageSearchPayload;
+  | ImageSearchPayload
+  | PptxTranslationPayload;
 
 export type TaskRecord = TaskSummary & {
   payload: TaskPayload;
