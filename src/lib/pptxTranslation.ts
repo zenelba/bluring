@@ -115,6 +115,9 @@ const AT_TAG_RE = /<a:t((?:\s[^>]*)?)>([\s\S]*?)<\/a:t>/g;
 const PARA_RE = /<a:p(?:\s[^>]*)?>[\s\S]*?<\/a:p>/g;
 const SLIDE_PATH_RE =
   /^ppt\/(slides\/slide\d+\.xml|notesSlides\/notesSlide\d+\.xml)$/i;
+/** SmartArt text pane + rendered drawing (same a:t runs under dgm:t). */
+const DIAGRAM_PATH_RE = /^ppt\/diagrams\/(data|drawing)\d+\.xml$/i;
+const SLIDE_RELS_PATH_RE = /^ppt\/slides\/_rels\/slide(\d+)\.xml\.rels$/i;
 const DETECT_SAMPLE_MAX = 40;
 const DETECT_CHARS_MAX = 4000;
 const OVERVIEW_CHARS = 3500;
@@ -138,7 +141,8 @@ function unescapeXml(text: string): string {
 }
 
 function isPptxTextPath(path: string): boolean {
-  return SLIDE_PATH_RE.test(path.replace(/\\/g, "/"));
+  const p = path.replace(/\\/g, "/");
+  return SLIDE_PATH_RE.test(p) || DIAGRAM_PATH_RE.test(p);
 }
 
 function parseSlideNumber(path: string): number {
@@ -148,6 +152,60 @@ function parseSlideNumber(path: string): number {
 
 function isNotesPath(path: string): boolean {
   return /notesSlides\/notesSlide\d+\.xml$/i.test(path.replace(/\\/g, "/"));
+}
+
+function isDiagramPath(path: string): boolean {
+  return DIAGRAM_PATH_RE.test(path.replace(/\\/g, "/"));
+}
+
+/** Normalize relationship Target to a package path like ppt/diagrams/data1.xml */
+function normalizeDiagramTarget(target: string): string {
+  let t = target.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (t.startsWith("../diagrams/")) {
+    return `ppt/diagrams/${t.slice("../diagrams/".length)}`;
+  }
+  if (t.startsWith("/ppt/diagrams/")) {
+    return t.slice(1);
+  }
+  if (t.startsWith("ppt/diagrams/")) return t;
+  if (t.startsWith("diagrams/")) return `ppt/${t}`;
+  const base = t.split("/").pop() ?? t;
+  if (/^(data|drawing)\d+\.xml$/i.test(base)) {
+    return `ppt/diagrams/${base}`;
+  }
+  return t;
+}
+
+/**
+ * Map SmartArt diagram parts → slide number via slide *.rels.
+ * dataN.xml holds the text pane; drawingN.xml is the on-slide rendering.
+ */
+async function mapDiagramsToSlides(
+  zip: JSZip,
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  const relPaths = Object.keys(zip.files)
+    .map((p) => p.replace(/\\/g, "/"))
+    .filter((p) => SLIDE_RELS_PATH_RE.test(p));
+
+  for (const relPath of relPaths) {
+    const m = relPath.match(SLIDE_RELS_PATH_RE);
+    const slideNum = m ? Number(m[1]) : 0;
+    if (!slideNum) continue;
+    const entry = zip.file(relPath);
+    if (!entry) continue;
+    const xml = await entry.async("string");
+    const targetRe =
+      /Target="([^"]*diagrams\/(?:data|drawing)\d+\.xml)"/gi;
+    let tm: RegExpExecArray | null;
+    while ((tm = targetRe.exec(xml)) !== null) {
+      const normalized = normalizeDiagramTarget(tm[1] ?? "");
+      if (DIAGRAM_PATH_RE.test(normalized)) {
+        map.set(normalized, slideNum);
+      }
+    }
+  }
+  return map;
 }
 
 export function getPptxModel(
@@ -439,27 +497,32 @@ export function rewriteAtNodes(
 }
 
 function buildSlideGroups(nodes: PptxTextNode[]): PptxSlideGroup[] {
-  const order: string[] = [];
-  const map = new Map<string, PptxTextNode[]>();
+  // Group by slide number so slide body + notes + SmartArt share one progress step.
+  const map = new Map<number, PptxTextNode[]>();
   for (const node of nodes) {
-    if (!map.has(node.slidePath)) {
-      map.set(node.slidePath, []);
-      order.push(node.slidePath);
-    }
-    map.get(node.slidePath)!.push(node);
+    const key = node.slideNumber > 0 ? node.slideNumber : 0;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(node);
   }
-  return order.map((path) => {
-    const groupNodes = map.get(path) ?? [];
-    const slideNumber = groupNodes[0]?.slideNumber ?? parseSlideNumber(path);
-    const label = isNotesPath(path)
-      ? `Notes ${slideNumber}`
-      : `Slide ${slideNumber}`;
+  const nums = [...map.keys()].sort((a, b) => {
+    if (a === 0) return 1;
+    if (b === 0) return -1;
+    return a - b;
+  });
+  return nums.map((slideNumber) => {
+    const groupNodes = map.get(slideNumber) ?? [];
+    const hasDiagram = groupNodes.some((n) => isDiagramPath(n.slidePath));
+    const hasNotes = groupNodes.some((n) => isNotesPath(n.slidePath));
+    let label =
+      slideNumber > 0 ? `Slide ${slideNumber}` : "SmartArt (unmapped)";
+    if (slideNumber > 0 && hasDiagram) label += " + SmartArt";
+    else if (slideNumber > 0 && hasNotes) label += " + notes";
     const slideContext = clip(
       groupNodes.map((n) => n.text).join(" · "),
       SLIDE_CONTEXT_CHARS,
     );
     return {
-      slidePath: path,
+      slidePath: `slide:${slideNumber}`,
       slideNumber,
       label,
       nodes: groupNodes,
@@ -509,6 +572,7 @@ export async function extractPptxTexts(file: File): Promise<PptxExtractResult> {
 
   const xmlByPath = new Map<string, string>();
   const nodes: PptxTextNode[] = [];
+  const diagramSlideMap = await mapDiagramsToSlides(zip);
   const paths = Object.keys(zip.files)
     .map((p) => p.replace(/\\/g, "/"))
     .filter((p) => !zip.files[p]?.dir && isPptxTextPath(p))
@@ -520,7 +584,10 @@ export async function extractPptxTexts(file: File): Promise<PptxExtractResult> {
     if (!entry) continue;
     const xml = await entry.async("string");
     xmlByPath.set(path, xml);
-    const num = parseSlideNumber(path);
+    let num = parseSlideNumber(path);
+    if (!num && isDiagramPath(path)) {
+      num = diagramSlideMap.get(path) ?? 0;
+    }
     if (num > maxSlideNumber) maxSlideNumber = num;
     nodes.push(...collectAtNodes(path, xml, num));
   }
@@ -694,9 +761,13 @@ export async function translatePptxBySlides(input: {
       ? null
       : new Set(input.slideNumbers);
 
-  const slides = extracted.slides.filter((s) =>
-    allow == null ? true : allow.has(s.slideNumber),
-  );
+  const slides = extracted.slides.filter((s) => {
+    if (allow == null) return true;
+    // Unmapped SmartArt (slideNumber 0) rides along with any explicit range
+    // so we don't silently drop diagram text we couldn't place.
+    if (s.slideNumber === 0) return true;
+    return allow.has(s.slideNumber);
+  });
   if (slides.length === 0) {
     throw new Error("No slides match the selected range.");
   }

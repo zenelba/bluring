@@ -477,8 +477,8 @@ export default function PptxTranslationMode(props: {
             <h2>Powerpoint translation</h2>
             <p>
               Upload a .pptx, confirm languages, and download a deck with every
-              text placeholder translated in place. Standard frames only — not
-              SmartArt graphs or chart-internal labels.
+              text placeholder translated in place — including SmartArt. Chart
+              internal labels are still skipped.
             </p>
           </div>
 
