@@ -48,7 +48,8 @@ export type DetectLanguageResult = {
 const AT_TAG_RE = /<a:t((?:\s[^>]*)?)>([\s\S]*?)<\/a:t>/g;
 const SLIDE_PATH_RE =
   /^ppt\/(slides\/slide\d+\.xml|notesSlides\/notesSlide\d+\.xml)$/i;
-const TRANSLATE_CHUNK = 40;
+/** Smaller batches reduce model dropouts / truncated JSON. */
+const TRANSLATE_CHUNK = 20;
 const DETECT_SAMPLE_MAX = 40;
 const DETECT_CHARS_MAX = 4000;
 
