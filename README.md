@@ -40,7 +40,7 @@ Access is gated behind an access code (session cookie). Server-side features (At
 - Translates slide-by-slide with a progress bar; prompts include deck overview + current-slide context for consistency
 - Merges PowerPoint text runs per paragraph (avoids glued words / missing spaces after punctuation from split `a:t` runs)
 - Slide range like print pages: `all` (default), `1-4`, `1-4,7`
-- Rewrites standard text placeholders (`a:t`) in place via JSZip (layout/fonts preserved). Not SmartArt deep graphs or chart-internal labels
+- Rewrites text placeholders (`a:t`) in slides/notes and SmartArt (`ppt/diagrams/data*.xml` + `drawing*.xml`). Chart-internal labels are still skipped.
 - Requires `OPENAI_API_KEY`; optional `OPENAI_PPTX_TRANSLATE_MODEL` (default `gpt-4o`)
 
 ### Brand removal

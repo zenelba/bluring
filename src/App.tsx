@@ -129,7 +129,7 @@ const APP_MODES: ReadonlyArray<AppModeItem> = [
     id: "pptxTranslation",
     label: "Powerpoint translation",
     blurb:
-      "Prevodi besedila v .pptx na mestu (standardni placeholdeji; ne SmartArt / chart labels)",
+      "Prevodi besedila v .pptx na mestu (placeholdeji + SmartArt; ne chart labels)",
   },
 ];
 
