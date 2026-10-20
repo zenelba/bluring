@@ -67,6 +67,14 @@
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"
     },
+    "api/pptx-detect-language.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
+    "api/pptx-translate.ts": {
+      "maxDuration": 60,
+      "includeFiles": "api/helpers/**"
+    },
     "api/feedback-save.ts": {
       "maxDuration": 60,
       "includeFiles": "api/helpers/**"

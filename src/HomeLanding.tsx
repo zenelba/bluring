@@ -109,6 +109,14 @@ function ModeIcon({ id }: { id: string }): ReactNode {
           <rect x="11" y="11" width="6" height="4.5" rx="0.5" opacity="0.45" />
         </svg>
       );
+    case "pptxTranslation":
+      return (
+        <svg {...common}>
+          <rect x="5" y="6" width="22" height="20" rx="2" />
+          <path d="M9 12h8M9 16h14M9 20h10" />
+          <path d="M22 9l2 2-2 2" opacity="0.7" />
+        </svg>
+      );
     default:
       return (
         <svg {...common}>

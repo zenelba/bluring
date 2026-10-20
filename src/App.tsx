@@ -34,6 +34,7 @@ import AudioVideoMode from "./AudioVideoMode";
 import BrandRemovalMode from "./BrandRemovalMode";
 import TextReplaceMode from "./TextReplaceMode";
 import ImageSearchMode from "./ImageSearchMode";
+import PptxTranslationMode from "./PptxTranslationMode";
 import HomeLanding from "./HomeLanding";
 import { FeedbackLauncher } from "@zenel/user-feedback/client";
 import "@zenel/user-feedback/styles.css";
@@ -62,7 +63,8 @@ type ToolMode =
   | "av"
   | "brandRemoval"
   | "textReplace"
-  | "imageSearch";
+  | "imageSearch"
+  | "pptxTranslation";
 
 type AppMode = "home" | ToolMode;
 
@@ -122,6 +124,12 @@ const APP_MODES: ReadonlyArray<AppModeItem> = [
     id: "imageSearch",
     label: "Išči slike",
     blurb: "Brief → Unsplash poizvedbe → izrez → ZIP",
+  },
+  {
+    id: "pptxTranslation",
+    label: "Powerpoint translation",
+    blurb:
+      "Prevodi besedila v .pptx na mestu (standardni placeholdeji; ne SmartArt / chart labels)",
   },
 ];
 
@@ -1019,6 +1027,7 @@ export default function App() {
             mode !== "brandRemoval" &&
             mode !== "textReplace" &&
             mode !== "imageSearch" &&
+            mode !== "pptxTranslation" &&
             mode !== "home" && (
             <button type="button" className="btn btn--ghost" onClick={reset}>
               New image
@@ -1079,6 +1088,15 @@ export default function App() {
         <ImageSearchMode
           initialTask={
             restoreTask?.record.toolId === "imageSearch" ? restoreTask : null
+          }
+          onInitialConsumed={() => setRestoreTask(null)}
+        />
+      ) : mode === "pptxTranslation" ? (
+        <PptxTranslationMode
+          initialTask={
+            restoreTask?.record.toolId === "pptxTranslation"
+              ? restoreTask
+              : null
           }
           onInitialConsumed={() => setRestoreTask(null)}
         />

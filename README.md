@@ -32,6 +32,13 @@ Access is gated behind an access code (session cookie). Server-side features (At
 - Deduped results; pick up to N; crop/resize client-side; ZIP + `credits.txt`
 - Requires `OPENAI_API_KEY`, `UNSPLASH_ACCESS_KEY`, and `SERPER_API_KEY` (for people searches)
 
+### Powerpoint translation
+
+- Upload a `.pptx` → detect predominant source language → pick output language → download translated deck
+- Non-English source proposes **English**; English / unknown leaves target blank until you select
+- Rewrites standard text placeholders (`a:t`) in place via JSZip (layout/fonts preserved). Not SmartArt deep graphs or chart-internal labels
+- Requires `OPENAI_API_KEY`; optional `OPENAI_PPTX_TRANSLATE_MODEL` (default `gpt-4o`)
+
 ### Brand removal
 
 - Upload images or ZIP (JPG, PNG, WEBP)
@@ -105,11 +112,12 @@ Copy `.env.example` → `.env.local` and fill in values as needed.
 | `SONIOX_LANGUAGE` | Optional | Language hint (default `sl`) |
 | `SONIOX_SPEAKER_DIARIZATION` | Optional | `true` / `false` (default `true`) |
 | `SONIOX_API_BASE_URL` | Optional | Default `https://api.soniox.com` |
-| `OPENAI_API_KEY` | Brand removal, Text replace, Išči slike | Vision / chat / query suggestions |
+| `OPENAI_API_KEY` | Brand removal, Text replace, Išči slike, Powerpoint translation | Vision / chat / query suggestions / translate |
 | `OPENAI_BASE_URL` | Optional | OpenAI-compatible API base |
 | `OPENAI_BRAND_VISION_MODEL` | Optional | 2D/3D classify (default `gpt-4o-mini`) |
 | `OPENAI_BRAND_IMAGE_MODEL` | Optional | Brand edit model (default `gpt-image-1`) |
 | `OPENAI_IMAGE_SEARCH_MODEL` | Optional | Query propose for Išči slike (default `gpt-4o-mini`) |
+| `OPENAI_PPTX_TRANSLATE_MODEL` | Optional | PPTX detect + translate (default `gpt-4o`) |
 | `UNSPLASH_ACCESS_KEY` | Išči slike | Unsplash API access key (non-people) |
 | `SERPER_API_KEY` | Išči slike (osebe) | [Serper](https://serper.dev) Google Images key |
 | `GOOGLE_CLOUD_VISION_API_KEY` | Text replace | OCR geometry |
