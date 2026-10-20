@@ -1,5 +1,8 @@
 /**
  * Batch-translate PPTX placeholder strings via OpenAI.
+ *
+ * Uses indexed items so a short model reply can be completed with a
+ * follow-up pass instead of failing the whole deck.
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
@@ -26,6 +29,164 @@ function asStringArray(raw: unknown, max = 60): string[] {
 function normalizeLang(raw: unknown): string {
   if (typeof raw !== "string") return "";
   return raw.trim().toLowerCase().slice(0, 8);
+}
+
+type ChatResult = {
+  ok: boolean;
+  status: number;
+  content: string;
+  finishReason: string | null;
+  error: string | null;
+};
+
+async function chatJson(input: {
+  openAiKey: string;
+  prompt: string;
+  maxTokens: number;
+}): Promise<ChatResult> {
+  const upstream = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.openAiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: translateModel(),
+      response_format: { type: "json_object" },
+      messages: [{ role: "user", content: input.prompt }],
+      max_tokens: input.maxTokens,
+      temperature: 0.1,
+    }),
+  });
+
+  const data = (await upstream.json().catch(() => ({}))) as {
+    choices?: Array<{
+      message?: { content?: string };
+      finish_reason?: string;
+    }>;
+    error?: { message?: string };
+  };
+
+  if (!upstream.ok) {
+    return {
+      ok: false,
+      status: upstream.status,
+      content: "",
+      finishReason: null,
+      error: data.error?.message || `OpenAI error (${upstream.status})`,
+    };
+  }
+
+  return {
+    ok: true,
+    status: upstream.status,
+    content: data.choices?.[0]?.message?.content ?? "{}",
+    finishReason: data.choices?.[0]?.finish_reason ?? null,
+    error: null,
+  };
+}
+
+/** Accept either string[] or [{i,text}] / map keyed by index. */
+function parseTranslations(
+  raw: string,
+  expected: number,
+): { byIndex: Map<number, string>; parseError: string | null } {
+  const byIndex = new Map<number, string>();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { byIndex, parseError: "Model returned invalid JSON" };
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return { byIndex, parseError: "Model returned empty JSON" };
+  }
+
+  const obj = parsed as {
+    translations?: unknown;
+    items?: unknown;
+  };
+
+  if (Array.isArray(obj.items)) {
+    for (const row of obj.items) {
+      if (!row || typeof row !== "object") continue;
+      const r = row as { i?: unknown; index?: unknown; text?: unknown; t?: unknown };
+      const iRaw = r.i ?? r.index;
+      const i = typeof iRaw === "number" ? iRaw : Number(iRaw);
+      if (!Number.isInteger(i) || i < 0 || i >= expected) continue;
+      const text = r.text ?? r.t;
+      byIndex.set(i, typeof text === "string" ? text : text == null ? "" : String(text));
+    }
+  }
+
+  if (Array.isArray(obj.translations)) {
+    obj.translations.forEach((t, i) => {
+      if (i >= expected) return;
+      if (byIndex.has(i)) return;
+      byIndex.set(i, typeof t === "string" ? t : t == null ? "" : String(t));
+    });
+  } else if (
+    obj.translations &&
+    typeof obj.translations === "object" &&
+    !Array.isArray(obj.translations)
+  ) {
+    for (const [key, val] of Object.entries(
+      obj.translations as Record<string, unknown>,
+    )) {
+      const i = Number(key);
+      if (!Number.isInteger(i) || i < 0 || i >= expected) continue;
+      byIndex.set(
+        i,
+        typeof val === "string" ? val : val == null ? "" : String(val),
+      );
+    }
+  }
+
+  return { byIndex, parseError: null };
+}
+
+function missingIndices(byIndex: Map<number, string>, expected: number): number[] {
+  const missing: number[] = [];
+  for (let i = 0; i < expected; i++) {
+    if (!byIndex.has(i)) missing.push(i);
+  }
+  return missing;
+}
+
+function buildPrompt(input: {
+  source: string;
+  target: string;
+  texts: string[];
+  indices?: number[];
+}): string {
+  const indices =
+    input.indices ?? input.texts.map((_, i) => i);
+  const lines = indices
+    .map((i) => `${i}: ${JSON.stringify(input.texts[i] ?? "")}`)
+    .join("\n");
+  const count = indices.length;
+
+  return `Translate PowerPoint placeholder strings from ${input.source} to ${input.target}.
+
+Return JSON only in this exact shape:
+{ "items": [ { "i": number, "text": string }, ... ] }
+
+Rules:
+- Return exactly ${count} objects in "items".
+- Each "i" must be one of these indices: ${indices.join(", ")}.
+- Each "text" is the translation of that index (1:1, same meaning).
+- Preserve numbers, percentages, dates, brand/product names, and URLs when appropriate.
+- Keep short labels short; do not merge, split, drop, or renumber items.
+- Empty input → empty string.
+
+Items:
+${lines}`;
+}
+
+function tokenBudget(itemCount: number): number {
+  // Generous budget — truncation was a likely cause of short arrays.
+  return Math.min(12000, 400 + itemCount * 180);
 }
 
 export default async function handler(
@@ -85,75 +246,52 @@ export default async function handler(
     return;
   }
 
-  const numbered = texts
-    .map((t, i) => `${i + 1}. ${JSON.stringify(t)}`)
-    .join("\n");
-
-  const prompt = `Translate PowerPoint placeholder strings from ${source} to ${target}.
-
-Return JSON only:
-{ "translations": string[] }
-
-Rules:
-- translations.length MUST equal ${texts.length} (same order, 1:1).
-- Preserve meaning; keep numbers, percentages, dates, brand/product names, and URLs unchanged when appropriate.
-- Keep short labels short; do not add explanations.
-- Do not merge or split items.
-- Empty input stays empty string.
-
-Items:
-${numbered}`;
-
   try {
-    const upstream = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openAiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: translateModel(),
-        response_format: { type: "json_object" },
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: Math.min(8000, 200 + texts.length * 120),
-        temperature: 0.2,
-      }),
+    const byIndex = new Map<number, string>();
+
+    const first = await chatJson({
+      openAiKey,
+      prompt: buildPrompt({ source, target, texts }),
+      maxTokens: tokenBudget(texts.length),
     });
+    if (!first.ok) {
+      res.status(502).json({ error: first.error });
+      return;
+    }
 
-    const data = (await upstream.json().catch(() => ({}))) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      error?: { message?: string };
-    };
+    const parsed = parseTranslations(first.content, texts.length);
+    if (parsed.parseError) {
+      res.status(502).json({ error: parsed.parseError });
+      return;
+    }
+    for (const [i, t] of parsed.byIndex) byIndex.set(i, t);
 
-    if (!upstream.ok) {
-      res.status(502).json({
-        error: data.error?.message || `OpenAI error (${upstream.status})`,
+    let missing = missingIndices(byIndex, texts.length);
+
+    // Second pass: only the dropped indices (common when model skips one).
+    if (missing.length > 0 && missing.length < texts.length) {
+      const retry = await chatJson({
+        openAiKey,
+        prompt: buildPrompt({ source, target, texts, indices: missing }),
+        maxTokens: tokenBudget(missing.length),
       });
-      return;
+      if (retry.ok) {
+        const again = parseTranslations(retry.content, texts.length);
+        for (const [i, t] of again.byIndex) {
+          if (missing.includes(i)) byIndex.set(i, t);
+        }
+        missing = missingIndices(byIndex, texts.length);
+      }
     }
 
-    const raw = data.choices?.[0]?.message?.content ?? "{}";
-    let parsed: { translations?: unknown } = {};
-    try {
-      parsed = JSON.parse(raw) as { translations?: unknown };
-    } catch {
-      res.status(502).json({ error: "Model returned invalid JSON" });
-      return;
+    // Last resort: keep original for any still-missing slots so the deck still exports.
+    if (missing.length > 0) {
+      for (const i of missing) {
+        byIndex.set(i, texts[i] ?? "");
+      }
     }
 
-    const translations = Array.isArray(parsed.translations)
-      ? parsed.translations.map((t) =>
-          typeof t === "string" ? t : t == null ? "" : String(t),
-        )
-      : [];
-
-    if (translations.length !== texts.length) {
-      res.status(502).json({
-        error: `Translation length mismatch (got ${translations.length}, expected ${texts.length})`,
-      });
-      return;
-    }
-
+    const translations = texts.map((_, i) => byIndex.get(i) ?? texts[i] ?? "");
     res.status(200).json({ translations });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Translate failed";
