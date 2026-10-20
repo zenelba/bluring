@@ -989,7 +989,7 @@ export default function App() {
             onClick={() => setMode("home")}
             aria-label="Home"
           >
-            <h1 className="app-top__title">Image Processor</h1>
+            <h1 className="app-top__title">Content Processor</h1>
           </button>
           <p className="app-top__sub">{modeSubtitle(mode)}</p>
         </div>
