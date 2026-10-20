@@ -1,6 +1,11 @@
 /**
- * PPTX round-trip: extract a:t runs via JSZip, detect/translate via OpenAI APIs,
- * rewrite in place and download. Translates per-slide with deck/slide context.
+ * PPTX round-trip: extract text via JSZip, detect/translate via OpenAI APIs,
+ * rewrite in place and download.
+ *
+ * Important: PowerPoint splits words across many <a:t> runs (often with a leading
+ * space on the next run). Translating each run alone drops those spaces
+ * ("trgovina"+" je" → "store"+"has" → "storehas"). We therefore translate one
+ * <a:p> paragraph at a time and write the full result into the first run.
  */
 
 import { saveAs } from "file-saver";
@@ -30,11 +35,8 @@ export type PptxTranslateModelId = "gpt-4o" | "gpt-4o-mini";
 export type PptxModelOption = {
   id: PptxTranslateModelId;
   label: string;
-  /** USD per 1M input tokens (OpenAI list price, approx.) */
   inputPer1M: number;
-  /** USD per 1M output tokens */
   outputPer1M: number;
-  /** Short price line shown in the picker */
   priceLabel: string;
 };
 
@@ -72,13 +74,15 @@ export type TranslateCostSummary = {
   textCount: number;
 };
 
+/** One translatable paragraph (merged a:t runs inside a single a:p). */
 export type PptxTextNode = {
-  /** Path inside the ZIP, e.g. ppt/slides/slide1.xml */
   slidePath: string;
-  /** 1-based slide number for UI (notes share the linked slide number when possible) */
   slideNumber: number;
-  /** 0-based index among all a:t nodes in that file (including empty skipped later) */
-  nodeIndex: number;
+  /** File-global indices of every a:t in this paragraph */
+  nodeIndices: number[];
+  /** a:t that receives the full translated paragraph */
+  primaryNodeIndex: number;
+  /** Concatenated source text (spaces preserved) */
   text: string;
 };
 
@@ -87,19 +91,17 @@ export type PptxSlideGroup = {
   slideNumber: number;
   label: string;
   nodes: PptxTextNode[];
-  /** Full concatenated slide text for prompt context */
   slideContext: string;
 };
 
 export type PptxExtractResult = {
   zip: JSZip;
-  /** Original XML per path (for rewrite) */
   xmlByPath: Map<string, string>;
-  /** Non-empty text runs with stable ids */
+  /** Paragraph units (not raw a:t runs) */
   nodes: PptxTextNode[];
-  /** Slides (and notes) that contain text, in order */
   slides: PptxSlideGroup[];
-  /** Compact overview of the whole deck for prompts */
+  /** Highest slide number present (for range UI) */
+  maxSlideNumber: number;
   deckOverview: string;
 };
 
@@ -110,6 +112,7 @@ export type DetectLanguageResult = {
 };
 
 const AT_TAG_RE = /<a:t((?:\s[^>]*)?)>([\s\S]*?)<\/a:t>/g;
+const PARA_RE = /<a:p(?:\s[^>]*)?>[\s\S]*?<\/a:p>/g;
 const SLIDE_PATH_RE =
   /^ppt\/(slides\/slide\d+\.xml|notesSlides\/notesSlide\d+\.xml)$/i;
 const DETECT_SAMPLE_MAX = 40;
@@ -215,40 +218,223 @@ function clip(text: string, max: number): string {
   return `${t.slice(0, Math.max(0, max - 1))}…`;
 }
 
-/** Collect non-empty a:t runs from slide / notes XML in document order. */
+type AtHit = {
+  nodeIndex: number;
+  start: number;
+  text: string;
+};
+
+/**
+ * Repair common MT spacing glitches as a safety net after paragraph translate.
+ * - "liked ," → "liked," (no space before punctuation)
+ * - "opinion,that" / "poor.They" → space after punctuation
+ * - "shoppers(FG2)" → "shoppers (FG2)"
+ * - "RegularCustomers" → "Regular Customers" (camelCase only)
+ * Glued lowercase ("Regularcustomers", "storehas") needs paragraph-level MT
+ * and/or a spacing-repair retry when the source had spaces.
+ */
+export function fixTranslationSpacing(text: string): string {
+  let t = text;
+  // ". displacement…" → "Displacement…" (only capitalize when we stripped a lead punct)
+  const strippedLead = /^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/.test(t);
+  t = t.replace(/^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/, "");
+  if (strippedLead) {
+    t = t.replace(/^([a-zà-öø-ÿā-ž])/, (ch) => ch.toUpperCase());
+  }
+  // "liked ," / "price ," → no space BEFORE punctuation
+  t = t.replace(/\s+([,.;:!?…])/g, "$1");
+  // "opinion,that" / "poor.They" → space AFTER punctuation
+  t = t.replace(/([,;:!?])(?=\S)/g, "$1 ");
+  t = t.replace(/(\.)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž("«„])/g, "$1 ");
+  // "shoppers(FG2)" / "trustinretailer(you" → space before (
+  t = t.replace(/([A-Za-zÀ-ÖØ-öø-ÿĀ-ž0-9])\(/g, "$1 (");
+  // ")and" → ") and"
+  t = t.replace(/\)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/g, ") ");
+  // CamelCase leftovers: "RegularCustomers" → "Regular Customers"
+  t = t.replace(/([a-zà-öø-ÿā-ž])([A-ZÀ-Ö])/g, "$1 $2");
+  t = t.replace(/ {2,}/g, " ");
+  return t;
+}
+
+/** True when source clearly had multiple words but the translation lost every space. */
+export function lostWordSpaces(source: string, translated: string): boolean {
+  const srcWords = source.trim().split(/\s+/).filter(Boolean);
+  if (srcWords.length < 2) return false;
+  const out = translated.trim();
+  if (!out || /\s/.test(out)) return false;
+  // Only short labels / cells — long prose without spaces is rare and risky to auto-fix
+  return out.length <= 80 && /[A-Za-zÀ-ÖØ-öø-ÿĀ-ž]{4,}/.test(out);
+}
+
+/**
+ * Parse print-style slide ranges: "all", "", "1-4,7", "3", "1,3-5".
+ * Returns sorted unique 1-based slide numbers, or null = all slides.
+ */
+export function parseSlideRange(
+  raw: string,
+  maxSlide: number,
+): { slides: number[] | null; error: string | null } {
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed || trimmed === "all" || trimmed === "*") {
+    return { slides: null, error: null };
+  }
+  if (maxSlide < 1) {
+    return { slides: null, error: null };
+  }
+
+  const selected = new Set<number>();
+  const parts = trimmed.split(/[,;\s]+/).filter(Boolean);
+  for (const part of parts) {
+    const range = part.match(/^(\d+)\s*[-–—]\s*(\d+)$/);
+    if (range) {
+      let a = Number(range[1]);
+      let b = Number(range[2]);
+      if (!Number.isInteger(a) || !Number.isInteger(b)) {
+        return { slides: null, error: `Invalid range: ${part}` };
+      }
+      if (a > b) [a, b] = [b, a];
+      if (a < 1 || b > maxSlide) {
+        return {
+          slides: null,
+          error: `Slides must be between 1 and ${maxSlide}`,
+        };
+      }
+      for (let n = a; n <= b; n++) selected.add(n);
+      continue;
+    }
+    if (/^\d+$/.test(part)) {
+      const n = Number(part);
+      if (n < 1 || n > maxSlide) {
+        return {
+          slides: null,
+          error: `Slides must be between 1 and ${maxSlide}`,
+        };
+      }
+      selected.add(n);
+      continue;
+    }
+    return {
+      slides: null,
+      error: `Invalid slide list "${part}". Use e.g. all or 1-4,7`,
+    };
+  }
+
+  if (selected.size === 0) {
+    return { slides: null, error: "No slides selected" };
+  }
+  return { slides: [...selected].sort((a, b) => a - b), error: null };
+}
+
+export function formatSlideRangeLabel(
+  selected: number[] | null,
+  maxSlide: number,
+): string {
+  if (selected == null) {
+    return maxSlide > 0 ? `all (${maxSlide})` : "all";
+  }
+  return selected.join(", ");
+}
+
+/** Collect paragraph units: merge all a:t inside each a:p. */
 export function collectAtNodes(
   slidePath: string,
   xml: string,
   slideNumber: number,
 ): PptxTextNode[] {
-  const nodes: PptxTextNode[] = [];
-  const re = new RegExp(AT_TAG_RE.source, "g");
+  const hits: AtHit[] = [];
+  const atRe = new RegExp(AT_TAG_RE.source, "g");
   let match: RegExpExecArray | null;
   let nodeIndex = 0;
-  while ((match = re.exec(xml)) !== null) {
-    const raw = match[2] ?? "";
-    const text = unescapeXml(raw);
-    if (text.trim().length > 0) {
-      nodes.push({ slidePath, slideNumber, nodeIndex, text });
-    }
+  while ((match = atRe.exec(xml)) !== null) {
+    hits.push({
+      nodeIndex,
+      start: match.index,
+      text: unescapeXml(match[2] ?? ""),
+    });
     nodeIndex += 1;
   }
-  return nodes;
+
+  const paraRanges: Array<{ start: number; end: number }> = [];
+  const paraRe = new RegExp(PARA_RE.source, "g");
+  let pm: RegExpExecArray | null;
+  while ((pm = paraRe.exec(xml)) !== null) {
+    paraRanges.push({ start: pm.index, end: pm.index + pm[0].length });
+  }
+
+  const grouped = new Map<number, AtHit[]>(); // paraIdx → hits; -1 = orphan
+  const orphanKey = -1;
+
+  for (const hit of hits) {
+    let paraIdx = orphanKey;
+    for (let i = 0; i < paraRanges.length; i++) {
+      const r = paraRanges[i];
+      if (hit.start >= r.start && hit.start < r.end) {
+        paraIdx = i;
+        break;
+      }
+    }
+    if (!grouped.has(paraIdx)) grouped.set(paraIdx, []);
+    grouped.get(paraIdx)!.push(hit);
+  }
+
+  const units: PptxTextNode[] = [];
+  const keys = [...grouped.keys()].sort((a, b) => {
+    if (a === orphanKey) return 1;
+    if (b === orphanKey) return -1;
+    return a - b;
+  });
+
+  for (const key of keys) {
+    const group = grouped.get(key) ?? [];
+    if (group.length === 0) continue;
+    const text = group.map((h) => h.text).join("");
+    if (!text.trim()) continue;
+    const primary =
+      group.find((h) => h.text.trim().length > 0)?.nodeIndex ??
+      group[0].nodeIndex;
+    units.push({
+      slidePath,
+      slideNumber,
+      nodeIndices: group.map((h) => h.nodeIndex),
+      primaryNodeIndex: primary,
+      text,
+    });
+  }
+
+  return units;
 }
 
-/** Apply 1:1 replacements for non-empty nodes keyed by nodeIndex. */
+/**
+ * Apply paragraph translations: primary a:t gets full text; sibling runs cleared.
+ * `replacements` maps primaryNodeIndex → translated paragraph text.
+ * `clearIndices` lists every other a:t in translated paragraphs.
+ */
 export function rewriteAtNodes(
   xml: string,
   replacements: Map<number, string>,
+  clearIndices?: Set<number>,
 ): string {
   const re = new RegExp(AT_TAG_RE.source, "g");
   let nodeIndex = 0;
   return xml.replace(re, (full, attrs: string, _content: string) => {
     const idx = nodeIndex;
     nodeIndex += 1;
-    if (!replacements.has(idx)) return full;
-    const next = replacements.get(idx) ?? "";
-    return `<a:t${attrs}>${escapeXml(next)}</a:t>`;
+    if (replacements.has(idx)) {
+      const next = replacements.get(idx) ?? "";
+      // Keep xml:space=preserve when writing non-empty text with edges spaces
+      let nextAttrs = attrs ?? "";
+      if (
+        (next.startsWith(" ") || next.endsWith(" ")) &&
+        !/\sxml:space=/.test(nextAttrs)
+      ) {
+        nextAttrs = `${nextAttrs} xml:space="preserve"`;
+      }
+      return `<a:t${nextAttrs}>${escapeXml(next)}</a:t>`;
+    }
+    if (clearIndices?.has(idx)) {
+      return `<a:t${attrs}></a:t>`;
+    }
+    return full;
   });
 }
 
@@ -328,18 +514,21 @@ export async function extractPptxTexts(file: File): Promise<PptxExtractResult> {
     .filter((p) => !zip.files[p]?.dir && isPptxTextPath(p))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
+  let maxSlideNumber = 0;
   for (const path of paths) {
     const entry = zip.file(path);
     if (!entry) continue;
     const xml = await entry.async("string");
     xmlByPath.set(path, xml);
-    nodes.push(...collectAtNodes(path, xml, parseSlideNumber(path)));
+    const num = parseSlideNumber(path);
+    if (num > maxSlideNumber) maxSlideNumber = num;
+    nodes.push(...collectAtNodes(path, xml, num));
   }
 
   const slides = buildSlideGroups(nodes);
   const deckOverview = buildDeckOverview(slides);
 
-  return { zip, xmlByPath, nodes, slides, deckOverview };
+  return { zip, xmlByPath, nodes, slides, maxSlideNumber, deckOverview };
 }
 
 export function sampleTextsForDetect(texts: string[]): string[] {
@@ -354,11 +543,6 @@ export function sampleTextsForDetect(texts: string[]): string[] {
   return sample;
 }
 
-/**
- * Language UX from the plan:
- * - non-English detected → propose English
- * - English or unknown → leave target blank (user must pick)
- */
 export function proposeTargetLang(
   detected: string | null,
 ): PptxLangCode | "" {
@@ -444,7 +628,6 @@ export type TranslateSlideProgress = {
   textTotal: number;
 };
 
-/** Translate one slide (or chunk of a large slide) with deck + slide context. */
 async function translateSlideChunk(input: {
   texts: string[];
   source: string;
@@ -480,38 +663,59 @@ async function translateSlideChunk(input: {
   }
   return {
     translations: translations.map((t) =>
-      typeof t === "string" ? t : String(t ?? ""),
+      fixTranslationSpacing(typeof t === "string" ? t : String(t ?? "")),
     ),
     usage: normalizeUsage(data.usage),
   };
 }
 
 /**
- * Translate all placeholder texts slide-by-slide so progress and context
- * stay aligned with the deck structure.
+ * Translate selected slides paragraph-by-paragraph.
+ * @param slideNumbers null = all slides
  */
 export async function translatePptxBySlides(input: {
   extracted: PptxExtractResult;
   source: string;
   target: string;
   model: PptxTranslateModelId;
+  /** 1-based slide numbers; null = all */
+  slideNumbers?: number[] | null;
   onProgress?: (progress: TranslateSlideProgress) => void;
-}): Promise<{ translations: string[]; usage: TokenUsage }> {
+}): Promise<{
+  /** Map primaryNodeIndex → text, plus clears, keyed per path built in buildTranslatedPptx */
+  units: PptxTextNode[];
+  translations: string[];
+  usage: TokenUsage;
+  slidesTranslated: number;
+}> {
   const { extracted, source, target, model, onProgress } = input;
-  const translations = new Array<string>(extracted.nodes.length);
+  const allow =
+    input.slideNumbers == null
+      ? null
+      : new Set(input.slideNumbers);
+
+  const slides = extracted.slides.filter((s) =>
+    allow == null ? true : allow.has(s.slideNumber),
+  );
+  if (slides.length === 0) {
+    throw new Error("No slides match the selected range.");
+  }
+
+  const units = slides.flatMap((s) => s.nodes);
+  const translations = new Array<string>(units.length);
   let usage = emptyUsage();
   let textDone = 0;
-  const textTotal = extracted.nodes.length;
-  const slideTotal = extracted.slides.length;
+  const textTotal = units.length;
+  const slideTotal = slides.length;
 
-  // Global index lookup: node identity → position in extracted.nodes
+  // Identity → index in units array
   const indexOf = new Map<string, number>();
-  extracted.nodes.forEach((n, i) => {
-    indexOf.set(`${n.slidePath}#${n.nodeIndex}`, i);
+  units.forEach((n, i) => {
+    indexOf.set(`${n.slidePath}#${n.primaryNodeIndex}`, i);
   });
 
-  for (let s = 0; s < extracted.slides.length; s++) {
-    const slide = extracted.slides[s];
+  for (let s = 0; s < slides.length; s++) {
+    const slide = slides[s];
     onProgress?.({
       slideDone: s,
       slideTotal,
@@ -521,8 +725,7 @@ export async function translatePptxBySlides(input: {
     });
 
     const texts = slide.nodes.map((n) => n.text);
-    // Chunk oversized slides to keep responses reliable
-    const CHUNK = 25;
+    const CHUNK = 20;
     const slideTranslations: string[] = [];
     for (let i = 0; i < texts.length; i += CHUNK) {
       const chunk = texts.slice(i, i + CHUNK);
@@ -540,7 +743,7 @@ export async function translatePptxBySlides(input: {
     }
 
     slide.nodes.forEach((node, i) => {
-      const global = indexOf.get(`${node.slidePath}#${node.nodeIndex}`);
+      const global = indexOf.get(`${node.slidePath}#${node.primaryNodeIndex}`);
       if (global != null) {
         translations[global] = slideTranslations[i] ?? node.text;
       }
@@ -555,12 +758,16 @@ export async function translatePptxBySlides(input: {
     });
   }
 
-  // Safety: fill any holes with originals
   for (let i = 0; i < translations.length; i++) {
-    if (translations[i] == null) translations[i] = extracted.nodes[i]?.text ?? "";
+    if (translations[i] == null) translations[i] = units[i]?.text ?? "";
   }
 
-  return { translations, usage };
+  return {
+    units,
+    translations,
+    usage,
+    slidesTranslated: slides.length,
+  };
 }
 
 export async function buildTranslatedPptx(input: {
@@ -576,20 +783,30 @@ export async function buildTranslatedPptx(input: {
     );
   }
 
-  const byPath = new Map<string, Map<number, string>>();
+  const byPath = new Map<
+    string,
+    { replacements: Map<number, string>; clear: Set<number> }
+  >();
+
   nodes.forEach((node, i) => {
-    let map = byPath.get(node.slidePath);
-    if (!map) {
-      map = new Map();
-      byPath.set(node.slidePath, map);
+    let entry = byPath.get(node.slidePath);
+    if (!entry) {
+      entry = { replacements: new Map(), clear: new Set() };
+      byPath.set(node.slidePath, entry);
     }
-    map.set(node.nodeIndex, translations[i] ?? node.text);
+    entry.replacements.set(
+      node.primaryNodeIndex,
+      translations[i] ?? node.text,
+    );
+    for (const idx of node.nodeIndices) {
+      if (idx !== node.primaryNodeIndex) entry.clear.add(idx);
+    }
   });
 
-  for (const [path, replacements] of byPath) {
+  for (const [path, { replacements, clear }] of byPath) {
     const original = xmlByPath.get(path);
     if (original == null) continue;
-    const next = rewriteAtNodes(original, replacements);
+    const next = rewriteAtNodes(original, replacements, clear);
     zip.file(path, next);
   }
 

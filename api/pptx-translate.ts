@@ -229,7 +229,7 @@ function buildPrompt(input: {
 
   return `Translate PowerPoint placeholder strings from ${input.source} to ${input.target}.
 
-You are translating ONE slide of a larger deck. Use the deck overview and the full slide text to keep terminology consistent and choose context-appropriate wording (domain, tone, product names).
+You are translating ONE slide of a larger deck. Each item is already a FULL paragraph (runs merged). Use the deck overview and the full slide text to keep terminology consistent.
 
 Deck overview (all slides, condensed):
 ${deck}
@@ -248,8 +248,66 @@ Rules:
 - Preserve numbers, percentages, dates, brand/product names, and URLs when appropriate.
 - Keep short labels short; do not merge, split, drop, or renumber items.
 - Empty input → empty string.
+- Spacing / punctuation (critical):
+  - Put a normal space between words (never "storehas", "Regularcustomers", "withgeneral").
+  - If the source has multiple words, the translation MUST also separate words with spaces.
+  - Always put a space AFTER commas, periods, colons, semicolons when more text follows ("opinion, that", "poor. They").
+  - NEVER put a space BEFORE punctuation ("liked," not "liked ,"; "price," not "price ,").
+  - Put a space before "(" when needed: "shoppers (FG2)" not "shoppers(FG2)".
+  - Do NOT start a translation with a stray period or comma.
+  - Start sentences with a capital letter.
 
 Items to translate:
+${lines}`;
+}
+
+/** Mirror of client fixTranslationSpacing — keep punctuation tidy before return. */
+function fixTranslationSpacing(text: string): string {
+  let t = text;
+  const strippedLead = /^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/.test(t);
+  t = t.replace(/^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/, "");
+  if (strippedLead) {
+    t = t.replace(/^([a-zà-öø-ÿā-ž])/, (ch) => ch.toUpperCase());
+  }
+  t = t.replace(/\s+([,.;:!?…])/g, "$1");
+  t = t.replace(/([,;:!?])(?=\S)/g, "$1 ");
+  t = t.replace(/(\.)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž("«„])/g, "$1 ");
+  t = t.replace(/([A-Za-zÀ-ÖØ-öø-ÿĀ-ž0-9])\(/g, "$1 (");
+  t = t.replace(/\)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/g, ") ");
+  t = t.replace(/([a-zà-öø-ÿā-ž])([A-ZÀ-Ö])/g, "$1 $2");
+  t = t.replace(/ {2,}/g, " ");
+  return t;
+}
+
+function lostWordSpaces(source: string, translated: string): boolean {
+  const srcWords = source.trim().split(/\s+/).filter(Boolean);
+  if (srcWords.length < 2) return false;
+  const out = translated.trim();
+  if (!out || /\s/.test(out)) return false;
+  return out.length <= 80 && /[A-Za-zÀ-ÖØ-öø-ÿĀ-ž]{4,}/.test(out);
+}
+
+function buildSpacingRepairPrompt(input: {
+  source: string;
+  target: string;
+  texts: string[];
+  bad: Array<{ i: number; source: string; bad: string }>;
+}): string {
+  const lines = input.bad
+    .map(
+      (b) =>
+        `${b.i}: source=${JSON.stringify(b.source)} bad=${JSON.stringify(b.bad)}`,
+    )
+    .join("\n");
+  return `Fix spacing in these ${input.source}→${input.target} PowerPoint translations.
+
+Each "bad" string lost word spaces (e.g. "Regularcustomers" should be "Regular customers").
+Return JSON only: { "items": [ { "i": number, "text": string }, ... ] }
+Rules:
+- Same meaning as "bad", only insert missing spaces between words.
+- No space before punctuation; space after punctuation when text continues.
+- Return exactly ${input.bad.length} items with these indices: ${input.bad.map((b) => b.i).join(", ")}.
+
 ${lines}`;
 }
 
@@ -395,6 +453,44 @@ export default async function handler(
     if (missing.length > 0) {
       for (const i of missing) {
         byIndex.set(i, texts[i] ?? "");
+      }
+    }
+
+    // Local punctuation tidy first
+    for (const [i, t] of byIndex) {
+      byIndex.set(i, fixTranslationSpacing(t));
+    }
+
+    // Retry short multi-word sources that came back as a single glued token
+    const glued = texts
+      .map((src, i) => ({
+        i,
+        source: src,
+        bad: byIndex.get(i) ?? "",
+      }))
+      .filter((row) => lostWordSpaces(row.source, row.bad));
+
+    if (glued.length > 0) {
+      const repair = await chatJson({
+        openAiKey,
+        model,
+        prompt: buildSpacingRepairPrompt({
+          source,
+          target,
+          texts,
+          bad: glued,
+        }),
+        maxTokens: tokenBudget(glued.length),
+      });
+      if (repair.ok) {
+        usage = addUsage(usage, repair.usage);
+        const again = parseTranslations(repair.content, texts.length);
+        for (const row of glued) {
+          const fixed = again.byIndex.get(row.i);
+          if (typeof fixed === "string" && fixed.trim()) {
+            byIndex.set(row.i, fixTranslationSpacing(fixed));
+          }
+        }
       }
     }
 
