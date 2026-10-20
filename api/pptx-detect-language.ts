@@ -9,9 +9,20 @@ import {
 } from "./helpers/openaiEnv.js";
 import { ensureProjectEnv } from "./helpers/loadEnv.js";
 
-function translateModel(): string {
+const ALLOWED_MODELS = new Set(["gpt-4o", "gpt-4o-mini"]);
+
+function defaultModel(): string {
   ensureProjectEnv();
   return process.env.OPENAI_PPTX_TRANSLATE_MODEL?.trim() || "gpt-4o";
+}
+
+function resolveModel(raw: unknown): string {
+  if (typeof raw === "string") {
+    const id = raw.trim();
+    if (ALLOWED_MODELS.has(id)) return id;
+  }
+  const fallback = defaultModel();
+  return ALLOWED_MODELS.has(fallback) ? fallback : "gpt-4o";
 }
 
 function asStringArray(raw: unknown, max = 80): string[] {
@@ -27,7 +38,7 @@ export default async function handler(
   req: {
     method?: string;
     headers?: { cookie?: string | string[] };
-    body?: { texts?: unknown };
+    body?: { texts?: unknown; model?: unknown };
   },
   res: {
     status: (code: number) => { json: (body: unknown) => void };
@@ -65,6 +76,8 @@ export default async function handler(
     return;
   }
 
+  const model = resolveModel(req.body?.model);
+
   const sample = texts
     .slice(0, 40)
     .map((t, i) => `${i + 1}. ${t.slice(0, 200)}`)
@@ -92,7 +105,7 @@ ${sample}`;
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: translateModel(),
+        model,
         response_format: { type: "json_object" },
         messages: [{ role: "user", content: prompt }],
         max_tokens: 120,
@@ -102,6 +115,7 @@ ${sample}`;
 
     const data = (await upstream.json().catch(() => ({}))) as {
       choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
       error?: { message?: string };
     };
 
@@ -136,7 +150,15 @@ ${sample}`;
       ? Math.max(0, Math.min(1, confidenceRaw))
       : null;
 
-    res.status(200).json({ language, confidence });
+    const usage = {
+      prompt_tokens: Math.max(0, Math.round(Number(data.usage?.prompt_tokens ?? 0))),
+      completion_tokens: Math.max(
+        0,
+        Math.round(Number(data.usage?.completion_tokens ?? 0)),
+      ),
+    };
+
+    res.status(200).json({ language, confidence, usage, model });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Language detect failed";

@@ -1,8 +1,8 @@
 /**
  * Batch-translate PPTX placeholder strings via OpenAI.
  *
- * Uses indexed items so a short model reply can be completed with a
- * follow-up pass instead of failing the whole deck.
+ * Accepts deck + slide context for better terminology choices, and returns
+ * token usage so the client can estimate cost.
  */
 
 import { hasValidAccessCookie } from "./helpers/accessAuth.js";
@@ -12,12 +12,22 @@ import {
 } from "./helpers/openaiEnv.js";
 import { ensureProjectEnv } from "./helpers/loadEnv.js";
 
-function translateModel(): string {
+const ALLOWED_LANG = new Set(["en", "sl", "de", "hr", "it", "fr", "es"]);
+const ALLOWED_MODELS = new Set(["gpt-4o", "gpt-4o-mini"]);
+
+function defaultModel(): string {
   ensureProjectEnv();
   return process.env.OPENAI_PPTX_TRANSLATE_MODEL?.trim() || "gpt-4o";
 }
 
-const ALLOWED = new Set(["en", "sl", "de", "hr", "it", "fr", "es"]);
+function resolveModel(raw: unknown): string {
+  if (typeof raw === "string") {
+    const id = raw.trim();
+    if (ALLOWED_MODELS.has(id)) return id;
+  }
+  const fallback = defaultModel();
+  return ALLOWED_MODELS.has(fallback) ? fallback : "gpt-4o";
+}
 
 function asStringArray(raw: unknown, max = 60): string[] {
   if (!Array.isArray(raw)) return [];
@@ -31,16 +41,47 @@ function normalizeLang(raw: unknown): string {
   return raw.trim().toLowerCase().slice(0, 8);
 }
 
+function asContext(raw: unknown, max = 4000): string {
+  if (typeof raw !== "string") return "";
+  return raw.trim().slice(0, max);
+}
+
+type Usage = { prompt_tokens: number; completion_tokens: number };
+
 type ChatResult = {
   ok: boolean;
   status: number;
   content: string;
   finishReason: string | null;
   error: string | null;
+  usage: Usage;
 };
+
+function emptyUsage(): Usage {
+  return { prompt_tokens: 0, completion_tokens: 0 };
+}
+
+function readUsage(raw: unknown): Usage {
+  if (!raw || typeof raw !== "object") return emptyUsage();
+  const u = raw as { prompt_tokens?: unknown; completion_tokens?: unknown };
+  const p = Number(u.prompt_tokens ?? 0);
+  const c = Number(u.completion_tokens ?? 0);
+  return {
+    prompt_tokens: Number.isFinite(p) ? Math.max(0, Math.round(p)) : 0,
+    completion_tokens: Number.isFinite(c) ? Math.max(0, Math.round(c)) : 0,
+  };
+}
+
+function addUsage(a: Usage, b: Usage): Usage {
+  return {
+    prompt_tokens: a.prompt_tokens + b.prompt_tokens,
+    completion_tokens: a.completion_tokens + b.completion_tokens,
+  };
+}
 
 async function chatJson(input: {
   openAiKey: string;
+  model: string;
   prompt: string;
   maxTokens: number;
 }): Promise<ChatResult> {
@@ -51,7 +92,7 @@ async function chatJson(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: translateModel(),
+      model: input.model,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: input.prompt }],
       max_tokens: input.maxTokens,
@@ -64,6 +105,7 @@ async function chatJson(input: {
       message?: { content?: string };
       finish_reason?: string;
     }>;
+    usage?: unknown;
     error?: { message?: string };
   };
 
@@ -74,6 +116,7 @@ async function chatJson(input: {
       content: "",
       finishReason: null,
       error: data.error?.message || `OpenAI error (${upstream.status})`,
+      usage: emptyUsage(),
     };
   }
 
@@ -83,6 +126,7 @@ async function chatJson(input: {
     content: data.choices?.[0]?.message?.content ?? "{}",
     finishReason: data.choices?.[0]?.finish_reason ?? null,
     error: null,
+    usage: readUsage(data.usage),
   };
 }
 
@@ -111,12 +155,20 @@ function parseTranslations(
   if (Array.isArray(obj.items)) {
     for (const row of obj.items) {
       if (!row || typeof row !== "object") continue;
-      const r = row as { i?: unknown; index?: unknown; text?: unknown; t?: unknown };
+      const r = row as {
+        i?: unknown;
+        index?: unknown;
+        text?: unknown;
+        t?: unknown;
+      };
       const iRaw = r.i ?? r.index;
       const i = typeof iRaw === "number" ? iRaw : Number(iRaw);
       if (!Number.isInteger(i) || i < 0 || i >= expected) continue;
       const text = r.text ?? r.t;
-      byIndex.set(i, typeof text === "string" ? text : text == null ? "" : String(text));
+      byIndex.set(
+        i,
+        typeof text === "string" ? text : text == null ? "" : String(text),
+      );
     }
   }
 
@@ -146,7 +198,10 @@ function parseTranslations(
   return { byIndex, parseError: null };
 }
 
-function missingIndices(byIndex: Map<number, string>, expected: number): number[] {
+function missingIndices(
+  byIndex: Map<number, string>,
+  expected: number,
+): number[] {
   const missing: number[] = [];
   for (let i = 0; i < expected; i++) {
     if (!byIndex.has(i)) missing.push(i);
@@ -159,15 +214,28 @@ function buildPrompt(input: {
   target: string;
   texts: string[];
   indices?: number[];
+  deckContext: string;
+  slideContext: string;
+  slideLabel: string;
 }): string {
-  const indices =
-    input.indices ?? input.texts.map((_, i) => i);
+  const indices = input.indices ?? input.texts.map((_, i) => i);
   const lines = indices
     .map((i) => `${i}: ${JSON.stringify(input.texts[i] ?? "")}`)
     .join("\n");
   const count = indices.length;
+  const deck = input.deckContext || "(not provided)";
+  const slide = input.slideContext || "(not provided)";
+  const label = input.slideLabel || "Current slide";
 
   return `Translate PowerPoint placeholder strings from ${input.source} to ${input.target}.
+
+You are translating ONE slide of a larger deck. Use the deck overview and the full slide text to keep terminology consistent and choose context-appropriate wording (domain, tone, product names).
+
+Deck overview (all slides, condensed):
+${deck}
+
+${label} — full slide text for context:
+${slide}
 
 Return JSON only in this exact shape:
 { "items": [ { "i": number, "text": string }, ... ] }
@@ -176,16 +244,16 @@ Rules:
 - Return exactly ${count} objects in "items".
 - Each "i" must be one of these indices: ${indices.join(", ")}.
 - Each "text" is the translation of that index (1:1, same meaning).
+- Prefer consistent translations for repeated terms across the deck.
 - Preserve numbers, percentages, dates, brand/product names, and URLs when appropriate.
 - Keep short labels short; do not merge, split, drop, or renumber items.
 - Empty input → empty string.
 
-Items:
+Items to translate:
 ${lines}`;
 }
 
 function tokenBudget(itemCount: number): number {
-  // Generous budget — truncation was a likely cause of short arrays.
   return Math.min(12000, 400 + itemCount * 180);
 }
 
@@ -193,7 +261,15 @@ export default async function handler(
   req: {
     method?: string;
     headers?: { cookie?: string | string[] };
-    body?: { texts?: unknown; source?: unknown; target?: unknown };
+    body?: {
+      texts?: unknown;
+      source?: unknown;
+      target?: unknown;
+      model?: unknown;
+      deckContext?: unknown;
+      slideContext?: unknown;
+      slideLabel?: unknown;
+    };
   },
   res: {
     status: (code: number) => { json: (body: unknown) => void };
@@ -233,31 +309,54 @@ export default async function handler(
 
   const source = normalizeLang(req.body?.source);
   const target = normalizeLang(req.body?.target);
-  if (!source || !ALLOWED.has(source)) {
+  if (!source || !ALLOWED_LANG.has(source)) {
     res.status(400).json({ error: "Invalid or missing source language" });
     return;
   }
-  if (!target || !ALLOWED.has(target)) {
+  if (!target || !ALLOWED_LANG.has(target)) {
     res.status(400).json({ error: "Invalid or missing target language" });
     return;
   }
+
+  const model = resolveModel(req.body?.model);
+  const deckContext = asContext(req.body?.deckContext, 4000);
+  const slideContext = asContext(req.body?.slideContext, 3000);
+  const slideLabel =
+    typeof req.body?.slideLabel === "string"
+      ? req.body.slideLabel.trim().slice(0, 80)
+      : "";
+
   if (source === target) {
-    res.status(200).json({ translations: texts });
+    res.status(200).json({
+      translations: texts,
+      usage: emptyUsage(),
+      model,
+    });
     return;
   }
 
   try {
     const byIndex = new Map<number, string>();
+    let usage = emptyUsage();
 
     const first = await chatJson({
       openAiKey,
-      prompt: buildPrompt({ source, target, texts }),
+      model,
+      prompt: buildPrompt({
+        source,
+        target,
+        texts,
+        deckContext,
+        slideContext,
+        slideLabel,
+      }),
       maxTokens: tokenBudget(texts.length),
     });
     if (!first.ok) {
       res.status(502).json({ error: first.error });
       return;
     }
+    usage = addUsage(usage, first.usage);
 
     const parsed = parseTranslations(first.content, texts.length);
     if (parsed.parseError) {
@@ -268,14 +367,23 @@ export default async function handler(
 
     let missing = missingIndices(byIndex, texts.length);
 
-    // Second pass: only the dropped indices (common when model skips one).
     if (missing.length > 0 && missing.length < texts.length) {
       const retry = await chatJson({
         openAiKey,
-        prompt: buildPrompt({ source, target, texts, indices: missing }),
+        model,
+        prompt: buildPrompt({
+          source,
+          target,
+          texts,
+          indices: missing,
+          deckContext,
+          slideContext,
+          slideLabel,
+        }),
         maxTokens: tokenBudget(missing.length),
       });
       if (retry.ok) {
+        usage = addUsage(usage, retry.usage);
         const again = parseTranslations(retry.content, texts.length);
         for (const [i, t] of again.byIndex) {
           if (missing.includes(i)) byIndex.set(i, t);
@@ -284,7 +392,6 @@ export default async function handler(
       }
     }
 
-    // Last resort: keep original for any still-missing slots so the deck still exports.
     if (missing.length > 0) {
       for (const i of missing) {
         byIndex.set(i, texts[i] ?? "");
@@ -292,7 +399,7 @@ export default async function handler(
     }
 
     const translations = texts.map((_, i) => byIndex.get(i) ?? texts[i] ?? "");
-    res.status(200).json({ translations });
+    res.status(200).json({ translations, usage, model });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Translate failed";
     res.status(500).json({ error: message });

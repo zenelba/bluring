@@ -1,16 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  DEFAULT_PPTX_MODEL,
   PPTX_TARGET_LANGS,
+  PPTX_TRANSLATE_MODELS,
+  addUsage,
   buildTranslatedPptx,
   detectPptxLanguage,
   downloadTranslatedPptx,
+  emptyUsage,
+  estimateUsd,
   extractPptxTexts,
+  formatDuration,
+  formatUsd,
+  getPptxModel,
   langLabel,
   proposeTargetLang,
-  translatePptxTexts,
+  translatePptxBySlides,
   translatedFileName,
   type PptxExtractResult,
   type PptxLangCode,
+  type PptxTranslateModelId,
+  type TranslateCostSummary,
 } from "./lib/pptxTranslation";
 import {
   upsertTask,
@@ -19,6 +29,18 @@ import {
 } from "./lib/taskHistory";
 import { logEvent } from "./lib/sessionJournal";
 import "./osebe.css";
+
+const MODEL_KEY = "pptx-translate-model";
+
+function loadModel(): PptxTranslateModelId {
+  try {
+    const raw = localStorage.getItem(MODEL_KEY);
+    if (raw === "gpt-4o" || raw === "gpt-4o-mini") return raw;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_PPTX_MODEL;
+}
 
 function CloudIcon() {
   return (
@@ -63,6 +85,7 @@ export default function PptxTranslationMode(props: {
 
   const [file, setFile] = useState<File | null>(null);
   const [textCount, setTextCount] = useState(0);
+  const [slideCount, setSlideCount] = useState(0);
   const [detectedLang, setDetectedLang] = useState<string | null>(null);
   const [detectConfidence, setDetectConfidence] = useState<number | null>(
     null,
@@ -70,6 +93,7 @@ export default function PptxTranslationMode(props: {
   const [sourceDetectedLocked, setSourceDetectedLocked] = useState(false);
   const [sourceLang, setSourceLang] = useState<string>("");
   const [targetLang, setTargetLang] = useState<string>("");
+  const [model, setModel] = useState<PptxTranslateModelId>(loadModel);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<"idle" | "parse" | "detect" | "translate">(
     "idle",
@@ -79,6 +103,15 @@ export default function PptxTranslationMode(props: {
   const [liveNote, setLiveNote] = useState("");
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultName, setResultName] = useState<string | null>(null);
+  const [progress, setProgress] = useState({
+    slideDone: 0,
+    slideTotal: 0,
+    slideLabel: "",
+    percent: 0,
+  });
+  const [costSummary, setCostSummary] = useState<TranslateCostSummary | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!initialTask || initialTask.record.toolId !== "pptxTranslation") return;
@@ -99,10 +132,14 @@ export default function PptxTranslationMode(props: {
     setSourceLang(payload.sourceLang || "");
     setTargetLang(payload.targetLang || "");
     setSourceDetectedLocked(Boolean(payload.detectedLang));
-    setLiveNote(`Restored ${payload.fileName}. Re-upload if you need to translate again.`);
+    setLiveNote(
+      `Restored ${payload.fileName}. Re-upload if you need to translate again.`,
+    );
     setError(null);
     setResultBlob(null);
     setResultName(null);
+    setCostSummary(null);
+    setProgress({ slideDone: 0, slideTotal: 0, slideLabel: "", percent: 0 });
     extractRef.current = null;
     onInitialConsumed?.();
   }, [initialTask, onInitialConsumed]);
@@ -150,7 +187,10 @@ export default function PptxTranslationMode(props: {
   const clearResult = () => {
     setResultBlob(null);
     setResultName(null);
+    setCostSummary(null);
   };
+
+  const selectedModel = getPptxModel(model);
 
   const loadFile = async (incoming: File) => {
     if (!isPptxFile(incoming)) {
@@ -169,13 +209,17 @@ export default function PptxTranslationMode(props: {
     setSourceLang("");
     setTargetLang("");
     setTextCount(0);
+    setSlideCount(0);
+    setProgress({ slideDone: 0, slideTotal: 0, slideLabel: "", percent: 0 });
     extractRef.current = null;
 
     try {
       const extracted = await extractPptxTexts(incoming);
       extractRef.current = extracted;
       const count = extracted.nodes.length;
+      const slides = extracted.slides.length;
       setTextCount(count);
+      setSlideCount(slides);
       if (count === 0) {
         setLiveNote("No text placeholders found.");
         setError("No text placeholders found in this PPTX.");
@@ -184,10 +228,13 @@ export default function PptxTranslationMode(props: {
       }
 
       setPhase("detect");
-      setLiveNote(`Found ${count} string(s). Detecting language…`);
-      const detect = await detectPptxLanguage(
-        extracted.nodes.map((n) => n.text),
+      setLiveNote(
+        `Found ${count} string(s) on ${slides} slide(s). Detecting language…`,
       );
+      const detect = await detectPptxLanguage({
+        texts: extracted.nodes.map((n) => n.text),
+        model,
+      });
       const lang = detect.language;
       setDetectedLang(lang);
       setDetectConfidence(detect.confidence);
@@ -201,21 +248,18 @@ export default function PptxTranslationMode(props: {
             detect.confidence != null
               ? ` (${Math.round(detect.confidence * 100)}%)`
               : ""
-          } · ${count} string(s)`,
+          } · ${count} strings · ${slides} slides`,
         );
       } else {
         setSourceLang("");
         setTargetLang("");
         setSourceDetectedLocked(false);
         setLiveNote(
-          `Could not detect language · ${count} string(s) — select source and target.`,
+          `Could not detect language · ${count} strings · ${slides} slides — select source and target.`,
         );
       }
 
-      logEvent(
-        "pptx_detect",
-        `${lang ?? "unknown"} · ${count} texts`,
-      );
+      logEvent("pptx_detect", `${lang ?? "unknown"} · ${count} texts`);
       await persistHistory({
         fileName: incoming.name,
         sourceLang: lang ?? "",
@@ -250,7 +294,8 @@ export default function PptxTranslationMode(props: {
     setPhase("translate");
     setError(null);
     clearResult();
-    setLiveNote(`Translating ${textCount} string(s)…`);
+    const started = performance.now();
+    let usageTotal = emptyUsage();
 
     try {
       let extracted = extractRef.current;
@@ -258,15 +303,43 @@ export default function PptxTranslationMode(props: {
         extracted = await extractPptxTexts(file);
         extractRef.current = extracted;
       }
-      const texts = extracted.nodes.map((n) => n.text);
-      const translations = await translatePptxTexts({
-        texts,
+      setSlideCount(extracted.slides.length);
+      setTextCount(extracted.nodes.length);
+      setProgress({
+        slideDone: 0,
+        slideTotal: extracted.slides.length,
+        slideLabel: extracted.slides[0]?.label ?? "",
+        percent: 0,
+      });
+      setLiveNote(
+        `Translating slide 0 / ${extracted.slides.length}…`,
+      );
+
+      const { translations, usage } = await translatePptxBySlides({
+        extracted,
         source: sourceLang,
         target: targetLang,
-        onProgress: (done, total) => {
-          setLiveNote(`Translating ${done} / ${total}…`);
+        model,
+        onProgress: (p) => {
+          const percent =
+            p.slideTotal === 0
+              ? 0
+              : Math.round((p.slideDone / p.slideTotal) * 100);
+          setProgress({
+            slideDone: p.slideDone,
+            slideTotal: p.slideTotal,
+            slideLabel: p.slideLabel,
+            percent,
+          });
+          setLiveNote(
+            p.slideDone >= p.slideTotal
+              ? `Translated ${p.slideTotal} slide(s)…`
+              : `Translating ${p.slideLabel} (${p.slideDone}/${p.slideTotal})…`,
+          );
         },
       });
+      usageTotal = addUsage(usageTotal, usage);
+
       setLiveNote("Rewriting PPTX…");
       const blob = await buildTranslatedPptx({
         zip: extracted.zip,
@@ -278,16 +351,36 @@ export default function PptxTranslationMode(props: {
       setResultBlob(blob);
       setResultName(filename);
       downloadTranslatedPptx(blob, filename);
-      setLiveNote(`Done — downloaded ${filename}`);
+
+      const durationMs = performance.now() - started;
+      const summary: TranslateCostSummary = {
+        model,
+        durationMs,
+        promptTokens: usageTotal.promptTokens,
+        completionTokens: usageTotal.completionTokens,
+        estimatedUsd: estimateUsd(model, usageTotal),
+        slideCount: extracted.slides.length,
+        textCount: extracted.nodes.length,
+      };
+      setCostSummary(summary);
+      setProgress({
+        slideDone: extracted.slides.length,
+        slideTotal: extracted.slides.length,
+        slideLabel: "Done",
+        percent: 100,
+      });
+      setLiveNote(
+        `Done in ${formatDuration(durationMs)} · ${formatUsd(summary.estimatedUsd)} · downloaded ${filename}`,
+      );
       logEvent(
         "pptx_translate",
-        `${sourceLang}→${targetLang} · ${texts.length}`,
+        `${sourceLang}→${targetLang} · ${model} · ${extracted.slides.length} slides · ${formatUsd(summary.estimatedUsd)}`,
       );
       await persistHistory({
         fileName: file.name,
         sourceLang,
         targetLang,
-        textCount: texts.length,
+        textCount: extracted.nodes.length,
         detectedLang,
         blob: file,
       });
@@ -308,6 +401,7 @@ export default function PptxTranslationMode(props: {
   const clearAll = () => {
     setFile(null);
     setTextCount(0);
+    setSlideCount(0);
     setDetectedLang(null);
     setDetectConfidence(null);
     setSourceDetectedLocked(false);
@@ -316,6 +410,7 @@ export default function PptxTranslationMode(props: {
     setError(null);
     setLiveNote("");
     clearResult();
+    setProgress({ slideDone: 0, slideTotal: 0, slideLabel: "", percent: 0 });
     extractRef.current = null;
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -374,10 +469,41 @@ export default function PptxTranslationMode(props: {
               <span className="osebe-field__label">File</span>
               <span className="osebe-hint" title={file.name}>
                 {file.name}
-                {textCount > 0 ? ` · ${textCount} strings` : ""}
+                {textCount > 0
+                  ? ` · ${textCount} strings · ${slideCount} slides`
+                  : ""}
               </span>
             </div>
           )}
+
+          <label className="osebe-field">
+            <span className="osebe-field__label">Model (OpenAI)</span>
+            <select
+              className="osebe-select"
+              value={model}
+              disabled={busy}
+              onChange={(e) => {
+                const next = e.target.value as PptxTranslateModelId;
+                setModel(next);
+                try {
+                  localStorage.setItem(MODEL_KEY, next);
+                } catch {
+                  /* ignore */
+                }
+                clearResult();
+              }}
+            >
+              {PPTX_TRANSLATE_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} — {m.priceLabel}
+                </option>
+              ))}
+            </select>
+            <span className="osebe-hint">
+              {selectedModel.label}: {selectedModel.priceLabel} (list price
+              estimate)
+            </span>
+          </label>
 
           <label className="osebe-field">
             <span className="osebe-field__label">Source language</span>
@@ -467,9 +593,22 @@ export default function PptxTranslationMode(props: {
             <div className="osebe-status__row">
               <span className="osebe-kicker">Status</span>
               <span className="osebe-status__count">
-                {textCount > 0 ? `${textCount} strings` : "—"}
+                {phase === "translate" && progress.slideTotal > 0
+                  ? `${progress.slideDone} / ${progress.slideTotal} slides`
+                  : textCount > 0
+                    ? `${slideCount} slides · ${textCount} strings`
+                    : "—"}
               </span>
             </div>
+            {(phase === "translate" || progress.percent > 0) &&
+              progress.slideTotal > 0 && (
+                <div className="osebe-bar" aria-hidden>
+                  <div
+                    className="osebe-bar__fill"
+                    style={{ width: `${progress.percent}%` }}
+                  />
+                </div>
+              )}
             <p className="osebe-status__copy">
               {!file
                 ? "Waiting for a .pptx…"
@@ -477,7 +616,7 @@ export default function PptxTranslationMode(props: {
                   ? liveNote || "Working…"
                   : liveNote ||
                     (canTranslate
-                      ? `Ready: ${langLabel(sourceLang)} → ${langLabel(targetLang)}`
+                      ? `Ready: ${langLabel(sourceLang)} → ${langLabel(targetLang)} · ${selectedModel.label}`
                       : "Select source and output language, then Translate.")}
             </p>
           </div>
@@ -495,15 +634,45 @@ export default function PptxTranslationMode(props: {
                 style={{ marginTop: "0.75rem", maxWidth: "36rem" }}
               >
                 {textCount} non-empty text run
-                {textCount === 1 ? "" : "s"} found in slides
+                {textCount === 1 ? "" : "s"} across {slideCount} slide
+                {slideCount === 1 ? "" : "s"}
                 {detectedLang
                   ? ` · source ${langLabel(detectedLang)}`
                   : " · source unknown"}
                 {targetLang
                   ? ` · target ${langLabel(targetLang)}`
                   : " · pick a target"}
-                .
+                {" · "}
+                {selectedModel.label}.
               </p>
+              {phase === "translate" && progress.slideTotal > 0 && (
+                <p style={{ marginTop: "1rem", fontWeight: 600 }}>
+                  {progress.slideDone} / {progress.slideTotal} slides translated
+                  {progress.slideLabel && progress.slideDone < progress.slideTotal
+                    ? ` · ${progress.slideLabel}`
+                    : ""}
+                </p>
+              )}
+              {costSummary && (
+                <div style={{ marginTop: "1.25rem", maxWidth: "36rem" }}>
+                  <p style={{ margin: 0, fontWeight: 600 }}>Last run</p>
+                  <p className="osebe-hint" style={{ marginTop: "0.4rem" }}>
+                    Time: <strong>{formatDuration(costSummary.durationMs)}</strong>
+                    {" · "}
+                    Est. cost:{" "}
+                    <strong>{formatUsd(costSummary.estimatedUsd)}</strong>
+                    {" · "}
+                    {getPptxModel(costSummary.model).label}
+                    {" · "}
+                    {costSummary.promptTokens + costSummary.completionTokens}{" "}
+                    tokens ({costSummary.promptTokens} in /{" "}
+                    {costSummary.completionTokens} out)
+                    {" · "}
+                    {costSummary.slideCount} slides / {costSummary.textCount}{" "}
+                    strings
+                  </p>
+                </div>
+              )}
               {resultName && (
                 <p style={{ marginTop: "1rem" }}>
                   Last download: <code>{resultName}</code>
