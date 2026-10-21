@@ -5,7 +5,12 @@
  * Important: PowerPoint splits words across many <a:t> runs (often with a leading
  * space on the next run). Translating each run alone drops those spaces
  * ("trgovina"+" je" → "store"+"has" → "storehas"). We therefore translate one
- * <a:p> paragraph at a time and write the full result into the first run.
+ * <a:p> paragraph at a time.
+ *
+ * Mixed bold / italic / underline inside a paragraph is preserved by encoding
+ * those spans as <b>/<i>/<u> markers for the model, then writing each span back
+ * into the matching formatted run (siblings cleared). Uniform paragraphs still
+ * write into the first run only.
  */
 
 import { saveAs } from "file-saver";
@@ -74,16 +79,35 @@ export type TranslateCostSummary = {
   textCount: number;
 };
 
+/** Run-level emphasis we preserve across translation. */
+export type PptxRunFormat = {
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+};
+
+/** Contiguous a:t runs that share the same bold/italic/underline. */
+export type PptxFormatSegment = {
+  nodeIndices: number[];
+  primaryNodeIndex: number;
+  text: string;
+  format: PptxRunFormat;
+};
+
 /** One translatable paragraph (merged a:t runs inside a single a:p). */
 export type PptxTextNode = {
   slidePath: string;
   slideNumber: number;
   /** File-global indices of every a:t in this paragraph */
   nodeIndices: number[];
-  /** a:t that receives the full translated paragraph */
+  /** Fallback a:t when formatting cannot be redistributed */
   primaryNodeIndex: number;
-  /** Concatenated source text (spaces preserved) */
+  /** Concatenated source text (spaces preserved, no markers) */
   text: string;
+  /** Text sent to the model — may include <b>/<i>/<u> markers */
+  translateText: string;
+  /** Format segments for rewriting mixed emphasis */
+  segments: PptxFormatSegment[];
 };
 
 export type PptxSlideGroup = {
@@ -292,10 +316,16 @@ type AtHit = {
  * and/or a spacing-repair retry when the source had spaces.
  */
 export function fixTranslationSpacing(text: string): string {
-  let t = text;
+  // Protect <b>/<i>/<u> markers so punctuation fixes never split tags.
+  const slots: string[] = [];
+  let t = text.replace(/<\/?[biu]>/gi, (m) => {
+    const i = slots.length;
+    slots.push(m);
+    return `\uE000${i}\uE001`;
+  });
   // ". displacement…" → "Displacement…" (only capitalize when we stripped a lead punct)
-  const strippedLead = /^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/.test(t);
-  t = t.replace(/^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/, "");
+  const strippedLead = /^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž\uE000])/.test(t);
+  t = t.replace(/^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž\uE000])/, "");
   if (strippedLead) {
     t = t.replace(/^([a-zà-öø-ÿā-ž])/, (ch) => ch.toUpperCase());
   }
@@ -303,22 +333,23 @@ export function fixTranslationSpacing(text: string): string {
   t = t.replace(/\s+([,.;:!?…])/g, "$1");
   // "opinion,that" / "poor.They" → space AFTER punctuation
   t = t.replace(/([,;:!?])(?=\S)/g, "$1 ");
-  t = t.replace(/(\.)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž("«„])/g, "$1 ");
+  t = t.replace(/(\.)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž("«„\uE000])/g, "$1 ");
   // "shoppers(FG2)" / "trustinretailer(you" → space before (
   t = t.replace(/([A-Za-zÀ-ÖØ-öø-ÿĀ-ž0-9])\(/g, "$1 (");
   // ")and" → ") and"
-  t = t.replace(/\)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/g, ") ");
+  t = t.replace(/\)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž\uE000])/g, ") ");
   // CamelCase leftovers: "RegularCustomers" → "Regular Customers"
   t = t.replace(/([a-zà-öø-ÿā-ž])([A-ZÀ-Ö])/g, "$1 $2");
   t = t.replace(/ {2,}/g, " ");
+  t = t.replace(/\uE000(\d+)\uE001/g, (_, n) => slots[Number(n)] ?? "");
   return t;
 }
 
 /** True when source clearly had multiple words but the translation lost every space. */
 export function lostWordSpaces(source: string, translated: string): boolean {
-  const srcWords = source.trim().split(/\s+/).filter(Boolean);
+  const srcWords = stripFormatMarkers(source).trim().split(/\s+/).filter(Boolean);
   if (srcWords.length < 2) return false;
-  const out = translated.trim();
+  const out = stripFormatMarkers(translated).trim();
   if (!out || /\s/.test(out)) return false;
   // Only short labels / cells — long prose without spaces is rare and risky to auto-fix
   return out.length <= 80 && /[A-Za-zÀ-ÖØ-öø-ÿĀ-ž]{4,}/.test(out);
@@ -393,6 +424,195 @@ export function formatSlideRangeLabel(
   return selected.join(", ");
 }
 
+export function emptyRunFormat(): PptxRunFormat {
+  return { bold: false, italic: false, underline: false };
+}
+
+export function formatKey(f: PptxRunFormat): string {
+  return `${f.bold ? "b" : ""}${f.italic ? "i" : ""}${f.underline ? "u" : ""}` || "plain";
+}
+
+export function hasEmphasis(f: PptxRunFormat): boolean {
+  return f.bold || f.italic || f.underline;
+}
+
+/**
+ * Read bold/italic/underline from the nearest <a:rPr> before an <a:t>.
+ */
+export function extractRunFormat(xml: string, atStart: number): PptxRunFormat {
+  const windowStart = Math.max(0, atStart - 3000);
+  const window = xml.slice(windowStart, atStart);
+  const matches = [...window.matchAll(/<a:rPr\b([^>]*)(\/>|>)/g)];
+  const last = matches[matches.length - 1];
+  if (!last) return emptyRunFormat();
+
+  const attrs = last[1] ?? "";
+  const selfClosing = last[2] === "/>";
+  let bold = /\bb="(?:1|true)"/i.test(attrs);
+  let italic = /\bi="(?:1|true)"/i.test(attrs);
+  let underline = /\bu="(?!none)[^"]+"/i.test(attrs);
+
+  if (!selfClosing) {
+    const from = last.index ?? 0;
+    const after = window.slice(from);
+    const end = after.search(/<\/a:rPr>/i);
+    const body = end >= 0 ? after.slice(0, end) : after.slice(0, 800);
+    if (/<a:u\b/i.test(body) && !/<a:u\b[^>]*val="none"/i.test(body)) {
+      underline = true;
+    }
+    // Rare DrawingML boolean children
+    if (/<a:b\b/i.test(body) && !/<a:b\b[^>]*val="0"/i.test(body)) bold = true;
+    if (/<a:i\b/i.test(body) && !/<a:i\b[^>]*val="0"/i.test(body)) italic = true;
+  }
+
+  return { bold, italic, underline };
+}
+
+/** Wrap emphasis spans for the translation model. */
+export function encodeFormatMarkers(segments: PptxFormatSegment[]): string {
+  const keys = new Set(segments.map((s) => formatKey(s.format)));
+  if (keys.size <= 1) {
+    return segments.map((s) => s.text).join("");
+  }
+  return segments
+    .map((seg) => {
+      const { bold, italic, underline } = seg.format;
+      if (!bold && !italic && !underline) return seg.text;
+      let t = seg.text;
+      // Innermost underline → italic → bold (stable nest order)
+      if (underline) t = `<u>${t}</u>`;
+      if (italic) t = `<i>${t}</i>`;
+      if (bold) t = `<b>${t}</b>`;
+      return t;
+    })
+    .join("");
+}
+
+export function stripFormatMarkers(text: string): string {
+  return text.replace(/<\/?[biu]>/gi, "");
+}
+
+/**
+ * Parse <b>/<i>/<u> markers back into format segments (for rewrite).
+ */
+export function parseFormatMarkers(
+  marked: string,
+): Array<{ text: string; format: PptxRunFormat }> {
+  const out: Array<{ text: string; format: PptxRunFormat }> = [];
+  const re = /<\/?([biu])>/gi;
+  let last = 0;
+  let bold = false;
+  let italic = false;
+  let underline = false;
+  let m: RegExpExecArray | null;
+
+  const flush = (end: number) => {
+    if (end <= last) return;
+    const text = marked.slice(last, end);
+    if (!text) return;
+    const format = { bold, italic, underline };
+    const prev = out[out.length - 1];
+    if (prev && formatKey(prev.format) === formatKey(format)) {
+      prev.text += text;
+    } else {
+      out.push({ text, format });
+    }
+  };
+
+  while ((m = re.exec(marked)) !== null) {
+    flush(m.index);
+    const closing = m[0].startsWith("</");
+    const tag = (m[1] ?? "").toLowerCase();
+    if (tag === "b") bold = !closing;
+    else if (tag === "i") italic = !closing;
+    else if (tag === "u") underline = !closing;
+    last = m.index + m[0].length;
+  }
+  flush(marked.length);
+
+  if (out.length === 0 && marked.length === 0) {
+    return [{ text: "", format: emptyRunFormat() }];
+  }
+  return out;
+}
+
+/**
+ * Map a (possibly marked) translation onto the paragraph's format runs.
+ */
+export function planFormattedRewrite(
+  node: PptxTextNode,
+  translated: string,
+): { replacements: Map<number, string>; clear: Set<number> } {
+  const replacements = new Map<number, string>();
+  const clear = new Set<number>();
+  const segs = node.segments;
+  const fallback = () => {
+    replacements.set(node.primaryNodeIndex, stripFormatMarkers(translated));
+    for (const idx of node.nodeIndices) {
+      if (idx !== node.primaryNodeIndex) clear.add(idx);
+    }
+    return { replacements, clear };
+  };
+
+  if (segs.length <= 1) return fallback();
+
+  const decoded = parseFormatMarkers(translated);
+  const aligned =
+    decoded.length === segs.length &&
+    decoded.every(
+      (d, i) => formatKey(d.format) === formatKey(segs[i]!.format),
+    );
+
+  if (!aligned) return fallback();
+
+  segs.forEach((seg, i) => {
+    replacements.set(seg.primaryNodeIndex, decoded[i]!.text);
+    for (const idx of seg.nodeIndices) {
+      if (idx !== seg.primaryNodeIndex) clear.add(idx);
+    }
+  });
+  return { replacements, clear };
+}
+
+function buildFormatSegments(
+  xml: string,
+  group: AtHit[],
+): PptxFormatSegment[] {
+  const segments: PptxFormatSegment[] = [];
+  for (const hit of group) {
+    const format = extractRunFormat(xml, hit.start);
+    const last = segments[segments.length - 1];
+    if (last && formatKey(last.format) === formatKey(format)) {
+      last.text += hit.text;
+      last.nodeIndices.push(hit.nodeIndex);
+      if (!last.text.trim() && hit.text.trim()) {
+        last.primaryNodeIndex = hit.nodeIndex;
+      }
+      continue;
+    }
+    if (!hit.text && last) {
+      // Empty run: keep for clearing, inherit previous format bucket
+      last.nodeIndices.push(hit.nodeIndex);
+      continue;
+    }
+    segments.push({
+      nodeIndices: [hit.nodeIndex],
+      primaryNodeIndex: hit.nodeIndex,
+      text: hit.text,
+      format,
+    });
+  }
+  // Prefer a non-empty primary inside each segment
+  for (const seg of segments) {
+    const primaryHit = group.find(
+      (h) =>
+        seg.nodeIndices.includes(h.nodeIndex) && h.text.trim().length > 0,
+    );
+    if (primaryHit) seg.primaryNodeIndex = primaryHit.nodeIndex;
+  }
+  return segments.filter((s) => s.text.length > 0 || s.nodeIndices.length > 0);
+}
+
 /** Collect paragraph units: merge all a:t inside each a:p. */
 export function collectAtNodes(
   slidePath: string,
@@ -450,12 +670,26 @@ export function collectAtNodes(
     const primary =
       group.find((h) => h.text.trim().length > 0)?.nodeIndex ??
       group[0].nodeIndex;
+    const segments = buildFormatSegments(xml, group);
+    const usableSegs =
+      segments.length > 0
+        ? segments
+        : [
+            {
+              nodeIndices: group.map((h) => h.nodeIndex),
+              primaryNodeIndex: primary,
+              text,
+              format: emptyRunFormat(),
+            },
+          ];
     units.push({
       slidePath,
       slideNumber,
       nodeIndices: group.map((h) => h.nodeIndex),
       primaryNodeIndex: primary,
       text,
+      translateText: encodeFormatMarkers(usableSegs),
+      segments: usableSegs,
     });
   }
 
@@ -463,9 +697,8 @@ export function collectAtNodes(
 }
 
 /**
- * Apply paragraph translations: primary a:t gets full text; sibling runs cleared.
- * `replacements` maps primaryNodeIndex → translated paragraph text.
- * `clearIndices` lists every other a:t in translated paragraphs.
+ * Apply paragraph translations: replacements map nodeIndex → text;
+ * clearIndices lists a:t nodes emptied after a sibling absorbed the text.
  */
 export function rewriteAtNodes(
   xml: string,
@@ -795,7 +1028,7 @@ export async function translatePptxBySlides(input: {
       textTotal,
     });
 
-    const texts = slide.nodes.map((n) => n.text);
+    const texts = slide.nodes.map((n) => n.translateText || n.text);
     const CHUNK = 20;
     const slideTranslations: string[] = [];
     for (let i = 0; i < texts.length; i += CHUNK) {
@@ -865,12 +1098,15 @@ export async function buildTranslatedPptx(input: {
       entry = { replacements: new Map(), clear: new Set() };
       byPath.set(node.slidePath, entry);
     }
-    entry.replacements.set(
-      node.primaryNodeIndex,
-      translations[i] ?? node.text,
+    const planned = planFormattedRewrite(
+      node,
+      translations[i] ?? node.translateText ?? node.text,
     );
-    for (const idx of node.nodeIndices) {
-      if (idx !== node.primaryNodeIndex) entry.clear.add(idx);
+    for (const [idx, text] of planned.replacements) {
+      entry.replacements.set(idx, text);
+    }
+    for (const idx of planned.clear) {
+      entry.clear.add(idx);
     }
   });
 
