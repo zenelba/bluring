@@ -4,17 +4,17 @@
 
 | Znamka | Izvor | Cenovni razred | Glavni USP | Prisotnost v SLO |
 | --- | --- | --- | --- | --- |
-| Ooh Noo | Slovenske | Premijski | Slovenske design lesene igrače / otroški dodatki z mednarodnim ugledom | Lastna znamka + izvoz |
-| Ribrand | Slovenske | Srednji | Ribniška znamka suhe robe / lesenih izdelkov — lokalna dediščina | Lokalna proizvodnja Ribnica |
-| Ribniška suha roba | Slovenske | Srednji | Zaščitena / tradicionalna ribniška suha roba — kulturna dediščina | Ribnica in slovenske trgovine z obrtjo |
-| WoodUpp | Tuje v SLO | Višji-srednji | Danski leseni akustični paneli (felt + les) za interier | Uvoz / splet / arhitekti |
-| Brio | Tuje v SLO | Srednji | Švedske lesene železnice in igrače — ikona otroške sobe | Igralniške / spletne trgovine |
-| Grimm’s | Tuje v SLO | Premijski | Nemške waldorf / rainbow lesene igrače | Specializirane / spletne trgovine |
-| Haba | Tuje v SLO | Srednji | Nemške lesene in otroške igrače — široka EU maloprodaja | Trgovine z igračami |
-| Gustafs | Močne evropske | Premijski | Švedski arhitekturni leseni akustični paneli | Projektni uvoz |
-| Topakustik | Močne evropske | Premijski | Švicarski akustični leseni sistemi (NH Akustik + Topakustik) | Projektni uvoz |
-| Kay Bojesen | Močne evropske | Premijski | Danske ikonske lesene figure (opica, vojaki) — design dediščina | Design trgovine |
-| Ostheimer | Močne evropske | Premijski | Nemške ročno barvane lesene figure — waldorf klasik | Specializirane trgovine |
+| Ooh Noo | Slovenske | Premijski | Slovenska znamka Wilsonic Design za minimalistične lesene igrače in otroško posteljnino (Red Dot nagrade) | Spletna trgovina + studio Trzin; tudi design shopi (npr. Formadoma) |
+| Ribrand | Slovenske | Srednji | Sodobna reinterpretacija ribniške suhe robe — javorjevi kuhinjski pripomočki (Red Dot) Mashoni × Rokodelski center Ribnica | Design trgovine SI + splet; izdelava v Ribnici |
+| Ribniška suha roba | Slovenske | Dostopni | Zaščitena geografska označba tradicionalnih lesenih izdelkov Ribniške doline (ZGO 2004) | Rokodelski center Ribnica — muzej, delavnice, muzejska trgovina |
+| WoodUpp | Tuje v SLO | Srednji | Danski DIY leseni stenski/stropni paneli in akustične latne za hitro montažo v nordijskem dizajnu | Delight Office, Ljubljana (uradni partner) |
+| Brio | Tuje v SLO | Srednji | Švedska ikona lesenih igrač (od 1884), znana po leseni železnici BRIO World; v lasti Ravensburgerja | Specializirane trgovine z igračami in spletni trgovci |
+| Grimm’s | Tuje v SLO | Premijski | Nemška družinska manufaktura odprte lesene igre (mavrica, gradniki) — Made in Germany & Europe | Ristanc Ljubljana; Kreativne igrače (splet) |
+| Haba | Tuje v SLO | Srednji | Nemški družinski proizvajalec lesenih igrač in rumeno škatlastih iger iz Bad Rodacha (od 1938) | Igračarne in spletni trgovci |
+| Gustafs | Močne evropske | Premijski | Švedski premijski sistemi lesenih akustičnih sten/stropov (Capax, Feltfon) z požarno varnostjo do A2-s1,d0 | Projektna/arhitekturna dobava; ni lastnega SI showrooma |
+| Topakustik | Močne evropske | Premijski | Švicarski specialist za inženirske lesene akustične stenske in stropne sisteme | Projektna dobava prek mednarodnih partnerjev |
+| Kay Bojesen | Močne evropske | Premijski | Danska design dediščina (od 1913) — ikonične lesene živali (opica) in namizni pripomočki | Design trgovine / splet; ni monobrand SI salona |
+| Ostheimer | Močne evropske | Premijski | Nemške ročno izdelane lesene figure (Waldorf) iz javorja — tradicija 80+ let | Specializirane trgovine z lesenimi/Waldorf igračami in splet |
 
 ---
 
@@ -23,98 +23,98 @@
 ## Ooh Noo
 
 - **Izvor:** Slovenske
-- **Logotip:** `/find-brands/logos/ooh-noo.png`
+- **Logotip:** `/find-brands/logos/ooh-noo.svg`
 - **URL podjetja:** https://www.ooh-noo.com/
-- **URL SLO / zastopnik:** https://www.ooh-noo.com/
+- **URL SLO / zastopnik:** https://www.ooh-noo.com/si/
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** Ooh Noo (povezana družba — preveriti AJPES)
-- **Sedež:** Slovenija
-- **Ustanovitev:** 2010-ta
-- **Lastništvo:** Zasebno
+- **Uradno ime:** Wilsonic Design d.o.o.
+- **Sedež:** Ljubljanska cesta 12, 1236 Trzin, Slovenija
+- **Ustanovitev:** Ocena: ~2013–2015 (znamka; aktivna globalno)
+- **Lastništvo:** Zasebno (Wilsonic Design)
 
 ### 2. Poslovno-finančni profil
-- **Prihodki:** Ni javno dostopno; Ocena: nižji milijonski EUR
-- **Zaposleni:** Ocena: 5–20
-- **Izvoz / globalna prisotnost:** Zelo visok (design trgovine EU/US)
+- **Prihodki:** Ni javno dostopno
+- **Zaposleni:** Ni javno dostopno (majhna design/produkcijska ekipa)
+- **Izvoz / globalna prisotnost:** Ocena: visok (globalna spletna prodaja)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Lesene igrače, vozički, otroški design
-- **Certifikati / tehnologija:** EN71, CE igrače; FSC les po dobavi
-- **Proizvodni model:** Mala serija / design-led
+- **Linije in materiali:** Lesene igrače, otroška posteljnina, nursery dekor
+- **Certifikati / tehnologija:** Red Dot, CE igrače, odgovorno pridobljeni materiali
+- **Proizvodni model:** Design SI; ročna izdelava v EU
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Premijski
-- **USP:** Slovenske design lesene igrače / otroški dodatki z mednarodnim ugledom
-- **Ciljna skupina:** B2C premijski; design retailerji
+- **USP:** Slovenska znamka Wilsonic Design za minimalistične lesene igrače in otroško posteljnino (Red Dot nagrade)
+- **Ciljna skupina:** Starši premium/minimalističnega segmenta
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Lastna znamka + wholesale
-- **Partnerji / trgovine:** Design / otroške boutique trgovine
+- **Model vstopa:** Splet ooh-noo.com + design trgovine
+- **Partnerji / trgovine:** Formadoma; mednarodni design retailerji
 
 ## Ribrand
 
 - **Izvor:** Slovenske
-- **Logotip:** `/find-brands/logos/ribrand.png`
-- **URL podjetja:** https://www.ribrand.si/
-- **URL SLO / zastopnik:** https://www.ribrand.si/
+- **Logotip:** `/find-brands/logos/ribrand.svg`
+- **URL podjetja:** https://www.mashoni.si/
+- **URL SLO / zastopnik:** https://www.mashoni.si/
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** Ribrand / povezana zadruga ali d.o.o. (preveriti)
-- **Sedež:** Ribnica, Slovenija
-- **Ustanovitev:** Sodobna znamka na tradiciji suhe robe
-- **Lastništvo:** Lokalno / zadruga ali zasebno
+- **Uradno ime:** Znamka studia Mashoni / izdelava z Rokodelskim centrom Ribnica
+- **Sedež:** Ribnica / studio Mashoni, Slovenija
+- **Ustanovitev:** 2016
+- **Lastništvo:** Mashoni (Janez Mesarič, Maša Majce Mesarič, Petra Bukovinski) + Rokodelski center Ribnica
 
 ### 2. Poslovno-finančni profil
 - **Prihodki:** Ni javno dostopno
-- **Zaposleni:** Ocena: 5–30
-- **Izvoz / globalna prisotnost:** Domači + turistični / omejen izvoz
+- **Zaposleni:** Ni javno dostopno (oblikovalski studio + lokalni mojster)
+- **Izvoz / globalna prisotnost:** Ocena: del izvoza prek design medijev/trgovin
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Suha roba, leseni uporabni predmeti
-- **Certifikati / tehnologija:** Obrtniška kakovost; geografska dediščina
-- **Proizvodni model:** Obrtniška
+- **Linije in materiali:** Izbrano za hrano — deske, kuhalnice, solnice; leseni kuhinjski dodatki
+- **Certifikati / tehnologija:** Red Dot (set kuhalnic)
+- **Proizvodni model:** Lokalni javor; strojna + ročna obdelava v Ribnici
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Srednji
-- **USP:** Ribniška znamka suhe robe / lesenih izdelkov — lokalna dediščina
-- **Ciljna skupina:** B2C; turizem; darila
+- **USP:** Sodobna reinterpretacija ribniške suhe robe — javorjevi kuhinjski pripomočki (Red Dot) Mashoni × Rokodelski center Ribnica
+- **Ciljna skupina:** Design-orientirani kupci, darila, sodoben dom
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Direktna / lokalne trgovine
-- **Partnerji / trgovine:** Ribniške trgovine / turistične točke
+- **Model vstopa:** Design shopi + splet
+- **Partnerji / trgovine:** Rokodelski center Ribnica; SI design trgovine
 
 ## Ribniška suha roba
 
 - **Izvor:** Slovenske
-- **Logotip:** `/find-brands/logos/ribinska-suha-roba.png`
-- **URL podjetja:** https://www.suha-roba.si/
-- **URL SLO / zastopnik:** https://www.suha-roba.si/
+- **Logotip:** `/find-brands/logos/ribinska-suha-roba.svg`
+- **URL podjetja:** https://www.rokodelskicenter-ribnica.si/
+- **URL SLO / zastopnik:** https://www.rokodelskicenter-ribnica.si/
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** Različni obrtniki / zadruga / kolektivna znamka
-- **Sedež:** Ribnica, Slovenija
-- **Ustanovitev:** Tradicion stoletja; sodobna organiziranost 20.–21. st.
-- **Lastništvo:** Obrtniki / kolektiv
+- **Uradno ime:** Javni zavod Rokodelski center Ribnica (promocija/zaščita); izdelovalci — obrtniki
+- **Sedež:** Cesta na Ugar 6, 1310 Ribnica, Slovenija
+- **Ustanovitev:** Tradiciija od 15. stoletja; ZGO »Ribniška suha roba« 2004
+- **Lastništvo:** Skupnost obrtnikov + javni zavod
 
 ### 2. Poslovno-finančni profil
-- **Prihodki:** Ni konsolidirano (več proizvajalcev)
-- **Zaposleni:** Razpršeno med obrtniki
-- **Izvoz / globalna prisotnost:** Turistični in omejen izvoz
+- **Prihodki:** Ni javno dostopno (razpršeni obrtniki)
+- **Zaposleni:** Ni javno dostopno (mreža suhorobarjev, 11 panog)
+- **Izvoz / globalna prisotnost:** Zgodovinsko/tradicionalno izvozno; danes mešano
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Zobotrebci, kuhinjski pripomočki, igrače, posoda iz lesa
-- **Certifikati / tehnologija:** Zaščitena označba / dediščina (kjer velja)
-- **Proizvodni model:** Obrtniško–unikatna
+- **Linije in materiali:** Žličarstvo, posodarstvo, pletarstvo, orodjarstvo, strugarstvo, spominki (10+ panog)
+- **Certifikati / tehnologija:** Geografska označba Ribniška suha roba
+- **Proizvodni model:** Obrtna/ročna izdelava lokalnega lesa
 
 ### 4. Tržno pozicioniranje
-- **Cenovni segment:** Srednji
-- **USP:** Zaščitena / tradicionalna ribniška suha roba — kulturna dediščina
-- **Ciljna skupina:** B2C; turizem
+- **Cenovni segment:** Dostopni
+- **USP:** Zaščitena geografska označba tradicionalnih lesenih izdelkov Ribniške doline (ZGO 2004)
+- **Ciljna skupina:** Turisti, gospodinjstva, kulturna dediščina
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Obrtne trgovine
-- **Partnerji / trgovine:** Ribniški muzej / turistični center / trgovine
+- **Model vstopa:** Muzejska trgovina RC Ribnica, sejmi, obrtniki
+- **Partnerji / trgovine:** Rokodelski center Ribnica; Turizem Ribnica; lokalni suhorobarji
 
 # Tuje v SLO
 
@@ -123,194 +123,194 @@
 - **Izvor:** Tuje v SLO
 - **Logotip:** `/find-brands/logos/woodupp.png`
 - **URL podjetja:** https://woodupp.com/
-- **URL SLO / zastopnik:** Ni znan / ni relevantno
+- **URL SLO / zastopnik:** https://www.delight-office.si/p/paneli-in-plosce/woodupp/
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** WoodUpp ApS
-- **Sedež:** Danska
-- **Ustanovitev:** 2010-ta
+- **Uradno ime:** WoodUpp Group A/S
+- **Sedež:** Ribe, Danska
+- **Ustanovitev:** 2015
 - **Lastništvo:** Zasebno
 
 ### 2. Poslovno-finančni profil
-- **Prihodki:** Ni javno dostopno; Ocena: milijonski–nižji desetmilijonski EUR
-- **Zaposleni:** Ocena: 20–80
-- **Izvoz / globalna prisotnost:** Visok (EU)
+- **Prihodki:** Ni javno dostopno
+- **Zaposleni:** ~77 (LinkedIn)
+- **Izvoz / globalna prisotnost:** Visok (EU in širše; B2B/B2C)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Akustični paneli, stenske obloge
-- **Certifikati / tehnologija:** Akustični testi (αw); FSC po dobavi
-- **Proizvodni model:** Industrijska lahka
+- **Linije in materiali:** Acoustic slat panels, wall/ceiling wood panels, DIY montažni sistemi
+- **Certifikati / tehnologija:** Akustične specifikacije po modelih
+- **Proizvodni model:** Nordijski design + serijska proizvodnja panelov
 
 ### 4. Tržno pozicioniranje
-- **Cenovni segment:** Višji-srednji
-- **USP:** Danski leseni akustični paneli (felt + les) za interier
-- **Ciljna skupina:** B2C; B2B arhitekti
+- **Cenovni segment:** Srednji
+- **USP:** Danski DIY leseni stenski/stropni paneli in akustične latne za hitro montažo v nordijskem dizajnu
+- **Ciljna skupina:** Stanovanja, pisarne, DIY prenove
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Splet + distributorji
-- **Partnerji / trgovine:** Interier / akustični dobavitelji
+- **Model vstopa:** Delight Office / splet WoodUpp
+- **Partnerji / trgovine:** Delight Office Solution
 
 ## Brio
 
 - **Izvor:** Tuje v SLO
 - **Logotip:** `/find-brands/logos/brio.png`
-- **URL podjetja:** https://www.briotoys.com/
+- **URL podjetja:** https://www.brio.com/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** BRIO AB (Ravensburger Group)
-- **Sedež:** Malmö / Osby, Švedska
+- **Uradno ime:** BRIO AB
+- **Sedež:** Malmö, Švedska (proizvodne korenine Osby)
 - **Ustanovitev:** 1884
-- **Lastništvo:** Ravensburger AG
+- **Lastništvo:** Ravensburger
 
 ### 2. Poslovno-finančni profil
-- **Prihodki:** Del Ravensburger; Ocena brand: desetmilijonski EUR
-- **Zaposleni:** Ocena: 100–300 (brand)
-- **Izvoz / globalna prisotnost:** Globalno
+- **Prihodki:** Ni javno dostopno (znotraj Ravensburger)
+- **Zaposleni:** ~70 (BRIO)
+- **Izvoz / globalna prisotnost:** Visok (~20 držav)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Lesene železnice, igrače
-- **Certifikati / tehnologija:** EN71, FSC
-- **Proizvodni model:** Industrijska
+- **Linije in materiali:** BRIO World železnica, klasične lesene igrače, družinske igre
+- **Certifikati / tehnologija:** CE, varnostni standardi igrač
+- **Proizvodni model:** Globalna znamka; proizvodnja po standardih skupine
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Srednji
-- **USP:** Švedske lesene železnice in igrače — ikona otroške sobe
-- **Ciljna skupina:** B2C
+- **USP:** Švedska ikona lesenih igrač (od 1884), znana po leseni železnici BRIO World; v lasti Ravensburgerja
+- **Ciljna skupina:** Družine, predšolski otroci
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Retail / e-commerce
-- **Partnerji / trgovine:** Igralniške trgovine v SLO
+- **Model vstopa:** Igračarne / splet
+- **Partnerji / trgovine:** Ravensburger distributerji; SI igračarne
 
 ## Grimm’s
 
 - **Izvor:** Tuje v SLO
 - **Logotip:** `/find-brands/logos/grimms.png`
 - **URL podjetja:** https://www.grimms.eu/
-- **URL SLO / zastopnik:** Ni znan / ni relevantno
+- **URL SLO / zastopnik:** https://ristanc.si/oznaka-izdelka/grimms/
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** Grimm’s GmbH
-- **Sedež:** Hochdorf / DE
-- **Ustanovitev:** 1978
-- **Lastništvo:** Družinsko / zasebno
+- **Uradno ime:** Grimm's Spiel und Holz Design
+- **Sedež:** Hochdorf, Baden-Württemberg, Nemčija
+- **Ustanovitev:** 1978 (prevzem Grimm 2005/2006)
+- **Lastništvo:** Družinsko (Sven & Elke Grimm; 2. generacija)
 
 ### 2. Poslovno-finančni profil
 - **Prihodki:** Ni javno dostopno
-- **Zaposleni:** Ocena: 50–150
-- **Izvoz / globalna prisotnost:** Visok
+- **Zaposleni:** Ni javno dostopno
+- **Izvoz / globalna prisotnost:** Visok (globalna distribucija)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Lesene igrače, rainbow, building sets
-- **Certifikati / tehnologija:** EN71, vodne barve, FSC
-- **Proizvodni model:** Pol-industrijska
+- **Linije in materiali:** Mavrice, gradniki, puzzle, figurice, pohištvo za igro
+- **Certifikati / tehnologija:** CE, spiel gut, naravna olja/barve
+- **Proizvodni model:** HQ Hochdorf (olja/montaža); lesna obdelava pri partnerjih DE/EU
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Premijski
-- **USP:** Nemške waldorf / rainbow lesene igrače
-- **Ciljna skupina:** B2C premijski
+- **USP:** Nemška družinska manufaktura odprte lesene igre (mavrica, gradniki) — Made in Germany & Europe
+- **Ciljna skupina:** Waldorf/Montessori družine, premium igrače
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Specialty retail
-- **Partnerji / trgovine:** Waldorf / eko igračne trgovine
+- **Model vstopa:** Ristanc / Kreativne igrače
+- **Partnerji / trgovine:** Ristanc; Kreativne igrače
 
 ## Haba
 
 - **Izvor:** Tuje v SLO
-- **Logotip:** `/find-brands/logos/haba.png`
-- **URL podjetja:** https://www.haba.de/
+- **Logotip:** `/find-brands/logos/haba.svg`
+- **URL podjetja:** https://www.haba-play.com/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** HABA Familygroup / Habermaass GmbH
+- **Uradno ime:** HABA / Habermaass GmbH
 - **Sedež:** Bad Rodach, Nemčija
-- **Ustanovitev:** 1938
-- **Lastništvo:** Družinsko
+- **Ustanovitev:** 1938 (Eugen Habermaaß & Anton Engel)
+- **Lastništvo:** Družinsko (Klaus Habermaaß)
 
 ### 2. Poslovno-finančni profil
-- **Prihodki:** Ocena: 100–200 mio EUR (skupina)
-- **Zaposleni:** Ocena: 500–1.000
-- **Izvoz / globalna prisotnost:** Visok
+- **Prihodki:** Ni javno dostopno
+- **Zaposleni:** Ocena: ~1.900 (skupina HQ)
+- **Izvoz / globalna prisotnost:** Visok (mednarodna distribucija)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Lesene igrače, igre, otroško pohištvo
-- **Certifikati / tehnologija:** EN71, GS
-- **Proizvodni model:** Industrijska
+- **Linije in materiali:** Lesene igrače, družinske igre, Terra Kids, baby/toddler
+- **Certifikati / tehnologija:** Made in Germany (večina lesa), CE
+- **Proizvodni model:** Lastna proizvodnja Bad Rodach + mednarodna mreža
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Srednji
-- **USP:** Nemške lesene in otroške igrače — široka EU maloprodaja
-- **Ciljna skupina:** B2C
+- **USP:** Nemški družinski proizvajalec lesenih igrač in rumeno škatlastih iger iz Bad Rodacha (od 1938)
+- **Ciljna skupina:** Družine, vrtci, darila
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Retail
-- **Partnerji / trgovine:** Igralniške verige
+- **Model vstopa:** Igračarne / splet
+- **Partnerji / trgovine:** SI trgovci z igračami
 
 # Močne evropske
 
 ## Gustafs
 
 - **Izvor:** Močne evropske
-- **Logotip:** `/find-brands/logos/gustafs.png`
-- **URL podjetja:** https://www.gustafs.com/
+- **Logotip:** `/find-brands/logos/gustafs.svg`
+- **URL podjetja:** https://gustafs.com/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
 ### 1. Osnovna osebna izkaznica
 - **Uradno ime:** Gustafs Scandinavia AB
-- **Sedež:** Gustafs / Švedska
-- **Ustanovitev:** 1910-ta / sodobni akustični fokus
-- **Lastništvo:** Zasebno
+- **Sedež:** Stationsvägen 1, 781 60 Gustafs, Švedska
+- **Ustanovitev:** 1993 (registracija AB; paneli od 1980-ih)
+- **Lastništvo:** Zasebno (Gustafs Holding / Bockepall)
 
 ### 2. Poslovno-finančni profil
-- **Prihodki:** Ni javno dostopno
-- **Zaposleni:** Ocena: 50–150
-- **Izvoz / globalna prisotnost:** Visok (EU projekti)
+- **Prihodki:** 142,5 mio SEK (2025)
+- **Zaposleni:** 58 (2025)
+- **Izvoz / globalna prisotnost:** Visok (mednarodni arhitekturni projekti)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Akustični leseni paneli, stropi, stene
-- **Certifikati / tehnologija:** Akustični / požarni razredi; FSC
-- **Proizvodni model:** Industrijska projektna
+- **Linije in materiali:** Acoustic wood panels, Mix Ceilings, Feltfon, Blayde baffles, Capax sistem
+- **Certifikati / tehnologija:** A2-s1,d0, FSC, EPD, TVOC
+- **Proizvodni model:** Proizvodnja Gustafs, Švedska; 100 % obnovljiva energija
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Premijski
-- **USP:** Švedski arhitekturni leseni akustični paneli
-- **Ciljna skupina:** B2B arhitekti
+- **USP:** Švedski premijski sistemi lesenih akustičnih sten/stropov (Capax, Feltfon) z požarno varnostjo do A2-s1,d0
+- **Ciljna skupina:** Arhitekti, javni objekti, koncertne dvorane, office
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Projektni agenti
-- **Partnerji / trgovine:** —
+- **Model vstopa:** Projektna B2B prodaja
+- **Partnerji / trgovine:** Mednarodni arhitekturni/akustični partnerji
 
 ## Topakustik
 
 - **Izvor:** Močne evropske
-- **Logotip:** `/find-brands/logos/topakustik.png`
+- **Logotip:** `/find-brands/logos/topakustik.svg`
 - **URL podjetja:** https://www.topakustik.ch/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** Topakustik / NH Akustik + Design AG
-- **Sedež:** Švica
-- **Ustanovitev:** Sodobna akustična znamka (20.–21. st.)
-- **Lastništvo:** Zasebno
+- **Uradno ime:** Topakustik AG
+- **Sedež:** Obseestrasse 11, 6078 Lungern, Švica
+- **Ustanovitev:** 1991
+- **Lastništvo:** Zasebno (self-owned)
 
 ### 2. Poslovno-finančni profil
 - **Prihodki:** Ni javno dostopno
-- **Zaposleni:** Ocena: 30–100
-- **Izvoz / globalna prisotnost:** Visok (projekti)
+- **Zaposleni:** ~27 (LinkedIn)
+- **Izvoz / globalna prisotnost:** Visok (globalna mreža)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Perforirani / utorjeni akustični paneli
-- **Certifikati / tehnologija:** Akustični certi; požarni
-- **Proizvodni model:** Pol-industrijska
+- **Linije in materiali:** Akustični stenski/stropni paneli, sistemske akustične rešitve
+- **Certifikati / tehnologija:** Akustični/požarni certifikati po sistemih
+- **Proizvodni model:** Švicarska proizvodnja + inženiring rešitev
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Premijski
-- **USP:** Švicarski akustični leseni sistemi (NH Akustik + Topakustik)
-- **Ciljna skupina:** B2B arhitekti
+- **USP:** Švicarski specialist za inženirske lesene akustične stenske in stropne sisteme
+- **Ciljna skupina:** Arhitekti, izvajalci stropov, javni objekti
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Agenti
-- **Partnerji / trgovine:** —
+- **Model vstopa:** Mednarodni sales partnerji
+- **Partnerji / trgovine:** Globalna partnerska mreža (topakustik.ch)
 
 ## Kay Bojesen
 
@@ -320,58 +320,58 @@
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** Kay Bojesen Denmark (Rosendahl Design Group)
-- **Sedež:** Danska
-- **Ustanovitev:** 1930-ta (Kay Bojesen); znamka kontinuirana
-- **Lastništvo:** Rosendahl Design Group
+- **Uradno ime:** Kay Bojesen ApS
+- **Sedež:** Frederiksberg, Danska
+- **Ustanovitev:** 1913 (design legacy); ApS 2011 (Sus Bojesen Rosenqvist)
+- **Lastništvo:** Družinsko (vnukinja ustanovitelja)
 
 ### 2. Poslovno-finančni profil
-- **Prihodki:** Del Rosendahl; Ocena brand: desetmilijonski EUR
-- **Zaposleni:** Ocena: del širše skupine
-- **Izvoz / globalna prisotnost:** Globalno
+- **Prihodki:** Ni javno dostopno
+- **Zaposleni:** ~17 (LinkedIn)
+- **Izvoz / globalna prisotnost:** Visok (retail, hospitality, corporate gifts)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Lesene figure, darila, kolekcije
-- **Certifikati / tehnologija:** FSC; design heritage
-- **Proizvodni model:** Industrijska mala–srednja serija
+- **Linije in materiali:** Lesene figure/živali, namizni pribor, interior objekti
+- **Certifikati / tehnologija:** Danski design; Purveyor to Her Majesty (zgodovina)
+- **Proizvodni model:** Licenčna/arhivalna reprodukcija designa; kakovostna izdelava
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Premijski
-- **USP:** Danske ikonske lesene figure (opica, vojaki) — design dediščina
-- **Ciljna skupina:** B2C design
+- **USP:** Danska design dediščina (od 1913) — ikonične lesene živali (opica) in namizni pripomočki
+- **Ciljna skupina:** Design kupci, darila, HoReCa
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Design retail
-- **Partnerji / trgovine:** Design trgovine / gift
+- **Model vstopa:** Uradna spletna trgovina + design retailerji
+- **Partnerji / trgovine:** Mednarodni design/retail partnerji
 
 ## Ostheimer
 
 - **Izvor:** Močne evropske
-- **Logotip:** `/find-brands/logos/ostheimer.png`
+- **Logotip:** `/find-brands/logos/ostheimer.svg`
 - **URL podjetja:** https://www.ostheimer.de/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
 ### 1. Osnovna osebna izkaznica
-- **Uradno ime:** Ostheimer GmbH
-- **Sedež:** Cellente / DE
-- **Ustanovitev:** 1948
-- **Lastništvo:** Družinsko
+- **Uradno ime:** Margarete Ostheimer GmbH
+- **Sedež:** Zell unter Aichelberg, Nemčija
+- **Ustanovitev:** Ocena: ~1940-ta (Margarete Ostheimer; 80+ let)
+- **Lastništvo:** Družinsko/zasebno
 
 ### 2. Poslovno-finančni profil
 - **Prihodki:** Ni javno dostopno
-- **Zaposleni:** Ocena: 50–150
-- **Izvoz / globalna prisotnost:** Visok
+- **Zaposleni:** Ocena: ~55 (stalni)
+- **Izvoz / globalna prisotnost:** Visok (mednarodni Waldorf trg)
 
 ### 3. Produktni fokus in tehnologija
-- **Linije in materiali:** Lesene figure, farme, pravljice
-- **Certifikati / tehnologija:** EN71; naravne barve
-- **Proizvodni model:** Obrtniško–polindustrijska
+- **Linije in materiali:** Družina & kmetija, gozdne živali, pravljične figure, letni časi
+- **Certifikati / tehnologija:** CE, spiel gut, bio olja/barve
+- **Proizvodni model:** Ročna umetniška izdelava; predvsem javor
 
 ### 4. Tržno pozicioniranje
 - **Cenovni segment:** Premijski
-- **USP:** Nemške ročno barvane lesene figure — waldorf klasik
-- **Ciljna skupina:** B2C premijski
+- **USP:** Nemške ročno izdelane lesene figure (Waldorf) iz javorja — tradicija 80+ let
+- **Ciljna skupina:** Waldorf družine, zbiratelji figur
 
 ### 5. Prisotnost in distribucija v Sloveniji
-- **Model vstopa:** Specialty retail
-- **Partnerji / trgovine:** Waldorf / eko trgovine
+- **Model vstopa:** Specializirane igračarne / splet
+- **Partnerji / trgovine:** Mednarodni pedagogični retailerji
