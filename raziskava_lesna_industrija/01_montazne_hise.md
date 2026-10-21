@@ -24,7 +24,7 @@
 ## Lumar
 
 - **Izvor:** Slovenske
-- **Logotip:** `/find-brands/logos/lumar.png`
+- **Logotip:** `/find-brands/logos/lumar.svg`
 - **URL podjetja:** https://www.lumar.si/
 - **URL SLO / zastopnik:** https://www.lumar.si/
 
@@ -56,7 +56,7 @@
 ## Marles
 
 - **Izvor:** Slovenske
-- **Logotip:** `/find-brands/logos/marles.png`
+- **Logotip:** `/find-brands/logos/marles.svg`
 - **URL podjetja:** https://www.marles.com/
 - **URL SLO / zastopnik:** https://www.marles.com/
 
@@ -120,7 +120,7 @@
 ## Jelovica Hiše
 
 - **Izvor:** Slovenske
-- **Logotip:** `/find-brands/logos/jelovica-hise.png`
+- **Logotip:** `/find-brands/logos/jelovica-hise.svg`
 - **URL podjetja:** https://jelovica-hise.com/
 - **URL SLO / zastopnik:** https://jelovica-hise.com/
 
@@ -186,7 +186,7 @@
 ## Honka
 
 - **Izvor:** Tuje v SLO
-- **Logotip:** `/find-brands/logos/honka.png`
+- **Logotip:** `/find-brands/logos/honka.svg`
 - **URL podjetja:** https://www.honka.com/
 - **URL SLO / zastopnik:** https://www.honka.com/si/sl/
 
@@ -218,7 +218,7 @@
 ## Griffner
 
 - **Izvor:** Tuje v SLO
-- **Logotip:** `/find-brands/logos/griffner.png`
+- **Logotip:** `/find-brands/logos/griffner.svg`
 - **URL podjetja:** https://www.griffner.com/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
@@ -250,7 +250,7 @@
 ## Huf Haus
 
 - **Izvor:** Tuje v SLO
-- **Logotip:** `/find-brands/logos/huf-haus.png`
+- **Logotip:** `/find-brands/logos/huf-haus.svg`
 - **URL podjetja:** https://www.huf-haus.com/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
@@ -284,7 +284,7 @@
 ## SchwörerHaus
 
 - **Izvor:** Močne evropske
-- **Logotip:** `/find-brands/logos/schwoererhaus.png`
+- **Logotip:** `/find-brands/logos/schwoererhaus.svg`
 - **URL podjetja:** https://www.schwoererhaus.de/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
@@ -316,7 +316,7 @@
 ## WeberHaus
 
 - **Izvor:** Močne evropske
-- **Logotip:** `/find-brands/logos/weberhaus.png`
+- **Logotip:** `/find-brands/logos/weberhaus.svg`
 - **URL podjetja:** https://www.weberhaus.de/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
@@ -348,7 +348,7 @@
 ## Baufritz
 
 - **Izvor:** Močne evropske
-- **Logotip:** `/find-brands/logos/baufritz.png`
+- **Logotip:** `/find-brands/logos/baufritz.svg`
 - **URL podjetja:** https://www.baufritz.com/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
@@ -380,7 +380,7 @@
 ## Rubner Haus
 
 - **Izvor:** Močne evropske
-- **Logotip:** `/find-brands/logos/rubner-haus.png`
+- **Logotip:** `/find-brands/logos/rubner-haus.svg`
 - **URL podjetja:** https://www.rubner.com/
 - **URL SLO / zastopnik:** Ni znan / ni relevantno
 
