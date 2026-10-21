@@ -248,6 +248,13 @@ Rules:
 - Preserve numbers, percentages, dates, brand/product names, and URLs when appropriate.
 - Keep short labels short; do not merge, split, drop, or renumber items.
 - Empty input → empty string.
+- Inline formatting markers (critical):
+  - Some strings contain HTML-like emphasis tags: <b>…</b> (bold), <i>…</i> (italic), <u>…</u> (underline).
+  - These mark spans that must stay emphasized in the translation.
+  - Keep the same tags around the corresponding meaning in the target language.
+  - Do not invent new tags; do not drop tags that appear in the source.
+  - Do not escape tags; output them as literal <b>, </b>, <i>, </i>, <u>, </u>.
+  - Nested tags (e.g. <b><u>…</u></b>) must stay nested the same way.
 - Spacing / punctuation (critical):
   - Put a normal space between words (never "storehas", "Regularcustomers", "withgeneral").
   - If the source has multiple words, the translation MUST also separate words with spaces.
@@ -256,33 +263,45 @@ Rules:
   - Put a space before "(" when needed: "shoppers (FG2)" not "shoppers(FG2)".
   - Do NOT start a translation with a stray period or comma.
   - Start sentences with a capital letter.
+  - Do not insert spaces inside tags ("<b>" not "< b >").
 
 Items to translate:
 ${lines}`;
 }
 
+function stripFormatMarkers(text: string): string {
+  return text.replace(/<\/?[biu]>/gi, "");
+}
+
 /** Mirror of client fixTranslationSpacing — keep punctuation tidy before return. */
 function fixTranslationSpacing(text: string): string {
-  let t = text;
-  const strippedLead = /^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/.test(t);
-  t = t.replace(/^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/, "");
+  // Protect emphasis markers so spacing fixes never split "<b>" / "</u>".
+  const slots: string[] = [];
+  let t = text.replace(/<\/?[biu]>/gi, (m) => {
+    const i = slots.length;
+    slots.push(m);
+    return `\uE000${i}\uE001`;
+  });
+  const strippedLead = /^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž\uE000])/.test(t);
+  t = t.replace(/^[.\s]+(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž\uE000])/, "");
   if (strippedLead) {
     t = t.replace(/^([a-zà-öø-ÿā-ž])/, (ch) => ch.toUpperCase());
   }
   t = t.replace(/\s+([,.;:!?…])/g, "$1");
   t = t.replace(/([,;:!?])(?=\S)/g, "$1 ");
-  t = t.replace(/(\.)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž("«„])/g, "$1 ");
+  t = t.replace(/(\.)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž("«„\uE000])/g, "$1 ");
   t = t.replace(/([A-Za-zÀ-ÖØ-öø-ÿĀ-ž0-9])\(/g, "$1 (");
-  t = t.replace(/\)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž])/g, ") ");
+  t = t.replace(/\)(?=[A-Za-zÀ-ÖØ-öø-ÿĀ-ž\uE000])/g, ") ");
   t = t.replace(/([a-zà-öø-ÿā-ž])([A-ZÀ-Ö])/g, "$1 $2");
   t = t.replace(/ {2,}/g, " ");
+  t = t.replace(/\uE000(\d+)\uE001/g, (_, n) => slots[Number(n)] ?? "");
   return t;
 }
 
 function lostWordSpaces(source: string, translated: string): boolean {
-  const srcWords = source.trim().split(/\s+/).filter(Boolean);
+  const srcWords = stripFormatMarkers(source).trim().split(/\s+/).filter(Boolean);
   if (srcWords.length < 2) return false;
-  const out = translated.trim();
+  const out = stripFormatMarkers(translated).trim();
   if (!out || /\s/.test(out)) return false;
   return out.length <= 80 && /[A-Za-zÀ-ÖØ-öø-ÿĀ-ž]{4,}/.test(out);
 }
