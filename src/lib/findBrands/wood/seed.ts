@@ -1,4 +1,5 @@
 import type { Brand, BrandOrigin, PriceTier } from "../types";
+import { brandLogoSrc } from "../logoManifest";
 
 export type BrandSeed = {
   id: string;
@@ -24,17 +25,12 @@ export type BrandSeed = {
   partners: string;
 };
 
-/** Prefer downloaded PNG; UI falls back to SVG then initials. */
-export function logoPath(id: string): string {
-  return `/find-brands/logos/${id}.png`;
-}
-
 export function brand(s: BrandSeed): Brand {
   return {
     id: s.id,
     name: s.name,
     origin: s.origin,
-    logoSrc: logoPath(s.id),
+    logoSrc: brandLogoSrc(s.id),
     companyUrl: s.companyUrl,
     sloveniaUrl: s.sloveniaUrl,
     priceTier: s.priceTier,

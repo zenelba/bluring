@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160">
-  <rect width="320" height="160" fill="#f8fafc"/>
-  <rect x="12" y="12" width="296" height="136" rx="12" fill="#fff" stroke="#e2e8f0"/>
-  <circle cx="56" cy="80" r="28" fill="hsl(251, 35%, 42%)"/>
-  <text x="100" y="76" font-family="system-ui,sans-serif" font-size="18" font-weight="700" fill="#0f172a">haecker</text>
-  <text x="100" y="100" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">haecker-kuechen.com</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120">
+  <rect width="240" height="120" rx="8" fill="#ffffff"/>
+  <rect x="1" y="1" width="238" height="118" rx="7" fill="none" stroke="#e5e7eb"/>
+  <rect x="16" y="30" width="60" height="60" rx="12" fill="hsl(251,42%,38%)"/>
+  <text x="46" y="68" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="20" font-weight="700" fill="#fff">H</text>
+  <text x="90" y="58" font-family="ui-sans-serif,system-ui,sans-serif" font-size="16" font-weight="700" fill="#111827">HAECKER</text>
+  <text x="90" y="78" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10" fill="#6b7280">haecker-kuechen.com</text>
 </svg>
