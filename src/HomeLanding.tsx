@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   formatTaskOption,
   listTaskSummaries,
@@ -9,6 +9,7 @@ export type HomeModeItem = {
   id: string;
   label: string;
   blurb: string;
+  group?: "tools" | "findBrands";
 };
 
 type HomeLandingProps = {
@@ -117,6 +118,17 @@ function ModeIcon({ id }: { id: string }): ReactNode {
           <path d="M22 9l2 2-2 2" opacity="0.7" />
         </svg>
       );
+    case "findBrands":
+      return (
+        <svg {...common}>
+          <rect x="5" y="8" width="10" height="7" rx="1.5" />
+          <rect x="17" y="8" width="10" height="7" rx="1.5" />
+          <rect x="5" y="18" width="10" height="7" rx="1.5" />
+          <rect x="17" y="18" width="10" height="7" rx="1.5" />
+          <circle cx="10" cy="11.5" r="1.5" fill="currentColor" stroke="none" />
+          <circle cx="22" cy="11.5" r="1.5" fill="currentColor" stroke="none" />
+        </svg>
+      );
     default:
       return (
         <svg {...common}>
@@ -124,6 +136,29 @@ function ModeIcon({ id }: { id: string }): ReactNode {
         </svg>
       );
   }
+}
+
+function ModeCard({
+  item,
+  onSelect,
+}: {
+  item: HomeModeItem;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="home__card"
+      onClick={() => onSelect(item.id)}
+      aria-label={item.label}
+    >
+      <span className="home__icon">
+        <ModeIcon id={item.id} />
+      </span>
+      <span className="home__title">{item.label}</span>
+      <span className="home__blurb">{item.blurb}</span>
+    </button>
+  );
 }
 
 export default function HomeLanding({
@@ -134,6 +169,15 @@ export default function HomeLanding({
 }: HomeLandingProps) {
   const [recent, setRecent] = useState<TaskSummary[]>([]);
   const [selectValue, setSelectValue] = useState("");
+
+  const toolModes = useMemo(
+    () => modes.filter((m) => (m.group ?? "tools") === "tools"),
+    [modes],
+  );
+  const findBrandModes = useMemo(
+    () => modes.filter((m) => m.group === "findBrands"),
+    [modes],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -174,23 +218,28 @@ export default function HomeLanding({
           </select>
         </label>
       )}
+
       <div className="home__grid">
-        {modes.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className="home__card"
-            onClick={() => onSelect(item.id)}
-            aria-label={item.label}
-          >
-            <span className="home__icon">
-              <ModeIcon id={item.id} />
-            </span>
-            <span className="home__title">{item.label}</span>
-            <span className="home__blurb">{item.blurb}</span>
-          </button>
+        {toolModes.map((item) => (
+          <ModeCard key={item.id} item={item} onSelect={onSelect} />
         ))}
       </div>
+
+      {findBrandModes.length > 0 && (
+        <section className="home__group" aria-labelledby="home-find-brands">
+          <h2 id="home-find-brands" className="home__group-title">
+            Find Brands
+          </h2>
+          <p className="home__group-blurb">
+            Predpripravljena področja znamk — mreža logotipov in interni profili.
+          </p>
+          <div className="home__grid">
+            {findBrandModes.map((item) => (
+              <ModeCard key={item.id} item={item} onSelect={onSelect} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

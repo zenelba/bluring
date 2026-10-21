@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160">
+  <rect width="320" height="160" fill="#f8fafc"/>
+  <rect x="12" y="12" width="296" height="136" rx="12" fill="#fff" stroke="#e2e8f0"/>
+  <circle cx="56" cy="80" r="28" fill="hsl(208, 35%, 42%)"/>
+  <text x="100" y="76" font-family="system-ui,sans-serif" font-size="18" font-weight="700" fill="#0f172a">riko hise</text>
+  <text x="100" y="100" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">riko-hise.si</text>
+</svg>

@@ -11,7 +11,8 @@ export type HistoryToolId =
   | "brandRemoval"
   | "textReplace"
   | "imageSearch"
-  | "pptxTranslation";
+  | "pptxTranslation"
+  | "findBrands";
 
 export const HISTORY_TOOL_LABELS: Record<HistoryToolId, string> = {
   blur: "Logo blur",
@@ -25,6 +26,7 @@ export const HISTORY_TOOL_LABELS: Record<HistoryToolId, string> = {
   textReplace: "Text replace",
   imageSearch: "Išči slike",
   pptxTranslation: "Powerpoint translation",
+  findBrands: "Find Brands",
 };
 
 export const MAX_TASK_HISTORY = 10;
