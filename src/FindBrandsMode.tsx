@@ -5,6 +5,7 @@ import {
   getBrand,
   getCategory,
 } from "./lib/findBrands/catalog";
+import { exportAreaPdf } from "./lib/findBrands/exportPdf";
 import {
   ORIGIN_LABELS,
   ORIGIN_ORDER,
@@ -79,45 +80,153 @@ function AreasView({ onOpen }: { onOpen: (areaId: string) => void }) {
   );
 }
 
+function OriginLogoGrid({
+  brands,
+  onOpenBrand,
+}: {
+  brands: ReadonlyArray<Brand>;
+  onOpenBrand: (brandId: string) => void;
+}) {
+  return (
+    <>
+      {ORIGIN_ORDER.map((origin) => {
+        const list = brandsByOrigin(brands, origin);
+        if (list.length === 0) return null;
+        return (
+          <section key={origin} className="fb-origin-section">
+            <h3 className="fb-origin-title">{ORIGIN_LABELS[origin]}</h3>
+            <div className="fb-logo-grid">
+              {list.map((brand) => (
+                <button
+                  key={brand.id}
+                  type="button"
+                  className="fb-logo-card"
+                  onClick={() => onOpenBrand(brand.id)}
+                  aria-label={brand.name}
+                  title={brand.name}
+                >
+                  <span className="fb-logo-frame">
+                    <LogoImg key={brand.id} brand={brand} />
+                  </span>
+                  <span className="fb-logo-name">{brand.name}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
 function AreaView({
   area,
   onBack,
   onOpenCategory,
+  onOpenBrand,
 }: {
   area: BrandArea;
   onBack: () => void;
   onOpenCategory: (categoryId: string) => void;
+  onOpenBrand: (categoryId: string, brandId: string) => void;
 }) {
+  const [exploded, setExploded] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const handleExportPdf = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      await exportAreaPdf(area);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="fb-main">
-      <header className="fb-header">
-        <button type="button" className="fb-back" onClick={onBack}>
-          ← Področja
-        </button>
-        <h2>{area.title}</h2>
-        <p>{area.blurb}</p>
+      <header className="fb-header fb-header--toolbar">
+        <div className="fb-header__copy">
+          <button type="button" className="fb-back" onClick={onBack}>
+            ← Področja
+          </button>
+          <h2>{area.title}</h2>
+          <p>{area.blurb}</p>
+        </div>
+        <div className="fb-toolbar">
+          <button
+            type="button"
+            className={
+              exploded ? "fb-toolbar-btn fb-toolbar-btn--active" : "fb-toolbar-btn"
+            }
+            onClick={() => setExploded((v) => !v)}
+            aria-pressed={exploded}
+          >
+            {exploded ? "Collapse all" : "Explode all"}
+          </button>
+          <button
+            type="button"
+            className="fb-toolbar-btn fb-toolbar-btn--primary"
+            onClick={() => void handleExportPdf()}
+            disabled={exporting}
+          >
+            {exporting ? "Exporting…" : "Export to PDF"}
+          </button>
+        </div>
       </header>
-      <ol className="fb-cat-list">
-        {area.categories.map((cat) => (
-          <li key={cat.id}>
-            <button
-              type="button"
-              className="fb-cat-row"
-              onClick={() => onOpenCategory(cat.id)}
-            >
-              <span className="fb-cat-row__num">
-                {String(cat.number).padStart(2, "0")}
-              </span>
-              <span className="fb-cat-row__body">
-                <span className="fb-cat-row__title">{cat.title}</span>
-                <span className="fb-cat-row__meta">
-                  {cat.brands.length} znamk
+
+      {exploded ? (
+        <div className="fb-exploded">
+          {area.categories.map((cat) => (
+            <section key={cat.id} className="fb-exploded-cat">
+              <div className="fb-exploded-cat__head">
+                <span className="fb-cat-row__num">
+                  {String(cat.number).padStart(2, "0")}
                 </span>
-              </span>
-            </button>
-          </li>
-        ))}
-      </ol>
+                <div>
+                  <h3 className="fb-exploded-cat__title">{cat.title}</h3>
+                  <p className="fb-exploded-cat__meta">
+                    {cat.brands.length} znamk · klikni logotip za podrobnosti
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="fb-toolbar-btn fb-toolbar-btn--ghost"
+                  onClick={() => onOpenCategory(cat.id)}
+                >
+                  Odpri kategorijo
+                </button>
+              </div>
+              <OriginLogoGrid
+                brands={cat.brands}
+                onOpenBrand={(brandId) => onOpenBrand(cat.id, brandId)}
+              />
+            </section>
+          ))}
+        </div>
+      ) : (
+        <ol className="fb-cat-list">
+          {area.categories.map((cat) => (
+            <li key={cat.id}>
+              <button
+                type="button"
+                className="fb-cat-row"
+                onClick={() => onOpenCategory(cat.id)}
+              >
+                <span className="fb-cat-row__num">
+                  {String(cat.number).padStart(2, "0")}
+                </span>
+                <span className="fb-cat-row__body">
+                  <span className="fb-cat-row__title">{cat.title}</span>
+                  <span className="fb-cat-row__meta">
+                    {cat.brands.length} znamk
+                  </span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
@@ -146,32 +255,7 @@ function CategoryView({
         <p>Klikni logotip za interni pregled zbranih podatkov.</p>
       </header>
 
-      {ORIGIN_ORDER.map((origin) => {
-        const list = brandsByOrigin(category.brands, origin);
-        if (list.length === 0) return null;
-        return (
-          <section key={origin} className="fb-origin-section">
-            <h3 className="fb-origin-title">{ORIGIN_LABELS[origin]}</h3>
-            <div className="fb-logo-grid">
-              {list.map((brand) => (
-                <button
-                  key={brand.id}
-                  type="button"
-                  className="fb-logo-card"
-                  onClick={() => onOpenBrand(brand.id)}
-                  aria-label={brand.name}
-                  title={brand.name}
-                >
-                  <span className="fb-logo-frame">
-                    <LogoImg key={brand.id} brand={brand} />
-                  </span>
-                  <span className="fb-logo-name">{brand.name}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        );
-      })}
+      <OriginLogoGrid brands={category.brands} onOpenBrand={onOpenBrand} />
     </div>
   );
 }
@@ -387,6 +471,14 @@ export default function FindBrandsMode() {
             onBack={() => setNav({ view: "areas" })}
             onOpenCategory={(categoryId) =>
               setNav({ view: "category", areaId: area.id, categoryId })
+            }
+            onOpenBrand={(categoryId, brandId) =>
+              setNav({
+                view: "brand",
+                areaId: area.id,
+                categoryId,
+                brandId,
+              })
             }
           />
         )}
