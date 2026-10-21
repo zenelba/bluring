@@ -12,7 +12,8 @@ export type JournalToolId =
   | "brandRemoval"
   | "textReplace"
   | "imageSearch"
-  | "pptxTranslation";
+  | "pptxTranslation"
+  | "findBrands";
 
 export type JournalEvent = {
   /** ms since session start */

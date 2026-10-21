@@ -35,6 +35,7 @@ import BrandRemovalMode from "./BrandRemovalMode";
 import TextReplaceMode from "./TextReplaceMode";
 import ImageSearchMode from "./ImageSearchMode";
 import PptxTranslationMode from "./PptxTranslationMode";
+import FindBrandsMode from "./FindBrandsMode";
 import HomeLanding from "./HomeLanding";
 import { FeedbackLauncher } from "@zenel/user-feedback/client";
 import "@zenel/user-feedback/styles.css";
@@ -64,7 +65,8 @@ type ToolMode =
   | "brandRemoval"
   | "textReplace"
   | "imageSearch"
-  | "pptxTranslation";
+  | "pptxTranslation"
+  | "findBrands";
 
 type AppMode = "home" | ToolMode;
 
@@ -72,6 +74,7 @@ type AppModeItem = {
   id: ToolMode;
   label: string;
   blurb: string;
+  group?: "tools" | "findBrands";
 };
 
 const APP_MODES: ReadonlyArray<AppModeItem> = [
@@ -130,6 +133,12 @@ const APP_MODES: ReadonlyArray<AppModeItem> = [
     label: "Powerpoint translation",
     blurb:
       "Prevodi besedila v .pptx na mestu (placeholdeji + SmartArt; ne chart labels)",
+  },
+  {
+    id: "findBrands",
+    label: "Lesna industrija",
+    blurb: "Znamke po kategorijah — logotipi, URLji in raziskovalni profili",
+    group: "findBrands",
   },
 ];
 
@@ -1028,6 +1037,7 @@ export default function App() {
             mode !== "textReplace" &&
             mode !== "imageSearch" &&
             mode !== "pptxTranslation" &&
+            mode !== "findBrands" &&
             mode !== "home" && (
             <button type="button" className="btn btn--ghost" onClick={reset}>
               New image
@@ -1100,6 +1110,8 @@ export default function App() {
           }
           onInitialConsumed={() => setRestoreTask(null)}
         />
+      ) : mode === "findBrands" ? (
+        <FindBrandsMode />
       ) : (
       <div className="main">
         <aside className="sidebar">

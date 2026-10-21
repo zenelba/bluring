@@ -1,0 +1,518 @@
+[
+  {
+    "id": "lumar",
+    "domain": "lumar.si",
+    "svg": "public/find-brands/logos/lumar.svg",
+    "png": "public/find-brands/logos/lumar.png"
+  },
+  {
+    "id": "marles",
+    "domain": "marles.com",
+    "svg": "public/find-brands/logos/marles.svg",
+    "png": "public/find-brands/logos/marles.png"
+  },
+  {
+    "id": "riko-hise",
+    "domain": "riko-hise.si",
+    "svg": "public/find-brands/logos/riko-hise.svg",
+    "png": "public/find-brands/logos/riko-hise.png"
+  },
+  {
+    "id": "jelovica-hise",
+    "domain": "jelovica-hise.com",
+    "svg": "public/find-brands/logos/jelovica-hise.svg",
+    "png": "public/find-brands/logos/jelovica-hise.png"
+  },
+  {
+    "id": "kager-hise",
+    "domain": "kager.si",
+    "svg": "public/find-brands/logos/kager-hise.svg",
+    "png": "public/find-brands/logos/kager-hise.png"
+  },
+  {
+    "id": "honka",
+    "domain": "honka.com",
+    "svg": "public/find-brands/logos/honka.svg",
+    "png": "public/find-brands/logos/honka.png"
+  },
+  {
+    "id": "griffner",
+    "domain": "griffner.com",
+    "svg": "public/find-brands/logos/griffner.svg",
+    "png": "public/find-brands/logos/griffner.png"
+  },
+  {
+    "id": "huf-haus",
+    "domain": "huf-haus.com",
+    "svg": "public/find-brands/logos/huf-haus.svg",
+    "png": "public/find-brands/logos/huf-haus.png"
+  },
+  {
+    "id": "schwoererhaus",
+    "domain": "schwoererhaus.de",
+    "svg": "public/find-brands/logos/schwoererhaus.svg",
+    "png": "public/find-brands/logos/schwoererhaus.png"
+  },
+  {
+    "id": "weberhaus",
+    "domain": "weberhaus.de",
+    "svg": "public/find-brands/logos/weberhaus.svg",
+    "png": "public/find-brands/logos/weberhaus.png"
+  },
+  {
+    "id": "baufritz",
+    "domain": "baufritz.com",
+    "svg": "public/find-brands/logos/baufritz.svg",
+    "png": "public/find-brands/logos/baufritz.png"
+  },
+  {
+    "id": "rubner-haus",
+    "domain": "rubner.com",
+    "svg": "public/find-brands/logos/rubner-haus.svg",
+    "png": "public/find-brands/logos/rubner-haus.png"
+  },
+  {
+    "id": "rex-kralj",
+    "domain": "rex-kralj.com",
+    "svg": "public/find-brands/logos/rex-kralj.svg",
+    "png": "public/find-brands/logos/rex-kralj.png"
+  },
+  {
+    "id": "murales",
+    "domain": "murales.si",
+    "svg": "public/find-brands/logos/murales.svg",
+    "png": "public/find-brands/logos/murales.png"
+  },
+  {
+    "id": "donar",
+    "domain": "donar.si",
+    "svg": "public/find-brands/logos/donar.svg",
+    "png": "public/find-brands/logos/donar.png"
+  },
+  {
+    "id": "stilles",
+    "domain": "stilles.si",
+    "svg": "public/find-brands/logos/stilles.svg",
+    "png": "public/find-brands/logos/stilles.png"
+  },
+  {
+    "id": "artisan",
+    "domain": "artisan.ba",
+    "svg": "public/find-brands/logos/artisan.svg",
+    "png": "public/find-brands/logos/artisan.png"
+  },
+  {
+    "id": "prostoria",
+    "domain": "prostoria.eu",
+    "svg": "public/find-brands/logos/prostoria.svg",
+    "png": "public/find-brands/logos/prostoria.png"
+  },
+  {
+    "id": "vitra",
+    "domain": "vitra.com",
+    "svg": "public/find-brands/logos/vitra.svg",
+    "png": "public/find-brands/logos/vitra.png"
+  },
+  {
+    "id": "carl-hansen",
+    "domain": "carlhansen.com",
+    "svg": "public/find-brands/logos/carl-hansen.svg",
+    "png": "public/find-brands/logos/carl-hansen.png"
+  },
+  {
+    "id": "thonet",
+    "domain": "thonet.de",
+    "svg": "public/find-brands/logos/thonet.svg",
+    "png": "public/find-brands/logos/thonet.png"
+  },
+  {
+    "id": "riva-1920",
+    "domain": "riva1920.it",
+    "svg": "public/find-brands/logos/riva-1920.svg",
+    "png": "public/find-brands/logos/riva-1920.png"
+  },
+  {
+    "id": "fritz-hansen",
+    "domain": "fritzhansen.com",
+    "svg": "public/find-brands/logos/fritz-hansen.svg",
+    "png": "public/find-brands/logos/fritz-hansen.png"
+  },
+  {
+    "id": "hay",
+    "domain": "hay.dk",
+    "svg": "public/find-brands/logos/hay.svg",
+    "png": "public/find-brands/logos/hay.png"
+  },
+  {
+    "id": "cassina",
+    "domain": "cassina.com",
+    "svg": "public/find-brands/logos/cassina.svg",
+    "png": "public/find-brands/logos/cassina.png"
+  },
+  {
+    "id": "m-sora",
+    "domain": "m-sora.si",
+    "svg": "public/find-brands/logos/m-sora.svg",
+    "png": "public/find-brands/logos/m-sora.png"
+  },
+  {
+    "id": "inles",
+    "domain": "inles.si",
+    "svg": "public/find-brands/logos/inles.svg",
+    "png": "public/find-brands/logos/inles.png"
+  },
+  {
+    "id": "gasper",
+    "domain": "gasper.si",
+    "svg": "public/find-brands/logos/gasper.svg",
+    "png": "public/find-brands/logos/gasper.png"
+  },
+  {
+    "id": "pirnar",
+    "domain": "pirnar.si",
+    "svg": "public/find-brands/logos/pirnar.svg",
+    "png": "public/find-brands/logos/pirnar.png"
+  },
+  {
+    "id": "jelovica-okna",
+    "domain": "jelovica.si",
+    "svg": "public/find-brands/logos/jelovica-okna.svg",
+    "png": "public/find-brands/logos/jelovica-okna.png"
+  },
+  {
+    "id": "internorm",
+    "domain": "internorm.com",
+    "svg": "public/find-brands/logos/internorm.svg",
+    "png": "public/find-brands/logos/internorm.png"
+  },
+  {
+    "id": "velux",
+    "domain": "velux.com",
+    "svg": "public/find-brands/logos/velux.svg",
+    "png": "public/find-brands/logos/velux.png"
+  },
+  {
+    "id": "josko",
+    "domain": "josko.com",
+    "svg": "public/find-brands/logos/josko.svg",
+    "png": "public/find-brands/logos/josko.png"
+  },
+  {
+    "id": "gaulhofer",
+    "domain": "gaulhofer.com",
+    "svg": "public/find-brands/logos/gaulhofer.svg",
+    "png": "public/find-brands/logos/gaulhofer.png"
+  },
+  {
+    "id": "unilux",
+    "domain": "unilux.de",
+    "svg": "public/find-brands/logos/unilux.svg",
+    "png": "public/find-brands/logos/unilux.png"
+  },
+  {
+    "id": "fakro",
+    "domain": "fakro.com",
+    "svg": "public/find-brands/logos/fakro.svg",
+    "png": "public/find-brands/logos/fakro.png"
+  },
+  {
+    "id": "kneer-sudfenster",
+    "domain": "kneer-suedfenster.de",
+    "svg": "public/find-brands/logos/kneer-sudfenster.svg",
+    "png": "public/find-brands/logos/kneer-sudfenster.png"
+  },
+  {
+    "id": "floor-experts",
+    "domain": "floorexperts.si",
+    "svg": "public/find-brands/logos/floor-experts.svg",
+    "png": "public/find-brands/logos/floor-experts.png"
+  },
+  {
+    "id": "vogart",
+    "domain": "vogart.si",
+    "svg": "public/find-brands/logos/vogart.svg",
+    "png": "public/find-brands/logos/vogart.png"
+  },
+  {
+    "id": "eko-parket",
+    "domain": "ekoparket.si",
+    "svg": "public/find-brands/logos/eko-parket.svg",
+    "png": "public/find-brands/logos/eko-parket.png"
+  },
+  {
+    "id": "weitzer-parkett",
+    "domain": "weitzer-parkett.com",
+    "svg": "public/find-brands/logos/weitzer-parkett.svg",
+    "png": "public/find-brands/logos/weitzer-parkett.png"
+  },
+  {
+    "id": "bauwerk-parkett",
+    "domain": "bauwerk-parkett.com",
+    "svg": "public/find-brands/logos/bauwerk-parkett.svg",
+    "png": "public/find-brands/logos/bauwerk-parkett.png"
+  },
+  {
+    "id": "haro",
+    "domain": "haro.com",
+    "svg": "public/find-brands/logos/haro.svg",
+    "png": "public/find-brands/logos/haro.png"
+  },
+  {
+    "id": "kahrs",
+    "domain": "kahrs.com",
+    "svg": "public/find-brands/logos/kahrs.svg",
+    "png": "public/find-brands/logos/kahrs.png"
+  },
+  {
+    "id": "tarkett",
+    "domain": "tarkett.com",
+    "svg": "public/find-brands/logos/tarkett.svg",
+    "png": "public/find-brands/logos/tarkett.png"
+  },
+  {
+    "id": "boen",
+    "domain": "boen.com",
+    "svg": "public/find-brands/logos/boen.svg",
+    "png": "public/find-brands/logos/boen.png"
+  },
+  {
+    "id": "barlinek",
+    "domain": "barlinek.com",
+    "svg": "public/find-brands/logos/barlinek.svg",
+    "png": "public/find-brands/logos/barlinek.png"
+  },
+  {
+    "id": "listone-giordano",
+    "domain": "listonegiordano.com",
+    "svg": "public/find-brands/logos/listone-giordano.svg",
+    "png": "public/find-brands/logos/listone-giordano.png"
+  },
+  {
+    "id": "alples",
+    "domain": "alples.si",
+    "svg": "public/find-brands/logos/alples.svg",
+    "png": "public/find-brands/logos/alples.png"
+  },
+  {
+    "id": "svea",
+    "domain": "svea.si",
+    "svg": "public/find-brands/logos/svea.svg",
+    "png": "public/find-brands/logos/svea.png"
+  },
+  {
+    "id": "mizarstvo-erjavec",
+    "domain": "mizarstvo-erjavec.si",
+    "svg": "public/find-brands/logos/mizarstvo-erjavec.svg",
+    "png": "public/find-brands/logos/mizarstvo-erjavec.png"
+  },
+  {
+    "id": "dankuchen",
+    "domain": "dankuechen.at",
+    "svg": "public/find-brands/logos/dankuchen.svg",
+    "png": "public/find-brands/logos/dankuchen.png"
+  },
+  {
+    "id": "nobilia",
+    "domain": "nobilia.de",
+    "svg": "public/find-brands/logos/nobilia.svg",
+    "png": "public/find-brands/logos/nobilia.png"
+  },
+  {
+    "id": "schueller-next125",
+    "domain": "schueller.de",
+    "svg": "public/find-brands/logos/schueller-next125.svg",
+    "png": "public/find-brands/logos/schueller-next125.png"
+  },
+  {
+    "id": "bulthaup",
+    "domain": "bulthaup.com",
+    "svg": "public/find-brands/logos/bulthaup.svg",
+    "png": "public/find-brands/logos/bulthaup.png"
+  },
+  {
+    "id": "valcucine",
+    "domain": "valcucine.com",
+    "svg": "public/find-brands/logos/valcucine.svg",
+    "png": "public/find-brands/logos/valcucine.png"
+  },
+  {
+    "id": "poggenpohl",
+    "domain": "poggenpohl.com",
+    "svg": "public/find-brands/logos/poggenpohl.svg",
+    "png": "public/find-brands/logos/poggenpohl.png"
+  },
+  {
+    "id": "siematic",
+    "domain": "siematic.com",
+    "svg": "public/find-brands/logos/siematic.svg",
+    "png": "public/find-brands/logos/siematic.png"
+  },
+  {
+    "id": "haecker",
+    "domain": "haecker-kuechen.com",
+    "svg": "public/find-brands/logos/haecker.svg",
+    "png": "public/find-brands/logos/haecker.png"
+  },
+  {
+    "id": "leicht",
+    "domain": "leicht.com",
+    "svg": "public/find-brands/logos/leicht.svg",
+    "png": "public/find-brands/logos/leicht.png"
+  },
+  {
+    "id": "boffi",
+    "domain": "boffi.com",
+    "svg": "public/find-brands/logos/boffi.svg",
+    "png": "public/find-brands/logos/boffi.png"
+  },
+  {
+    "id": "lip-bled",
+    "domain": "lip-bled.si",
+    "svg": "public/find-brands/logos/lip-bled.svg",
+    "png": "public/find-brands/logos/lip-bled.png"
+  },
+  {
+    "id": "javor-pivka",
+    "domain": "javor.si",
+    "svg": "public/find-brands/logos/javor-pivka.svg",
+    "png": "public/find-brands/logos/javor-pivka.png"
+  },
+  {
+    "id": "cbd",
+    "domain": "cbd.si",
+    "svg": "public/find-brands/logos/cbd.svg",
+    "png": "public/find-brands/logos/cbd.png"
+  },
+  {
+    "id": "egger",
+    "domain": "egger.com",
+    "svg": "public/find-brands/logos/egger.svg",
+    "png": "public/find-brands/logos/egger.png"
+  },
+  {
+    "id": "kronospan",
+    "domain": "kronospan.com",
+    "svg": "public/find-brands/logos/kronospan.svg",
+    "png": "public/find-brands/logos/kronospan.png"
+  },
+  {
+    "id": "fundermax",
+    "domain": "fundermax.com",
+    "svg": "public/find-brands/logos/fundermax.svg",
+    "png": "public/find-brands/logos/fundermax.png"
+  },
+  {
+    "id": "klh",
+    "domain": "klh.at",
+    "svg": "public/find-brands/logos/klh.svg",
+    "png": "public/find-brands/logos/klh.png"
+  },
+  {
+    "id": "stora-enso",
+    "domain": "storaenso.com",
+    "svg": "public/find-brands/logos/stora-enso.svg",
+    "png": "public/find-brands/logos/stora-enso.png"
+  },
+  {
+    "id": "hasslacher",
+    "domain": "hasslacher.com",
+    "svg": "public/find-brands/logos/hasslacher.svg",
+    "png": "public/find-brands/logos/hasslacher.png"
+  },
+  {
+    "id": "binderholz",
+    "domain": "binderholz.com",
+    "svg": "public/find-brands/logos/binderholz.svg",
+    "png": "public/find-brands/logos/binderholz.png"
+  },
+  {
+    "id": "mayr-melnhof-holz",
+    "domain": "mm-holz.com",
+    "svg": "public/find-brands/logos/mayr-melnhof-holz.svg",
+    "png": "public/find-brands/logos/mayr-melnhof-holz.png"
+  },
+  {
+    "id": "swiss-krono",
+    "domain": "swisskrono.com",
+    "svg": "public/find-brands/logos/swiss-krono.svg",
+    "png": "public/find-brands/logos/swiss-krono.png"
+  },
+  {
+    "id": "steico",
+    "domain": "steico.com",
+    "svg": "public/find-brands/logos/steico.svg",
+    "png": "public/find-brands/logos/steico.png"
+  },
+  {
+    "id": "metsa-wood",
+    "domain": "metsawood.com",
+    "svg": "public/find-brands/logos/metsa-wood.svg",
+    "png": "public/find-brands/logos/metsa-wood.png"
+  },
+  {
+    "id": "ooh-noo",
+    "domain": "ooh-noo.com",
+    "svg": "public/find-brands/logos/ooh-noo.svg",
+    "png": "public/find-brands/logos/ooh-noo.png"
+  },
+  {
+    "id": "ribrand",
+    "domain": "ribrand.si",
+    "svg": "public/find-brands/logos/ribrand.svg",
+    "png": "public/find-brands/logos/ribrand.png"
+  },
+  {
+    "id": "ribinska-suha-roba",
+    "domain": "suha-roba.si",
+    "svg": "public/find-brands/logos/ribniška-suha-roba.svg",
+    "png": "public/find-brands/logos/ribniška-suha-roba.png"
+  },
+  {
+    "id": "woodupp",
+    "domain": "woodupp.com",
+    "svg": "public/find-brands/logos/woodupp.svg",
+    "png": "public/find-brands/logos/woodupp.png"
+  },
+  {
+    "id": "brio",
+    "domain": "briotoys.com",
+    "svg": "public/find-brands/logos/brio.svg",
+    "png": "public/find-brands/logos/brio.png"
+  },
+  {
+    "id": "grimms",
+    "domain": "grimms.eu",
+    "svg": "public/find-brands/logos/grimms.svg",
+    "png": "public/find-brands/logos/grimms.png"
+  },
+  {
+    "id": "haba",
+    "domain": "haba.de",
+    "svg": "public/find-brands/logos/haba.svg",
+    "png": "public/find-brands/logos/haba.png"
+  },
+  {
+    "id": "gustafs",
+    "domain": "gustafs.com",
+    "svg": "public/find-brands/logos/gustafs.svg",
+    "png": "public/find-brands/logos/gustafs.png"
+  },
+  {
+    "id": "topakustik",
+    "domain": "topakustik.ch",
+    "svg": "public/find-brands/logos/topakustik.svg",
+    "png": "public/find-brands/logos/topakustik.png"
+  },
+  {
+    "id": "kay-bojesen",
+    "domain": "kaybojesen.com",
+    "svg": "public/find-brands/logos/kay-bojesen.svg",
+    "png": "public/find-brands/logos/kay-bojesen.png"
+  },
+  {
+    "id": "ostheimer",
+    "domain": "ostheimer.de",
+    "svg": "public/find-brands/logos/ostheimer.svg",
+    "png": "public/find-brands/logos/ostheimer.png"
+  }
+]
