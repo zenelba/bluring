@@ -24,7 +24,9 @@ function brandLogoHtml(brand: Brand): string {
     const initials = brand.name.slice(0, 2).toUpperCase();
     return `<span class="fb-logo-fallback" aria-hidden="true">${initials}</span>`;
   }
-  return `<img class="fb-logo-img" src="${src}" alt="" />`;
+  const svg = src.replace(/\.png$/i, ".svg");
+  // Prefer PNG when present; onError swaps to SVG (same as LogoImg in UI).
+  return `<img class="fb-logo-img" src="${src}" alt="" data-fallback="${svg !== src ? svg : ""}" />`;
 }
 
 /** Off-screen tree matching Explode-all: categories → origin → logo cards only. */
@@ -78,6 +80,30 @@ function buildExportRoot(area: BrandArea): HTMLElement {
   }
 
   root.appendChild(stack);
+
+  root.addEventListener(
+    "error",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLImageElement)) return;
+      const fallback = target.dataset.fallback;
+      if (fallback && target.src !== fallback) {
+        target.dataset.fallback = "";
+        target.src = fallback;
+        return;
+      }
+      const name = target.closest(".fb-logo-card")?.querySelector(".fb-logo-name")
+        ?.textContent;
+      const initials = (name ?? "?").slice(0, 2).toUpperCase();
+      const span = document.createElement("span");
+      span.className = "fb-logo-fallback";
+      span.setAttribute("aria-hidden", "true");
+      span.textContent = initials;
+      target.replaceWith(span);
+    },
+    true,
+  );
+
   return root;
 }
 
@@ -140,9 +166,15 @@ export async function exportAreaPdf(area: BrandArea): Promise<void> {
   document.body.appendChild(root);
 
   try {
-    await waitUntilLoad(root, { timeout: 15000 });
-    // Give SVG/PNG a beat after load events.
-    await new Promise((r) => setTimeout(r, 120));
+    await waitUntilLoad(root, { timeout: 20000 });
+    // Allow PNG→SVG onError swaps to settle, then decode.
+    await new Promise((r) => setTimeout(r, 250));
+    const imgs = [...root.querySelectorAll("img")];
+    await Promise.all(
+      imgs.map((img) =>
+        img.decode().catch(() => undefined),
+      ),
+    );
 
     const canvas = await domToCanvas(root, {
       scale: 2,
