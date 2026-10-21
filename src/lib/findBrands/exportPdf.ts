@@ -1,6 +1,12 @@
 import { jsPDF } from "jspdf";
+import { domToCanvas, waitUntilLoad } from "modern-screenshot";
 import { downloadBlob } from "../report";
-import { ORIGIN_LABELS, ORIGIN_ORDER, type BrandArea } from "./types";
+import {
+  ORIGIN_LABELS,
+  ORIGIN_ORDER,
+  type Brand,
+  type BrandArea,
+} from "./types";
 
 function slugify(value: string): string {
   return value
@@ -12,142 +18,141 @@ function slugify(value: string): string {
     .slice(0, 60);
 }
 
-function wrapText(
-  pdf: jsPDF,
-  text: string,
-  x: number,
-  y: number,
-  maxWidth: number,
-  lineHeight: number,
-): number {
-  const lines = pdf.splitTextToSize(text, maxWidth) as string[];
-  for (const line of lines) {
-    pdf.text(line, x, y);
-    y += lineHeight;
+function brandLogoHtml(brand: Brand): string {
+  const src = brand.logoSrc;
+  if (!src) {
+    const initials = brand.name.slice(0, 2).toUpperCase();
+    return `<span class="fb-logo-fallback" aria-hidden="true">${initials}</span>`;
   }
-  return y;
+  return `<img class="fb-logo-img" src="${src}" alt="" />`;
 }
 
-function ensureSpace(pdf: jsPDF, y: number, needed: number, margin: number): number {
-  const pageH = pdf.internal.pageSize.getHeight();
-  if (y + needed > pageH - margin) {
-    pdf.addPage();
-    return margin;
-  }
-  return y;
-}
+/** Off-screen tree matching Explode-all: categories → origin → logo cards only. */
+function buildExportRoot(area: BrandArea): HTMLElement {
+  const root = document.createElement("div");
+  root.className = "fb-pdf-export";
+  root.setAttribute("aria-hidden", "true");
 
-/** Export full area catalog (all categories + brand matrices) to a PDF. */
-export async function exportAreaPdf(area: BrandArea): Promise<void> {
-  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  const pageW = pdf.internal.pageSize.getWidth();
-  const margin = 14;
-  const contentW = pageW - margin * 2;
-  let y = margin;
-
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(16);
-  y = wrapText(pdf, area.title, margin, y + 4, contentW, 7);
-  pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(10);
-  pdf.setTextColor(80);
-  y = wrapText(pdf, area.blurb, margin, y + 2, contentW, 5);
-  pdf.setTextColor(0);
-  y += 4;
-
-  const totalBrands = area.categories.reduce((n, c) => n + c.brands.length, 0);
-  pdf.setFontSize(9);
-  pdf.setTextColor(100);
-  pdf.text(
-    `${area.categories.length} kategorij · ${totalBrands} znamk · Find Brands`,
-    margin,
-    y,
-  );
-  y += 8;
-  pdf.setTextColor(0);
+  const stack = document.createElement("div");
+  stack.className = "fb-exploded";
 
   for (const cat of area.categories) {
-    y = ensureSpace(pdf, y, 18, margin);
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(12);
-    y = wrapText(
-      pdf,
-      `${String(cat.number).padStart(2, "0")} — ${cat.title}`,
-      margin,
-      y,
-      contentW,
-      6,
-    );
-    pdf.setDrawColor(200);
-    pdf.line(margin, y, pageW - margin, y);
-    y += 5;
+    const section = document.createElement("section");
+    section.className = "fb-exploded-cat";
+
+    const head = document.createElement("div");
+    head.className = "fb-exploded-cat__head";
+    head.innerHTML = `
+      <span class="fb-cat-row__num">${String(cat.number).padStart(2, "0")}</span>
+      <div>
+        <h3 class="fb-exploded-cat__title">${escapeHtml(cat.title)}</h3>
+        <p class="fb-exploded-cat__meta">${cat.brands.length} znamk</p>
+      </div>
+    `;
+    section.appendChild(head);
 
     for (const origin of ORIGIN_ORDER) {
       const brands = cat.brands.filter((b) => b.origin === origin);
       if (brands.length === 0) continue;
 
-      y = ensureSpace(pdf, y, 12, margin);
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(10);
-      pdf.setTextColor(70);
-      pdf.text(ORIGIN_LABELS[origin], margin, y);
-      y += 5;
-      pdf.setTextColor(0);
+      const originEl = document.createElement("section");
+      originEl.className = "fb-origin-section";
+      originEl.innerHTML = `<h3 class="fb-origin-title">${ORIGIN_LABELS[origin]}</h3>`;
 
+      const grid = document.createElement("div");
+      grid.className = "fb-logo-grid";
       for (const brand of brands) {
-        const block =
-          6 +
-          5 * 5 + // summary lines approx
-          4;
-        y = ensureSpace(pdf, y, block, margin);
-
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(10);
-        y = wrapText(pdf, brand.name, margin, y, contentW, 5);
-
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(8);
-        pdf.setTextColor(60);
-        const lines: Array<[string, string]> = [
-          ["Izvor", ORIGIN_LABELS[brand.origin]],
-          ["Cenovni razred", brand.priceTier],
-          ["USP", brand.usp],
-          ["Prisotnost SLO", brand.presenceSi],
-          ["Podjetje", brand.companyUrl],
-          ["SLO / zastopnik", brand.sloveniaUrl ?? "Ni znan / ni relevantno"],
-          ["Uradno ime", brand.profile.identity.legalName],
-          ["Sedež", brand.profile.identity.hq],
-          ["Ustanovitev", brand.profile.identity.founded],
-          ["Lastništvo", brand.profile.identity.ownership],
-          ["Prihodki", brand.profile.finance.revenue],
-          ["Zaposleni", brand.profile.finance.employees],
-          ["Izvoz", brand.profile.finance.exportShare],
-          ["Linije", brand.profile.product.lines],
-          ["Certifikati", brand.profile.product.techCerts],
-          ["Proizvodnja", brand.profile.product.productionModel],
-          ["Ciljna skupina", brand.profile.positioning.target],
-          ["Model vstopa", brand.profile.distributionSi.entryModel],
-          ["Partnerji", brand.profile.distributionSi.partners],
-        ];
-
-        for (const [label, value] of lines) {
-          y = ensureSpace(pdf, y, 8, margin);
-          pdf.setFont("helvetica", "bold");
-          pdf.setFontSize(7.5);
-          pdf.text(`${label}:`, margin, y);
-          pdf.setFont("helvetica", "normal");
-          y = wrapText(pdf, value, margin + 28, y, contentW - 28, 3.8);
-          y += 1.2;
-        }
-
-        pdf.setTextColor(0);
-        y += 4;
+        const card = document.createElement("div");
+        card.className = "fb-logo-card fb-logo-card--static";
+        card.innerHTML = `
+          <span class="fb-logo-frame">${brandLogoHtml(brand)}</span>
+          <span class="fb-logo-name">${escapeHtml(brand.name)}</span>
+        `;
+        grid.appendChild(card);
       }
+      originEl.appendChild(grid);
+      section.appendChild(originEl);
     }
 
-    y += 3;
+    stack.appendChild(section);
   }
 
-  const fileName = `find-brands-${slugify(area.title) || "area"}.pdf`;
-  downloadBlob(pdf.output("blob"), fileName);
+  root.appendChild(stack);
+  return root;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function canvasToPdfPages(canvas: HTMLCanvasElement): Promise<Blob> {
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margin = 8;
+  const contentW = pageW - margin * 2;
+  const contentH = pageH - margin * 2;
+
+  const pageHeightPx = (contentH / contentW) * canvas.width;
+  let srcY = 0;
+  let pageIndex = 0;
+
+  while (srcY < canvas.height - 1) {
+    const sliceH = Math.min(pageHeightPx, canvas.height - srcY);
+    const pageCanvas = document.createElement("canvas");
+    pageCanvas.width = canvas.width;
+    pageCanvas.height = Math.ceil(sliceH);
+    const ctx = pageCanvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas 2D context unavailable");
+    ctx.fillStyle = "#eef0f3";
+    ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+    ctx.drawImage(
+      canvas,
+      0,
+      srcY,
+      canvas.width,
+      sliceH,
+      0,
+      0,
+      canvas.width,
+      sliceH,
+    );
+
+    const dataUrl = pageCanvas.toDataURL("image/jpeg", 0.92);
+    if (pageIndex > 0) pdf.addPage();
+    const hMm = (sliceH / canvas.width) * contentW;
+    pdf.addImage(dataUrl, "JPEG", margin, margin, contentW, hMm);
+
+    srcY += sliceH;
+    pageIndex += 1;
+  }
+
+  return pdf.output("blob");
+}
+
+/** Export Explode-all structure only: category → origin → logo cards. */
+export async function exportAreaPdf(area: BrandArea): Promise<void> {
+  const root = buildExportRoot(area);
+  document.body.appendChild(root);
+
+  try {
+    await waitUntilLoad(root, { timeout: 15000 });
+    // Give SVG/PNG a beat after load events.
+    await new Promise((r) => setTimeout(r, 120));
+
+    const canvas = await domToCanvas(root, {
+      scale: 2,
+      backgroundColor: "#eef0f3",
+    });
+
+    const blob = await canvasToPdfPages(canvas);
+    const fileName = `find-brands-${slugify(area.title) || "area"}.pdf`;
+    downloadBlob(blob, fileName);
+  } finally {
+    root.remove();
+  }
 }

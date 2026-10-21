@@ -97,6 +97,34 @@
   margin-top: 1.25rem;
 }
 
+/* Off-screen tree for PDF export (logos-only explode structure). */
+.fb-pdf-export {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 960px;
+  padding: 1.25rem;
+  background: #eef0f3;
+  color: #111827;
+  --osebe-muted: #6b7280;
+  --osebe-line: #e5e7eb;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.fb-pdf-export .fb-exploded {
+  margin-top: 0;
+}
+
+.fb-logo-card--static {
+  cursor: default;
+}
+
+.fb-logo-card--static:hover {
+  border-color: var(--osebe-line);
+  box-shadow: none;
+}
+
 .fb-exploded-cat {
   background: #fff;
   border: 1px solid var(--osebe-line);
