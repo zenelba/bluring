@@ -116,6 +116,14 @@
   margin-top: 0;
 }
 
+.fb-pdf-export--page .fb-exploded-cat {
+  margin: 0;
+}
+
+.fb-pdf-export--page .fb-origin-section {
+  margin-top: 1.1rem;
+}
+
 .fb-logo-card--static {
   cursor: default;
 }
